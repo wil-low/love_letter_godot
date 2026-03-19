@@ -4,7 +4,6 @@
 [ext_resource type="Script" uid="uid://bo6btsjdff0lu" path="res://card/card.gd" id="2_trrkg"]
 
 [node name="Card" type="Sprite2D" unique_id=1078115282]
-scale = Vector2(8, 8)
 texture = ExtResource("1_fjcud")
 offset = Vector2(5.5, 8.5)
 hframes = 9

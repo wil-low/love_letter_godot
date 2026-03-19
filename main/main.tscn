@@ -9,33 +9,28 @@
 script = ExtResource("1_xwkvk")
 
 [node name="Player0" parent="." unique_id=1231112012 instance=ExtResource("1_53q0u")]
-position = Vector2(40, 248)
-right_score = false
+position = Vector2(5, 31)
 ai_level = 0
 
 [node name="Player1" parent="." unique_id=1290894075 instance=ExtResource("1_53q0u")]
-position = Vector2(40, 0)
+position = Vector2(5, 0)
 idx = 1
-right_score = false
-ai_level = 1
 
 [node name="Player2" parent="." unique_id=1362357433 instance=ExtResource("1_53q0u")]
-position = Vector2(544, 0)
+position = Vector2(68, 0)
 idx = 2
 right_score = true
-ai_level = 1
 
 [node name="Player3" parent="." unique_id=369263454 instance=ExtResource("1_53q0u")]
-position = Vector2(544, 248)
+position = Vector2(68, 31)
 idx = 3
 right_score = true
-ai_level = 1
 
 [node name="Deck" parent="." unique_id=535832791 instance=ExtResource("2_pjrb6")]
-position = Vector2(168, 40)
+position = Vector2(21, 5)
 
 [node name="HumanDrawnCard" parent="." unique_id=1078115282 instance=ExtResource("4_c651c")]
 visible = false
-position = Vector2(168, 248)
+position = Vector2(21, 31)
 
 [node name="AnimationPlayer" type="AnimationPlayer" parent="." unique_id=185120142]

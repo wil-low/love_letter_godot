@@ -4,7 +4,6 @@
 [ext_resource type="Script" uid="uid://de38ptl6brmuh" path="res://deck/deck.gd" id="2_rqbxk"]
 
 [node name="Deck" type="Sprite2D" unique_id=535832791]
-scale = Vector2(8, 8)
 texture = ExtResource("1_iau1w")
 offset = Vector2(5.5, 8.5)
 hframes = 9

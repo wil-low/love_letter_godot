@@ -22,7 +22,7 @@ var _known_cards: Array[Deck.CardType] = [
 # Called when the node enters the scene tree for the first time.
 func _ready() -> void:
 	if right_score:
-		$Score.position.x = 96
+		$Score.position.x = 16
 	if ai_level == AI_Level.Human:
 		_card.faceup = true
 	set_score(_score)
