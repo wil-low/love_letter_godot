@@ -1,8 +1,21 @@
 class_name Card
 extends Sprite2D
 
-var _type: Deck.CardType
-var faceup: bool = false
+var type: Deck.CardType:
+	get:
+		return type
+	set(value):
+		type = value
+		frame = type if faceup else 8
+
+		
+var faceup: bool:
+	get:
+		return faceup
+	set(value):
+		faceup = value
+		frame = type if faceup else 8
+
 
 # Called when the node enters the scene tree for the first time.
 func _ready() -> void:
@@ -12,10 +25,3 @@ func _ready() -> void:
 # Called every frame. 'delta' is the elapsed time since the previous frame.
 func _process(delta: float) -> void:
 	pass
-
-
-func set_type(type: Deck.CardType) -> void:
-	_type = type
-	if faceup:
-		frame = _type
-		

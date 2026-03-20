@@ -10,11 +10,15 @@
 script = ExtResource("1_qjkh3")
 
 [node name="Card" parent="." unique_id=1078115282 instance=ExtResource("1_rkbax")]
-frame = 8
+visible = false
+
+[node name="DrawnCard" parent="." unique_id=1981959959 instance=ExtResource("1_rkbax")]
+visible = false
+position = Vector2(15, 0)
 
 [node name="Shield" type="Sprite2D" parent="." unique_id=2017928281]
 visible = false
-position = Vector2(48, 0)
+position = Vector2(6, 0)
 texture = ExtResource("2_g1dw6")
 offset = Vector2(2.5, 3)
 
@@ -22,6 +26,7 @@ offset = Vector2(2.5, 3)
 visible = false
 texture = ExtResource("3_g1dw6")
 hframes = 1
+frame = 0
 script = null
 
 [node name="Score" parent="." unique_id=408542864 instance=ExtResource("1_rkbax")]
@@ -29,4 +34,5 @@ position = Vector2(-4, 6)
 texture = ExtResource("4_yw30f")
 offset = Vector2(1.5, 2.5)
 hframes = 5
+frame = 0
 script = null

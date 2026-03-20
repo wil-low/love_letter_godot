@@ -42,7 +42,6 @@ func prepare() -> void:
 		for j in range(card_count[i]):
 			_cards.append(i)
 	_cards.shuffle()
-	print(_cards.size())
 
 
 func pop() -> CardType:

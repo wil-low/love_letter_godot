@@ -10,7 +10,10 @@ enum AI_Level {
 @export var right_score: bool = false
 @export var ai_level: AI_Level = AI_Level.Level_1
 @onready var _card: Card = $Card
-var _drawn_card: Deck.CardType
+@onready var _drawn_card: Card = $DrawnCard
+
+var active: bool = true
+
 var _score: int = 0
 var _known_cards: Array[Deck.CardType] = [
 	Deck.CardType.Unknown,
@@ -25,6 +28,7 @@ func _ready() -> void:
 		$Score.position.x = 16
 	if ai_level == AI_Level.Human:
 		_card.faceup = true
+		_drawn_card.faceup = true
 	set_score(_score)
 
 
@@ -34,8 +38,13 @@ func _process(delta: float) -> void:
 
 
 func set_card(type: Deck.CardType) -> void:
-	_card.set_type(type)
+	_card.type = type
 	_card.show()
+
+
+func set_drawn_card(type: Deck.CardType) -> void:
+	_drawn_card.type = type
+	_drawn_card.show()
 
 
 func set_score(new_score: int) -> void:
