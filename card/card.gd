@@ -1,12 +1,14 @@
 class_name Card
-extends Sprite2D
+extends Area2D
+
+@onready var _sprite: Sprite2D = $Sprite
 
 var type: Deck.CardType:
 	get:
 		return type
 	set(value):
 		type = value
-		frame = type if faceup else 8
+		_sprite.frame = type if faceup else 8
 
 		
 var faceup: bool:
@@ -14,7 +16,7 @@ var faceup: bool:
 		return faceup
 	set(value):
 		faceup = value
-		frame = type if faceup else 8
+		_sprite.frame = type if faceup else 8
 
 
 # Called when the node enters the scene tree for the first time.
