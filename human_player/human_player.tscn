@@ -1,16 +1,8 @@
 [gd_scene format=3 uid="uid://cbifebyf0y447"]
 
 [ext_resource type="PackedScene" uid="uid://c1q7doxejnam" path="res://player/player.tscn" id="1_5grt8"]
-[ext_resource type="PackedScene" uid="uid://d0q3mfx7nmlf5" path="res://card/card.tscn" id="2_jriom"]
 [ext_resource type="Script" uid="uid://ddsslvrdtr63j" path="res://human_player/human_player.gd" id="2_selmc"]
 
 [node name="HumanPlayer" unique_id=1231112012 instance=ExtResource("1_5grt8")]
 script = ExtResource("2_selmc")
 ai_level = 0
-
-[node name="DrawnCard" parent="." index="1" unique_id=1078115282 instance=ExtResource("2_jriom")]
-visible = false
-position = Vector2(15, 0)
-
-[connection signal="input_event" from="Card" to="." method="_on_card_input_event" binds= [false]]
-[connection signal="input_event" from="DrawnCard" to="." method="_on_drawn_card_input_event" binds= [true]]

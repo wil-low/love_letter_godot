@@ -2,6 +2,7 @@ class_name Card
 extends Area2D
 
 @onready var _sprite: Sprite2D = $Sprite
+@export var card_type: Deck.CardType
 
 var type: Deck.CardType:
 	get:
@@ -21,7 +22,8 @@ var faceup: bool:
 
 # Called when the node enters the scene tree for the first time.
 func _ready() -> void:
-	pass # Replace with function body.
+	type = card_type
+	faceup = true
 
 
 # Called every frame. 'delta' is the elapsed time since the previous frame.

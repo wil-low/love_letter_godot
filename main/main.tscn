@@ -5,6 +5,8 @@
 [ext_resource type="PackedScene" uid="uid://cex2qhx27kx6p" path="res://deck/deck.tscn" id="2_pjrb6"]
 [ext_resource type="PackedScene" uid="uid://cbifebyf0y447" path="res://human_player/human_player.tscn" id="3_3wy1v"]
 [ext_resource type="PackedScene" uid="uid://d0q3mfx7nmlf5" path="res://card/card.tscn" id="4_c651c"]
+[ext_resource type="Texture2D" uid="uid://buu4asncph7wp" path="res://card/selection.png" id="6_kfbq2"]
+[ext_resource type="PackedScene" uid="uid://b4uru0hgkb6b2" path="res://type_selector/type_selector.tscn" id="7_4dugh"]
 
 [node name="Main" type="Node2D" unique_id=287543303]
 script = ExtResource("1_xwkvk")
@@ -28,15 +30,32 @@ position = Vector2(68, 31)
 idx = 3
 right_score = true
 
-[node name="Deck" parent="." unique_id=535832791 instance=ExtResource("2_pjrb6")]
+[node name="DiscardMarker" type="Marker2D" parent="." unique_id=1639788791]
+position = Vector2(37, -31)
+
+[node name="Table" type="Node2D" parent="." unique_id=1363849722]
 position = Vector2(21, 5)
+
+[node name="Deck" parent="Table" unique_id=535832791 instance=ExtResource("2_pjrb6")]
+
+[node name="Marker0" type="Marker2D" parent="Table" unique_id=1314393868]
+position = Vector2(16, 8)
+
+[node name="Marker1" type="Marker2D" parent="Table" unique_id=17919983]
+position = Vector2(31, 8)
 
 [node name="AnimationPlayer" type="AnimationPlayer" parent="." unique_id=185120142]
 
-[node name="TableCard1" type="Marker2D" parent="." unique_id=1314393868]
-position = Vector2(37, 13)
+[node name="PlayerSelection" type="Sprite2D" parent="." unique_id=1335904967]
+visible = false
+z_index = 5
+position = Vector2(48, -24)
+texture = ExtResource("6_kfbq2")
+offset = Vector2(5.5, 8.5)
 
-[node name="TableCard2" type="Marker2D" parent="." unique_id=17919983]
-position = Vector2(52, 13)
+[node name="TypeSelector" parent="." unique_id=2090001054 instance=ExtResource("7_4dugh")]
+visible = false
+z_index = 10
 
 [connection signal="card_played" from="HumanPlayer" to="." method="_on_card_played"]
+[connection signal="type_clicked" from="TypeSelector" to="." method="_on_type_selector_type_clicked"]
