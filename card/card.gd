@@ -29,3 +29,22 @@ func _ready() -> void:
 # Called every frame. 'delta' is the elapsed time since the previous frame.
 func _process(delta: float) -> void:
 	pass
+
+
+#func _input(event):
+#	if event.is_action_pressed("debug_show_hands"):
+#		flip(!faceup, 0.2)
+
+
+func flip(to_faceup: bool, speed: float) -> void:
+	if faceup != to_faceup:
+		var pos = position
+		var width = self._sprite.get_rect().size.x
+		var tw = create_tween().set_trans(Tween.TRANS_SINE)
+		tw.tween_property(self, "position:x", pos.x + width / 2, speed)
+		tw.parallel().tween_property(self, "scale:x", 0, speed)
+		tw.tween_callback(func (): faceup = to_faceup)
+		tw.tween_property(self, "scale:x", 1, speed)
+		tw.parallel().tween_property(self, "position:x", pos.x, speed)
+		await tw.finished
+		position = pos

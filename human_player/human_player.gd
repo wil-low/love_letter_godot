@@ -23,7 +23,6 @@ func add_card(card: Card) -> void:
 	card.input_event.connect(_on_card_input_event.bind(hand.get_child_count() - 1))
 
 
-
 func _on_card_input_event(viewport: Node, event: InputEvent, shape_idx: int, idx: int) -> void:
 	match _state:
 		State.SELECT_CARD:

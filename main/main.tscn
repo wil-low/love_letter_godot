@@ -7,11 +7,14 @@
 [ext_resource type="PackedScene" uid="uid://d0q3mfx7nmlf5" path="res://card/card.tscn" id="4_c651c"]
 [ext_resource type="Texture2D" uid="uid://buu4asncph7wp" path="res://card/selection.png" id="6_kfbq2"]
 [ext_resource type="PackedScene" uid="uid://b4uru0hgkb6b2" path="res://type_selector/type_selector.tscn" id="7_4dugh"]
+[ext_resource type="Texture2D" uid="uid://bstdwlr6wfbgi" path="res://main/round_over.png" id="8_67ri8"]
+[ext_resource type="Texture2D" uid="uid://5c7fukmgi5ty" path="res://main/game_over.png" id="9_grrlh"]
 
 [node name="Main" type="Node2D" unique_id=287543303]
 script = ExtResource("1_xwkvk")
 card_scene = ExtResource("4_c651c")
-animation_speed = 0.5
+animation_speed = 0.3
+random_seed = 43
 
 [node name="HumanPlayer" parent="." unique_id=1231112012 instance=ExtResource("3_3wy1v")]
 position = Vector2(5, 31)
@@ -42,7 +45,7 @@ position = Vector2(21, 5)
 position = Vector2(16, 8)
 
 [node name="Marker1" type="Marker2D" parent="Table" unique_id=17919983]
-position = Vector2(31, 8)
+position = Vector2(31, 0)
 
 [node name="AnimationPlayer" type="AnimationPlayer" parent="." unique_id=185120142]
 
@@ -57,5 +60,23 @@ offset = Vector2(5.5, 8.5)
 visible = false
 z_index = 10
 
+[node name="RoundOver" type="TextureButton" parent="." unique_id=65891047]
+visible = false
+offset_left = 23.0
+offset_top = 25.0
+offset_right = 61.0
+offset_bottom = 30.0
+texture_normal = ExtResource("8_67ri8")
+
+[node name="GameOver" type="TextureButton" parent="." unique_id=1347489935]
+visible = false
+offset_left = 23.0
+offset_top = 25.0
+offset_right = 61.0
+offset_bottom = 30.0
+texture_normal = ExtResource("9_grrlh")
+
 [connection signal="card_played" from="HumanPlayer" to="." method="_on_card_played"]
 [connection signal="type_clicked" from="TypeSelector" to="." method="_on_type_selector_type_clicked"]
+[connection signal="pressed" from="RoundOver" to="." method="_on_round_over_pressed"]
+[connection signal="pressed" from="GameOver" to="." method="_on_game_over_pressed"]

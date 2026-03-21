@@ -3,6 +3,7 @@ extends Node2D
 
 @export var card_scene: PackedScene
 @export var animation_speed: float = 1
+@export var random_seed: int = 42
 
 var _players: Array[Player]
 var _cur_player: int:
@@ -20,6 +21,8 @@ var _cur_player: int:
 @onready var _table: Node2D = $Table
 @onready var _type_selector: Node2D = $TypeSelector
 @onready var _discard_marker: Marker2D = $DiscardMarker
+@onready var _round_over_button: TextureButton = $RoundOver
+@onready var _game_over_button: TextureButton = $GameOver
 
 var _played_type: Deck.CardType
 
@@ -36,7 +39,7 @@ var _target_type: int
 
 # Called when the node enters the scene tree for the first time.
 func _ready() -> void:
-	seed(42)
+	seed(random_seed if random_seed != 0 else Time.get_ticks_usec())
 	_players = [$HumanPlayer, $Player1, $Player2, $Player3]
 	for p in _players:
 		p.player_clicked.connect(_on_player_clicked)
@@ -60,16 +63,17 @@ func _input(event):
 
 func _new_game() -> void:
 	for p in _players:
-		p.clear_hand()
-		p.protected = false
-		p.active = true
-		p.set_score(0)
-	discard()
+		p.score = 0
 	_new_round()
 	
 	
 func _new_round() -> void:
 	_cur_player = 0
+	for p in _players:
+		await discard(p.hand, 0.2)
+		p.protected = false
+		p.active = true
+	discard(_table)
 	_deck.prepare()
 	for p in _players:
 		await deal_card(p, true)
@@ -104,10 +108,13 @@ func deal_card(p: Player, initial: bool = false) -> void:
 func new_turn():
 	_target_player = -1
 	_target_type = -1
-	var p = _players[_cur_player]
-	await deal_card(p)
-	p.score_digit.modulate = Color(1.0, 0.337, 1.0)
-	p._state = Player.State.SELECT_CARD
+	if len(_deck._cards) > 1:
+		var p = _players[_cur_player]
+		await deal_card(p)
+		p.score_digit.modulate = Color(1.0, 0.337, 1.0)
+		p._state = Player.State.SELECT_CARD
+	else:
+		round_over()
 
 
 func _on_card_played(card: Card) -> void:
@@ -116,10 +123,13 @@ func _on_card_played(card: Card) -> void:
 	var p = _players[_cur_player]
 	var next_state = Player.State.IDLE
 	match _played_type:
-		Deck.CardType.Guard:
+		Deck.CardType.Guard, Deck.CardType.Priest, Deck.CardType.Baron, Deck.CardType.King:
 			next_state = Player.State.INPUT_OTHER_P
-			print("Guard: select other player")
-		Deck.CardType.Handmaid:
+			print("Select another player")
+		Deck.CardType.Prince:
+			next_state = Player.State.INPUT_ANY_P
+			print("Select any player")
+		Deck.CardType.Handmaid, Deck.CardType.Countess, Deck.CardType.Princess:
 			resolve_effect()
 			
 	p._state = next_state
@@ -133,12 +143,16 @@ func _on_player_clicked(idx: int) -> void:
 			Player.State.INPUT_OTHER_P:
 				if _cur_player != idx:
 					_target_player = idx
-					if _played_type == Deck.CardType.Guard:
-						p._state = Player.State.INPUT_T
-						_table.hide()
-						_type_selector.show()
+					match _played_type:
+						Deck.CardType.Guard:
+							p._state = Player.State.INPUT_T
+							_table.hide()
+							_type_selector.show()
+						Deck.CardType.Priest, Deck.CardType.Baron, Deck.CardType.King:
+							resolve_effect()
 			Player.State.INPUT_ANY_P:
 				_target_player = idx
+				resolve_effect()
 
 
 func _on_type_selector_type_clicked(type: Deck.CardType) -> void:
@@ -150,44 +164,125 @@ func _on_type_selector_type_clicked(type: Deck.CardType) -> void:
 
 func resolve_effect() -> void:
 	var p = _players[_cur_player]
+	var tp = _players[_target_player]
 	p._state = Player.State.IDLE
 	print("resolve_effect for " + 
 		Deck.CardType.keys()[_played_type] +
 		", player " + str(_target_player) + 
 		", type " + Deck.CardType.keys()[_target_type])
 
+	_player_selection.hide()
+
 	match _played_type:
+		
 		Deck.CardType.Guard:
-			_players[_target_player].active = _players[_target_player].hand.get_child(0).type != _target_type
+			tp.active = tp.hand.get_child(0).type != _target_type
+		Deck.CardType.Priest:
+			await tp.reveal_hand(animation_speed)
+			print("Priest: reveal hand")
+		Deck.CardType.Baron:
+			await tp.reveal_hand(animation_speed)
+			var my_type = p.hand.get_child(0).type
+			var their_type = tp.hand.get_child(0).type
+			if my_type > their_type:
+				tp.active = false
+			elif my_type < their_type:
+				p.active = false
+			print("Baron: compare cards")
 		Deck.CardType.Handmaid:
 			p.protected = true
 			print("Handmaid: protected on")
+		Deck.CardType.Prince:
+			var type = tp.hand.get_child(0).type
+			discard(tp.hand)
+			if type == Deck.CardType.Princess:
+				tp.active = false
+			else:
+				deal_card(tp)
+			print("Prince: discard and redraw")
+		Deck.CardType.King:
+			var my_card: Card = p.hand.get_child(0)
+			var their_card: Card = tp.hand.get_child(0)
+			my_card.faceup = tp.ai_level == Player.AI_Level.Human
+			their_card.faceup = p.ai_level == Player.AI_Level.Human
+			var my_hand = p.hand
+			var their_hand = tp.hand
+			var tw = create_tween().set_parallel().set_trans(Tween.TRANS_QUAD)
+			tw.tween_property(my_card, "global_position", tp.global_position,
+				animation_speed)
+			tw.tween_property(their_card, "global_position", p.global_position,
+				animation_speed)
+			my_hand.remove_child(my_card)
+			their_hand.remove_child(their_card)
+			p.add_card(their_card)
+			tp.add_card(my_card)
+			await tw.finished
+			print("King: trade hands")
+		Deck.CardType.Princess:
+			p.active = false
+			print("Princess: discarded")
 
-	_player_selection.hide()
-	discard()
-	if !round_over():
-		_cur_player = (_cur_player + 1) % len(_players)
-		while !_players[_cur_player].active:
-			_cur_player = (_cur_player + 1) % len(_players)
+	await discard(_table)
+	var active_count := 0
+	for pl in _players:
+		if pl.active:
+			active_count += 1
+	if active_count == 1:
+		round_over()
+	else:
+		#_cur_player = (_cur_player + 1) % len(_players)
+		#while !_players[_cur_player].active:
+		#	_cur_player = (_cur_player + 1) % len(_players)
 		new_turn()
 
 
-func discard() -> void:
-	for ch in _table.get_children():
+func discard(from: Node, speed_multiplier: float = 1) -> void:
+	var for_discard: Array[Card]
+	for ch in from.get_children():
 		if ch is Card:
-			ch.z_index = RenderingServer.CANVAS_ITEM_Z_MAX
-			var tw = create_tween().set_parallel().set_trans(Tween.TRANS_QUAD)
-			tw.tween_property(ch, "global_position", _discard_marker.global_position, animation_speed)
-			await tw.finished
-			ch.queue_free()
+			for_discard.append(ch)
+	for ch in for_discard:
+		ch.z_index = RenderingServer.CANVAS_ITEM_Z_MAX
+		var tw = create_tween().set_parallel().set_trans(Tween.TRANS_QUAD)
+		tw.tween_property(ch, "global_position", _discard_marker.global_position,
+			animation_speed * speed_multiplier)
+		await tw.finished
+		from.remove_child(ch)
+		ch.queue_free()
 
 
-func round_over() -> bool:
-	var active_count := 0
+func round_over() -> void:
+	print("Round over! Update scores")
+	var max_type := 0
 	for p in _players:
 		if p.active:
-			active_count += 1
-	if active_count == 1:
-		print("Round over")
-		return true
-	return false
+			p.reveal_hand(animation_speed, false)
+			max_type = max(max_type, p.hand.get_child(0).type)
+	var round_winners := ""
+	var game_winners := ""
+	for p in _players:
+		if p.active and p.hand.get_child(0).type == max_type:
+			p.score += 1
+			if !round_winners.is_empty():
+				round_winners += ", "
+			round_winners += str(p.idx)
+			if p.score >= 4:
+				if !game_winners.is_empty():
+					game_winners += ", "
+				game_winners += str(p.idx)
+	if !game_winners.is_empty():
+		print("Game over! Winners are " + game_winners)
+		_game_over_button.show()
+	elif !round_winners.is_empty():
+		print("Round over! Winners are " + round_winners)
+		_round_over_button.show()
+
+
+func _on_round_over_pressed() -> void:
+	_round_over_button.hide()
+	_new_round()
+
+
+func _on_game_over_pressed() -> void:
+	_game_over_button.hide()
+	_new_game()

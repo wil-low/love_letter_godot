@@ -35,8 +35,14 @@ var active: bool = true:
 		active = value
 		_inactive.visible = !active
 
+var score: int = 0:
+	get:
+		return score
+	set(value):
+		score = value
+		$Score.frame = score
 
-var _score: int = 0
+
 var _known_cards: Array[Deck.CardType] = [
 	Deck.CardType.Unknown,
 	Deck.CardType.Unknown,
@@ -55,7 +61,6 @@ var protected: bool:
 func _ready() -> void:
 	if right_score:
 		$Score.position.x = 12
-	set_score(_score)
 
 
 # Called every frame. 'delta' is the elapsed time since the previous frame.
@@ -71,15 +76,19 @@ func add_card(card: Card) -> void:
 	hand.add_child(card)
 
 
-func set_score(new_score: int) -> void:
-	_score = new_score
-	$Score.frame = _score
-
-
 func clear_hand() -> void:
 	for ch in hand.get_children():
 		hand.remove_child(ch)
 		ch.queue_free()
+
+
+func reveal_hand(speed: float, hide_afterwards: bool = true) -> void:
+	if hand.get_child_count() > 0:
+		var card: Card = hand.get_child(0)
+		await card.flip(true, speed)
+		await get_tree().create_timer(speed * 4).timeout
+		if hide_afterwards:
+			await card.flip(false, speed)
 
 
 func _on_player_input_event(viewport: Node, event: InputEvent, shape_idx: int) -> void:
