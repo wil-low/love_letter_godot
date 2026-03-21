@@ -3,7 +3,6 @@
 [ext_resource type="PackedScene" uid="uid://c1q7doxejnam" path="res://player/player.tscn" id="1_53q0u"]
 [ext_resource type="Script" uid="uid://bxidm2wlh52rf" path="res://main/main.gd" id="1_xwkvk"]
 [ext_resource type="PackedScene" uid="uid://cex2qhx27kx6p" path="res://deck/deck.tscn" id="2_pjrb6"]
-[ext_resource type="PackedScene" uid="uid://cbifebyf0y447" path="res://human_player/human_player.tscn" id="3_3wy1v"]
 [ext_resource type="PackedScene" uid="uid://d0q3mfx7nmlf5" path="res://card/card.tscn" id="4_c651c"]
 [ext_resource type="Texture2D" uid="uid://bh8cexw1n4pj5" path="res://type_selector/selection_red.png" id="6_grrlh"]
 [ext_resource type="PackedScene" uid="uid://b4uru0hgkb6b2" path="res://type_selector/type_selector.tscn" id="7_4dugh"]
@@ -16,8 +15,9 @@ card_scene = ExtResource("4_c651c")
 animation_speed = 0.3
 random_seed = 43
 
-[node name="HumanPlayer" parent="." unique_id=1231112012 instance=ExtResource("3_3wy1v")]
+[node name="Player0" parent="." unique_id=1231112012 instance=ExtResource("1_53q0u")]
 position = Vector2(5, 31)
+ai_level = 0
 
 [node name="Player1" parent="." unique_id=1290894075 instance=ExtResource("1_53q0u")]
 position = Vector2(5, 0)

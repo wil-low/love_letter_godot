@@ -40,7 +40,7 @@ var _target_type: int
 # Called when the node enters the scene tree for the first time.
 func _ready() -> void:
 	seed(random_seed if random_seed != 0 else Time.get_ticks_usec())
-	_players = [$HumanPlayer, $Player1, $Player2, $Player3]
+	_players = [$Player0, $Player1, $Player2, $Player3]
 	for p in _players:
 		p.card_played.connect(_on_card_played)
 		p.target_player_selected.connect(_on_target_player_selected)
@@ -72,7 +72,7 @@ func _new_game() -> void:
 func _new_round() -> void:
 	_cur_player = 0
 	for p in _players:
-		await discard(p.hand, 0.2)
+		await discard(p.hand, 0.5)
 		p.protected = false
 		p.active = true
 	discard(_table)
@@ -96,7 +96,7 @@ func animate_card_move(c: Card, new_parent: Node2D, is_faceup: bool, from: Vecto
 
 func deal_card(p: Player, initial: bool = false) -> void:
 	var card_type = _deck.pop()
-	var is_faceup = p.ai_level == Player.AI_Level.Human
+	var is_faceup = p.is_human()
 	var c = card_scene.instantiate()
 	add_child(c)
 	c.type = card_type
@@ -118,7 +118,7 @@ func new_turn():
 	if len(_deck._cards) > 1:
 		await deal_card(p)
 		p.score_digit.modulate = Color(1.0, 0.337, 1.0)
-		if p.ai_level == Player.AI_Level.Human:
+		if p.is_human():
 			p._state = Player.State.SELECT_CARD
 		else:
 			var valid_moves = find_valid_moves()
@@ -193,11 +193,11 @@ func resolve_effect() -> void:
 				await tp.reveal_hand(animation_speed)
 				tp.active = false
 		Deck.CardType.Priest:
-			if p.ai_level == Player.AI_Level.Human:
+			if p.is_human():
 				await tp.reveal_hand(animation_speed)
 			print("Priest: reveal hand")
 		Deck.CardType.Baron:
-			if p.ai_level == Player.AI_Level.Human:
+			if p.is_human():
 				await tp.reveal_hand(animation_speed)
 			var my_type = p.hand.get_child(0).type
 			var their_type = tp.hand.get_child(0).type
@@ -220,8 +220,8 @@ func resolve_effect() -> void:
 		Deck.CardType.King:
 			var my_card: Card = p.hand.get_child(0)
 			var their_card: Card = tp.hand.get_child(0)
-			my_card.faceup = tp.ai_level == Player.AI_Level.Human
-			their_card.faceup = p.ai_level == Player.AI_Level.Human
+			my_card.faceup = tp.is_human()
+			their_card.faceup = p.is_human()
 			var my_hand = p.hand
 			var their_hand = tp.hand
 			var tw = create_tween().set_parallel().set_trans(Tween.TRANS_QUAD)
@@ -291,9 +291,15 @@ func round_over() -> void:
 	if !game_winners.is_empty():
 		print("Game over! Winners are " + game_winners)
 		_game_over_button.show()
+		if !_players[0].is_human():
+			await get_tree().create_timer(4).timeout
+			_on_game_over_pressed()
 	elif !round_winners.is_empty():
 		print("Round over! Winners are " + round_winners)
 		_round_over_button.show()
+		if !_players[0].is_human():
+			await get_tree().create_timer(2).timeout
+			_on_round_over_pressed()
 
 
 func _on_round_over_pressed() -> void:

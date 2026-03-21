@@ -71,11 +71,19 @@ func _process(delta: float) -> void:
 
 
 func drawn_card_position() -> Vector2:
+	if is_human():
+		return Vector2(global_position.x + hand.get_child_count() * 16, global_position.y)
 	return global_position
 
 
 func add_card(card: Card) -> void:
 	hand.add_child(card)
+	if is_human():
+		card.input_event.connect(_on_card_input_event.bind(card))
+
+
+func is_human() -> bool:
+	return ai_level == AI_Level.Human
 
 
 func clear_hand() -> void:
@@ -91,6 +99,17 @@ func reveal_hand(speed: float, hide_afterwards: bool = true) -> void:
 		await get_tree().create_timer(speed * 4).timeout
 		if hide_afterwards:
 			await card.flip(false, speed)
+
+
+func _on_card_input_event(viewport: Node, event: InputEvent, shape_idx: int, card: Card) -> void:
+	match _state:
+		State.SELECT_CARD:
+			if event.is_action_pressed("left_click"):
+				hand.remove_child(card)
+				if hand.get_child_count() == 1:
+					var tw = create_tween().set_parallel().set_trans(Tween.TRANS_QUAD)
+					tw.tween_property(hand.get_child(0), "global_position", global_position, get_parent().animation_speed / 2)
+				card_played.emit(card)
 
 
 func _on_player_input_event(viewport: Node, event: InputEvent, shape_idx: int) -> void:

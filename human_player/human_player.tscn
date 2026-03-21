@@ -1,8 +1,0 @@
-[gd_scene format=3 uid="uid://cbifebyf0y447"]
-
-[ext_resource type="PackedScene" uid="uid://c1q7doxejnam" path="res://player/player.tscn" id="1_5grt8"]
-[ext_resource type="Script" uid="uid://ddsslvrdtr63j" path="res://human_player/human_player.gd" id="2_selmc"]
-
-[node name="HumanPlayer" unique_id=1231112012 instance=ExtResource("1_5grt8")]
-script = ExtResource("2_selmc")
-ai_level = 0
