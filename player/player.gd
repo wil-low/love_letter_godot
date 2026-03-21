@@ -2,7 +2,9 @@ class_name Player
 extends Node2D
 
 signal card_played(card: Card)
-signal player_clicked(idx: int)
+signal target_player_selected(idx: int)
+signal target_type_selected(type: Deck.CardType)
+signal move_selected(card: Card, player_idx: int, type: Deck.CardType)
 
 enum AI_Level {
 	Human = 0,
@@ -93,4 +95,22 @@ func reveal_hand(speed: float, hide_afterwards: bool = true) -> void:
 
 func _on_player_input_event(viewport: Node, event: InputEvent, shape_idx: int) -> void:
 	if event.is_action_pressed("left_click"):
-		player_clicked.emit(idx)
+		target_player_selected.emit(idx)
+
+
+func ai_move(valid_moves: Array[Move]) -> void:
+	print("\nPlayer " + str(idx) + " - ai_move:")
+	for m in valid_moves:
+		print("\t" + str(m))
+	var choice = randi() % len(valid_moves)
+	var my_move = valid_moves[choice]
+	print("My " + str(my_move))
+	var c = hand.get_child(my_move._played_card_idx)
+	hand.remove_child(c)
+	card_played.emit(c)
+	if my_move._target_player != -1:
+		await get_tree().create_timer(1).timeout
+		target_player_selected.emit(my_move._target_player)
+	if my_move._target_type != Deck.CardType.Unknown:
+		await get_tree().create_timer(1).timeout
+		target_type_selected.emit(my_move._target_type)

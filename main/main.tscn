@@ -5,7 +5,7 @@
 [ext_resource type="PackedScene" uid="uid://cex2qhx27kx6p" path="res://deck/deck.tscn" id="2_pjrb6"]
 [ext_resource type="PackedScene" uid="uid://cbifebyf0y447" path="res://human_player/human_player.tscn" id="3_3wy1v"]
 [ext_resource type="PackedScene" uid="uid://d0q3mfx7nmlf5" path="res://card/card.tscn" id="4_c651c"]
-[ext_resource type="Texture2D" uid="uid://buu4asncph7wp" path="res://card/selection.png" id="6_kfbq2"]
+[ext_resource type="Texture2D" uid="uid://bh8cexw1n4pj5" path="res://type_selector/selection_red.png" id="6_grrlh"]
 [ext_resource type="PackedScene" uid="uid://b4uru0hgkb6b2" path="res://type_selector/type_selector.tscn" id="7_4dugh"]
 [ext_resource type="Texture2D" uid="uid://bstdwlr6wfbgi" path="res://main/round_over.png" id="8_67ri8"]
 [ext_resource type="Texture2D" uid="uid://5c7fukmgi5ty" path="res://main/game_over.png" id="9_grrlh"]
@@ -53,7 +53,7 @@ position = Vector2(31, 0)
 visible = false
 z_index = 5
 position = Vector2(48, -24)
-texture = ExtResource("6_kfbq2")
+texture = ExtResource("6_grrlh")
 offset = Vector2(5.5, 8.5)
 
 [node name="TypeSelector" parent="." unique_id=2090001054 instance=ExtResource("7_4dugh")]
@@ -76,7 +76,6 @@ offset_right = 61.0
 offset_bottom = 30.0
 texture_normal = ExtResource("9_grrlh")
 
-[connection signal="card_played" from="HumanPlayer" to="." method="_on_card_played"]
-[connection signal="type_clicked" from="TypeSelector" to="." method="_on_type_selector_type_clicked"]
+[connection signal="type_clicked" from="TypeSelector" to="." method="_on_target_type_selected"]
 [connection signal="pressed" from="RoundOver" to="." method="_on_round_over_pressed"]
 [connection signal="pressed" from="GameOver" to="." method="_on_game_over_pressed"]

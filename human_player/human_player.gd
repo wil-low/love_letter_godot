@@ -20,17 +20,15 @@ func drawn_card_position() -> Vector2:
 
 func add_card(card: Card) -> void:
 	super(card)
-	card.input_event.connect(_on_card_input_event.bind(hand.get_child_count() - 1))
+	card.input_event.connect(_on_card_input_event.bind(card))
 
 
-func _on_card_input_event(viewport: Node, event: InputEvent, shape_idx: int, idx: int) -> void:
+func _on_card_input_event(viewport: Node, event: InputEvent, shape_idx: int, card: Card) -> void:
 	match _state:
 		State.SELECT_CARD:
 			if event.is_action_pressed("left_click"):
-				print("click " + str(idx))
-				var c = hand.get_child(idx)
-				hand.remove_child(c)
+				hand.remove_child(card)
 				if hand.get_child_count() == 1:
 					var tw = create_tween().set_parallel().set_trans(Tween.TRANS_QUAD)
 					tw.tween_property(hand.get_child(0), "global_position", global_position, get_parent().animation_speed / 2)
-				card_played.emit(c)
+				card_played.emit(card)
