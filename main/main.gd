@@ -5,6 +5,8 @@ extends Node2D
 @export var animation_speed: float = 1
 @export var random_seed: int = 42
 
+const max_score: int = 4
+
 var _players: Array[Player]
 var _cur_player: int:
 	get:
@@ -23,6 +25,8 @@ var _cur_player: int:
 @onready var _discard_marker: Marker2D = $DiscardMarker
 @onready var _round_over_button: TextureButton = $RoundOver
 @onready var _game_over_button: TextureButton = $GameOver
+
+var _all_protected: bool
 
 var _played_type: Deck.CardType
 
@@ -113,10 +117,16 @@ func deal_card(p: Player, initial: bool = false) -> void:
 func new_turn():
 	var p = _players[_cur_player]
 	p.protected = false
+	_all_protected = false
+	for pl in _players:
+		if pl.active and pl.protected and pl.idx != _cur_player:
+			_all_protected = true
 	_target_player = -1
 	_target_type = Deck.CardType.Unknown
 	if len(_deck._cards) > 1:
 		await deal_card(p)
+		#_players[_cur_player].hand.get_child(0).type = Deck.CardType.Baron
+		#_players[_cur_player].hand.get_child(1).type = Deck.CardType.King
 		p.score_digit.modulate = Color(1.0, 0.337, 1.0)
 		if p.is_human():
 			p._state = Player.State.SELECT_CARD
@@ -146,7 +156,7 @@ func _on_card_played(card: Card) -> void:
 
 func _on_target_player_selected(idx: int) -> void:
 	print("_on_target_player_selected: " + str(idx))
-	if _players[idx].active and !_players[idx].protected:
+	if _players[idx].active and (!_players[idx].protected or _all_protected):
 		var p = _players[_cur_player]
 		match p._state:
 			Player.State.INPUT_OTHER_P:
@@ -186,58 +196,60 @@ func resolve_effect() -> void:
 
 	_player_selection.hide()
 
-	match _played_type:
-		
-		Deck.CardType.Guard:
-			if tp.hand.get_child(0).type == _target_type:
-				await tp.reveal_hand(animation_speed)
-				tp.active = false
-		Deck.CardType.Priest:
-			if p.is_human():
-				await tp.reveal_hand(animation_speed)
-			print("Priest: reveal hand")
-		Deck.CardType.Baron:
-			if p.is_human():
-				await tp.reveal_hand(animation_speed)
-			var my_type = p.hand.get_child(0).type
-			var their_type = tp.hand.get_child(0).type
-			if my_type > their_type:
-				tp.active = false
-			elif my_type < their_type:
-				p.active = false
-			print("Baron: compare cards")
-		Deck.CardType.Handmaid:
-			p.protected = true
-			print("Handmaid: protected on")
-		Deck.CardType.Prince:
-			var type = tp.hand.get_child(0).type
-			discard(tp.hand)
-			if type == Deck.CardType.Princess:
-				tp.active = false
-			else:
+	if !tp.protected:
+		match _played_type:
+			
+			Deck.CardType.Guard:
+				if tp.hand.get_child(0).type == _target_type:
+					await tp.reveal_hand(animation_speed)
+					tp.active = false
+			Deck.CardType.Priest:
+				if p.is_human():
+					await tp.reveal_hand(animation_speed)
+				print("Priest: reveal hand")
+			Deck.CardType.Baron:
+				if p.is_human():
+					await tp.reveal_hand(animation_speed)
+				var my_type = p.hand.get_child(0).type
+				var their_type = tp.hand.get_child(0).type
+				if my_type > their_type:
+					tp.active = false
+				elif my_type < their_type:
+					p.active = false
+				print("Baron: compare cards")
+			Deck.CardType.Handmaid:
+				p.protected = true
+				print("Handmaid: protected on")
+			Deck.CardType.Prince:
+				var type = tp.hand.get_child(0).type
+				await discard(tp.hand)
 				deal_card(tp)
-			print("Prince: discard and redraw")
-		Deck.CardType.King:
-			var my_card: Card = p.hand.get_child(0)
-			var their_card: Card = tp.hand.get_child(0)
-			my_card.faceup = tp.is_human()
-			their_card.faceup = p.is_human()
-			var my_hand = p.hand
-			var their_hand = tp.hand
-			var tw = create_tween().set_parallel().set_trans(Tween.TRANS_QUAD)
-			tw.tween_property(my_card, "global_position", tp.global_position,
-				animation_speed)
-			tw.tween_property(their_card, "global_position", p.global_position,
-				animation_speed)
-			my_hand.remove_child(my_card)
-			their_hand.remove_child(their_card)
-			p.add_card(their_card)
-			tp.add_card(my_card)
-			await tw.finished
-			print("King: trade hands")
-		Deck.CardType.Princess:
-			p.active = false
-			print("Princess: discarded")
+				if type == Deck.CardType.Princess:
+					tp.active = false
+				print("Prince: discard and redraw")
+			Deck.CardType.King:
+				var my_card: Card = p.hand.get_child(0)
+				var their_card: Card = tp.hand.get_child(0)
+				my_card.faceup = tp.is_human()
+				their_card.faceup = p.is_human()
+				var my_hand = p.hand
+				var their_hand = tp.hand
+				var tw = create_tween().set_parallel().set_trans(Tween.TRANS_QUAD)
+				tw.tween_property(my_card, "global_position", tp.global_position,
+					animation_speed)
+				tw.tween_property(their_card, "global_position", p.global_position,
+					animation_speed)
+				my_hand.remove_child(my_card)
+				their_hand.remove_child(their_card)
+				p.add_card(their_card)
+				tp.add_card(my_card)
+				await tw.finished
+				print("King: trade hands")
+			Deck.CardType.Princess:
+				p.active = false
+				print("Princess: discarded")
+	else:
+		print("Player " + str(tp.idx) + " protected, no effect")
 
 	await discard(_table)
 	var active_count := 0
@@ -284,7 +296,7 @@ func round_over() -> void:
 			if !round_winners.is_empty():
 				round_winners += ", "
 			round_winners += str(p.idx)
-			if p.score >= 4:
+			if p.score >= max_score:
 				if !game_winners.is_empty():
 					game_winners += ", "
 				game_winners += str(p.idx)
@@ -315,25 +327,23 @@ func find_valid_moves() -> Array[Move]:
 	var result: Array[Move]
 	var move: Move = Move.new()
 	var cp = _players[_cur_player]
+	var countess_idx = cp.countess_restricted() 
 	var child_types: Array[Deck.CardType] = [cp.hand.get_child(0).type, cp.hand.get_child(1).type]
-	var has_countess = child_types[0] == Deck.CardType.Countess or child_types[1] == Deck.CardType.Countess
-	var has_men = child_types[0] == Deck.CardType.Prince or child_types[0] == Deck.CardType.King or child_types[1] == Deck.CardType.Prince or child_types[1] == Deck.CardType.King
-	if has_countess and has_men:
-		var idx = 0 if child_types[0] == Deck.CardType.Countess else 1
-		result.append(move.init(child_types[idx], idx))
+	if countess_idx != -1:
+		result.append(move.init(child_types[countess_idx], countess_idx))
 	else:
 		for i in range(len(child_types)):
 			var type = child_types[i]
 			match type:
 				Deck.CardType.Guard:
 					for p in _players:
-						if p.idx != cp.idx and p.active and !p.protected:
+						if p.idx != cp.idx and p.active and (!p.protected or _all_protected):
 							for t in range(Deck.CardType.Priest, Deck.CardType.Unknown):
 								move = Move.new()
 								result.append(move.init(type, i, p.idx, t))
 				Deck.CardType.Priest, Deck.CardType.Baron, Deck.CardType.King:
 					for p in _players:
-						if p.idx != cp.idx and p.active and !p.protected:
+						if p.idx != cp.idx and p.active and (!p.protected or _all_protected):
 							move = Move.new()
 							result.append(move.init(type, i, p.idx))
 				Deck.CardType.Handmaid, Deck.CardType.Princess:

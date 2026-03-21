@@ -19,8 +19,10 @@ func init(played_type: Deck.CardType, played_card_idx: int = -1, target_player: 
 
 func _to_string() -> String:
 	var s: String = "Move: "
-	s += Deck.CardType.keys()[_played_type] + ", "
-	s += str(_played_card_idx) + ", "
-	s += str(_target_player) + ", "
-	s += Deck.CardType.keys()[_target_type]
+	s += Deck.CardType.keys()[_played_type]
+	s +=  " (" + str(_played_card_idx) + ")"
+	if _target_player != -1:
+		s += ", " + str(_target_player)
+	if _target_type != Deck.CardType.Unknown:
+		s += ", " + Deck.CardType.keys()[_target_type]
 	return s

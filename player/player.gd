@@ -101,15 +101,28 @@ func reveal_hand(speed: float, hide_afterwards: bool = true) -> void:
 			await card.flip(false, speed)
 
 
+func countess_restricted() -> int:
+	# returns -1 if Countess rule is not in effect
+	var child_types: Array[Deck.CardType] = [hand.get_child(0).type, hand.get_child(1).type]
+	var has_countess = child_types[0] == Deck.CardType.Countess or child_types[1] == Deck.CardType.Countess
+	var has_men = child_types[0] == Deck.CardType.Prince or child_types[0] == Deck.CardType.King or child_types[1] == Deck.CardType.Prince or child_types[1] == Deck.CardType.King
+	var result = -1
+	if has_countess and has_men:
+		result = 0 if child_types[0] == Deck.CardType.Countess else 1
+	return result
+
+
 func _on_card_input_event(viewport: Node, event: InputEvent, shape_idx: int, card: Card) -> void:
 	match _state:
 		State.SELECT_CARD:
 			if event.is_action_pressed("left_click"):
-				hand.remove_child(card)
-				if hand.get_child_count() == 1:
-					var tw = create_tween().set_parallel().set_trans(Tween.TRANS_QUAD)
-					tw.tween_property(hand.get_child(0), "global_position", global_position, get_parent().animation_speed / 2)
-				card_played.emit(card)
+				var countess_idx = countess_restricted() 
+				if countess_idx == -1 or countess_idx == card.get_index():
+					hand.remove_child(card)
+					if hand.get_child_count() == 1:
+						var tw = create_tween().set_parallel().set_trans(Tween.TRANS_QUAD)
+						tw.tween_property(hand.get_child(0), "global_position", global_position, get_parent().animation_speed / 2)
+					card_played.emit(card)
 
 
 func _on_player_input_event(viewport: Node, event: InputEvent, shape_idx: int) -> void:
