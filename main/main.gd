@@ -18,7 +18,6 @@ var _cur_player: int:
 
 @onready var _deck: Deck = $Table/Deck
 @onready var _marker_0: Marker2D = $Table/Marker0
-@onready var _marker_1: Marker2D = $Table/Marker1
 @onready var _player_selection: Sprite2D = $PlayerSelection
 @onready var _table: Node2D = $Table
 @onready var _type_selector: Node2D = $TypeSelector
@@ -52,10 +51,6 @@ func _ready() -> void:
 	_new_game()
 
 
-# Called every frame. 'delta' is the elapsed time since the previous frame.
-func _process(delta: float) -> void:
-	pass
-
 func _input(event):
 	if event.is_action_pressed("debug_show_hands"):
 		for p in _players:
@@ -82,7 +77,7 @@ func _new_round() -> void:
 	discard(_table)
 	_deck.prepare()
 	for p in _players:
-		await deal_card(p, true)
+		await deal_card(p)
 	new_turn()
 
 
@@ -98,7 +93,7 @@ func animate_card_move(c: Card, new_parent: Node2D, is_faceup: bool, from: Vecto
 	return c
 
 
-func deal_card(p: Player, initial: bool = false) -> void:
+func deal_card(p: Player) -> void:
 	var card_type = _deck.pop()
 	var is_faceup = p.is_human()
 	var c = card_scene.instantiate()

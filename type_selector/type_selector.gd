@@ -12,12 +12,7 @@ func _ready() -> void:
 			c.input_event.connect(_on_card_input_event.bind(c.type))
 
 
-# Called every frame. 'delta' is the elapsed time since the previous frame.
-func _process(delta: float) -> void:
-	pass
-
-
-func _on_card_input_event(viewport: Node, event: InputEvent, shape_idx: int, type: Deck.CardType) -> void:
+func _on_card_input_event(_viewport: Node, event: InputEvent, _shape_idx: int, type: Deck.CardType) -> void:
 	if event.is_action_pressed("left_click"):
 		print("Card " + str(type))
 		type_clicked.emit(type)

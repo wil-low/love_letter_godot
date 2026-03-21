@@ -4,7 +4,6 @@ extends Node2D
 signal card_played(card: Card)
 signal target_player_selected(idx: int)
 signal target_type_selected(type: Deck.CardType)
-signal move_selected(card: Card, player_idx: int, type: Deck.CardType)
 
 enum AI_Level {
 	Human = 0,
@@ -67,11 +66,6 @@ func _ready() -> void:
 		current_mark.position.x = 12
 
 
-# Called every frame. 'delta' is the elapsed time since the previous frame.
-func _process(delta: float) -> void:
-	pass
-
-
 func drawn_card_position() -> Vector2:
 	if is_human():
 		return Vector2(global_position.x + hand.get_child_count() * 13, global_position.y)
@@ -114,7 +108,7 @@ func countess_restricted() -> int:
 	return result
 
 
-func _on_card_input_event(viewport: Node, event: InputEvent, shape_idx: int, card: Card) -> void:
+func _on_card_input_event(_viewport: Node, event: InputEvent, _shape_idx: int, card: Card) -> void:
 	match _state:
 		State.SELECT_CARD:
 			if event.is_action_pressed("left_click"):
@@ -127,7 +121,7 @@ func _on_card_input_event(viewport: Node, event: InputEvent, shape_idx: int, car
 					card_played.emit(card)
 
 
-func _on_player_input_event(viewport: Node, event: InputEvent, shape_idx: int) -> void:
+func _on_player_input_event(_viewport: Node, event: InputEvent, _shape_idx: int) -> void:
 	if event.is_action_pressed("left_click"):
 		target_player_selected.emit(idx)
 
