@@ -29,6 +29,7 @@ var _state: State = State.IDLE
 @onready var hand: Node = $Hand
 @onready var _inactive: Sprite2D = $Inactive
 @onready var score_digit: Sprite2D = $Score
+@onready var current_mark: ColorRect = $Current
 
 var active: bool = true:
 	get:
@@ -62,7 +63,8 @@ var protected: bool:
 # Called when the node enters the scene tree for the first time.
 func _ready() -> void:
 	if right_score:
-		$Score.position.x = 12
+		score_digit.position.x = 12
+		current_mark.position.x = 12
 
 
 # Called every frame. 'delta' is the elapsed time since the previous frame.
@@ -72,7 +74,7 @@ func _process(delta: float) -> void:
 
 func drawn_card_position() -> Vector2:
 	if is_human():
-		return Vector2(global_position.x + hand.get_child_count() * 16, global_position.y)
+		return Vector2(global_position.x + hand.get_child_count() * 13, global_position.y)
 	return global_position
 
 

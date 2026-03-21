@@ -4,7 +4,7 @@
 [ext_resource type="Script" uid="uid://bxidm2wlh52rf" path="res://main/main.gd" id="1_xwkvk"]
 [ext_resource type="PackedScene" uid="uid://cex2qhx27kx6p" path="res://deck/deck.tscn" id="2_pjrb6"]
 [ext_resource type="PackedScene" uid="uid://d0q3mfx7nmlf5" path="res://card/card.tscn" id="4_c651c"]
-[ext_resource type="Texture2D" uid="uid://bh8cexw1n4pj5" path="res://type_selector/selection_red.png" id="6_grrlh"]
+[ext_resource type="Texture2D" uid="uid://bh8cexw1n4pj5" path="res://card/selection.png" id="6_grrlh"]
 [ext_resource type="PackedScene" uid="uid://b4uru0hgkb6b2" path="res://type_selector/type_selector.tscn" id="7_4dugh"]
 [ext_resource type="Texture2D" uid="uid://bstdwlr6wfbgi" path="res://main/round_over.png" id="8_67ri8"]
 [ext_resource type="Texture2D" uid="uid://5c7fukmgi5ty" path="res://main/game_over.png" id="9_grrlh"]
@@ -51,8 +51,9 @@ position = Vector2(31, 0)
 
 [node name="PlayerSelection" type="Sprite2D" parent="." unique_id=1335904967]
 visible = false
+self_modulate = Color(1, 1, 1, 0.5)
 z_index = 5
-position = Vector2(48, -24)
+position = Vector2(21, 5)
 texture = ExtResource("6_grrlh")
 offset = Vector2(5.5, 8.5)
 

@@ -37,4 +37,12 @@ hframes = 5
 position = Vector2(5.5, 8.5)
 shape = SubResource("RectangleShape2D_yw30f")
 
+[node name="Current" type="ColorRect" parent="." unique_id=1071827759]
+visible = false
+offset_left = -4.0
+offset_top = 12.0
+offset_right = -1.0
+offset_bottom = 13.0
+color = Color(0, 0, 0, 1)
+
 [connection signal="input_event" from="Area2D" to="." method="_on_player_input_event"]

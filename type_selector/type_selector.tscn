@@ -2,7 +2,7 @@
 
 [ext_resource type="PackedScene" uid="uid://d0q3mfx7nmlf5" path="res://card/card.tscn" id="1_d1dlx"]
 [ext_resource type="Script" uid="uid://dkjwgc3at5h6j" path="res://type_selector/type_selector.gd" id="1_oo3qq"]
-[ext_resource type="Texture2D" uid="uid://bh8cexw1n4pj5" path="res://type_selector/selection_red.png" id="3_4ur1c"]
+[ext_resource type="Texture2D" uid="uid://bh8cexw1n4pj5" path="res://card/selection.png" id="3_4ur1c"]
 
 [node name="TypeSelector" type="Node2D" unique_id=572570728]
 script = ExtResource("1_oo3qq")
@@ -35,8 +35,10 @@ card_type = 6
 position = Vector2(55, 24)
 card_type = 7
 
-[node name="Selection" type="Sprite2D" parent="." unique_id=737293420]
+[node name="TypeSelection" type="Sprite2D" parent="." unique_id=324352160]
 visible = false
+self_modulate = Color(1, 1, 1, 0.5)
 z_index = 5
+position = Vector2(21, 5)
 texture = ExtResource("3_4ur1c")
 offset = Vector2(5.5, 8.5)

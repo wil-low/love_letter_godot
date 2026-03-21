@@ -13,7 +13,7 @@ config_version=5
 config/name="Love Letter"
 run/main_scene="uid://c5r2e1aj3mjeo"
 config/features=PackedStringArray("4.6", "GL Compatibility")
-config/icon="res://icon.svg"
+config/icon="uid://d03plnenwr1sa"
 
 [display]
 

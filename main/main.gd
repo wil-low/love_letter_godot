@@ -12,7 +12,7 @@ var _cur_player: int:
 	get:
 		return _cur_player
 	set(value):
-		_players[_cur_player].score_digit.modulate = Color(1.0, 1.0, 1.0)
+		_players[_cur_player].current_mark.hide()
 		_cur_player = value
 
 
@@ -127,7 +127,7 @@ func new_turn():
 		await deal_card(p)
 		#_players[_cur_player].hand.get_child(0).type = Deck.CardType.Baron
 		#_players[_cur_player].hand.get_child(1).type = Deck.CardType.King
-		p.score_digit.modulate = Color(1.0, 0.337, 1.0)
+		p.current_mark.show()
 		if p.is_human():
 			p._state = Player.State.SELECT_CARD
 		else:
@@ -166,8 +166,7 @@ func _on_target_player_selected(idx: int) -> void:
 						Deck.CardType.Guard:
 							p._state = Player.State.INPUT_T
 							_table.hide()
-							_type_selector._selection.hide()
-							_type_selector.show()
+							_type_selector.reset_and_show()
 						Deck.CardType.Priest, Deck.CardType.Baron, Deck.CardType.King:
 							resolve_effect()
 			Player.State.INPUT_ANY_P:
