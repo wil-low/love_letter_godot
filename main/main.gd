@@ -2,7 +2,6 @@ class_name Main
 extends Node2D
 
 @export var card_scene: PackedScene
-@export var animation_speed: float = 1
 @export var random_seed: int = 42
 
 const max_score: int = 4
@@ -71,10 +70,10 @@ func _new_game() -> void:
 func _new_round() -> void:
 	_cur_player = 0
 	for p in _players:
-		await discard(p.hand)
+		discard(p.hand)
 		p.protected = false
 		p.active = true
-	discard(_table)
+	await discard(_table)
 	_deck.prepare()
 	for p in _players:
 		await deal_card(p)
@@ -134,17 +133,9 @@ func _on_card_played(card: Card) -> void:
 	await animate_card_move(card, _table, true, card.global_position, _marker_0.global_position)
 	_played_type = card.type
 	var p = _players[_cur_player]
-	var next_state = Player.State.IDLE
-	match _played_type:
-		Deck.CardType.Guard, Deck.CardType.Priest, Deck.CardType.Baron, Deck.CardType.King:
-			next_state = Player.State.INPUT_OTHER_P
-			print("Select another player")
-		Deck.CardType.Prince:
-			next_state = Player.State.INPUT_ANY_P
-			print("Select any player")
-		Deck.CardType.Handmaid, Deck.CardType.Countess, Deck.CardType.Princess:
-			resolve_effect()
-	p._state = next_state
+	p._state = p.next_state(_played_type, true)
+	if p._state == Player.State.IDLE:
+		resolve_effect()
 
 
 func _on_target_player_selected(idx: int) -> void:
@@ -158,18 +149,21 @@ func _on_target_player_selected(idx: int) -> void:
 						Deck.CardType.Guard:
 							p._state = Player.State.INPUT_T
 							_table.hide()
-							_type_selector.reset_and_show()
+							_type_selector.set_selection(Deck.CardType.Unknown)
+							_type_selector.show()
 						Deck.CardType.Priest, Deck.CardType.Baron, Deck.CardType.King:
 							resolve_effect()
 			Player.State.INPUT_ANY_P:
 				if !_players[idx].protected:
 					_target_player = idx
 					resolve_effect()
+			_:
+				assert(false, "skip - in state " + Player.State.keys()[p._state])
 
 
 func _on_target_type_selected(type: Deck.CardType) -> void:
-	_type_selector.show_selection(type)
-	await Animator.delay(0.5)
+	_type_selector.set_selection(type)
+	await Animator.delay(1)
 	_table.show()
 	_type_selector.hide()
 	_target_type = type
@@ -229,7 +223,6 @@ func resolve_effect() -> void:
 					Animator.move_card(my_card, tp.global_position),
 					Animator.move_card(their_card, p.global_position)
 				])
-
 				my_hand.remove_child(my_card)
 				their_hand.remove_child(their_card)
 				p.add_card(their_card)

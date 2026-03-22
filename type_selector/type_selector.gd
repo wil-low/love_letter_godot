@@ -17,21 +17,18 @@ func _on_card_input_event(_viewport: Node, event: InputEvent, _shape_idx: int, t
 		type_clicked.emit(type)
 
 
-func reset_and_show() -> void:
+func set_selection(type: Deck.CardType) -> void:
+	# clear selection if type is Unknown
 	for c in get_children():
 		if c is Card:
-			if _use_modulate:
-				c.modulate = Color(1, 1, 1, 1)
+			if type == Deck.CardType.Unknown:
+				if _use_modulate:
+					c.modulate = Color(1, 1, 1, 1)
+				else:
+					_type_selection.hide()
 			else:
-				_type_selection.hide()
-	show()
-
-
-func show_selection(type: Deck.CardType) -> void:
-	for c in get_children():
-		if c is Card:
-			if _use_modulate:
-				c.modulate = Color(1.0, 1.0, 1.0, 1.0 if c.type == type else 0.25)
-			elif c.type == type:
-				_type_selection.position = c.position
-				_type_selection.show()
+				if _use_modulate:
+					c.modulate = Color(1.0, 1.0, 1.0, 1.0 if c.type == type else 0.25)
+				elif c.type == type:
+					_type_selection.position = c.position
+					_type_selection.show()

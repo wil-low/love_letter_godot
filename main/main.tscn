@@ -12,7 +12,6 @@
 [node name="Main" type="Node2D" unique_id=287543303]
 script = ExtResource("1_xwkvk")
 card_scene = ExtResource("4_c651c")
-animation_speed = 0.3
 random_seed = 43
 
 [node name="Player0" parent="." unique_id=1231112012 instance=ExtResource("1_53q0u")]

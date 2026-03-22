@@ -13,11 +13,9 @@ enum AI_Level {
 enum State {
 	IDLE = 0,
 	SELECT_CARD,
-	PUT_CARD,
 	INPUT_ANY_P,
 	INPUT_OTHER_P,
-	INPUT_T,
-	RESOLVE,
+	INPUT_T
 }
 
 var _state: State = State.IDLE
@@ -26,8 +24,9 @@ var _state: State = State.IDLE
 @export var right_score: bool = false
 @export var ai_level: AI_Level = AI_Level.Level_1
 @onready var hand: Node = $Hand
+@onready var _shield: Sprite2D = $Shield
 @onready var _inactive: Sprite2D = $Inactive
-@onready var score_digit: Sprite2D = $Score
+@onready var _score_digit: Sprite2D = $Score
 @onready var current_mark: ColorRect = $Current
 
 var active: bool = true:
@@ -42,7 +41,7 @@ var score: int = 0:
 		return score
 	set(value):
 		score = value
-		$Score.frame = score
+		_score_digit.frame = score
 
 
 var _known_cards: Array[Deck.CardType] = [
@@ -57,12 +56,12 @@ var protected: bool:
 		return protected
 	set(value):
 		protected = value
-		$Shield.visible = protected
+		_shield.visible = protected
 
 # Called when the node enters the scene tree for the first time.
 func _ready() -> void:
 	if right_score:
-		score_digit.position.x = 12
+		_score_digit.position.x = 12
 		current_mark.position.x = 12
 
 
@@ -86,6 +85,20 @@ func clear_hand() -> void:
 	for ch in hand.get_children():
 		hand.remove_child(ch)
 		ch.queue_free()
+
+
+func next_state(type: Deck.CardType, log: bool) -> State:
+	var result := State.IDLE
+	match type:
+		Deck.CardType.Guard, Deck.CardType.Priest, Deck.CardType.Baron, Deck.CardType.King:
+			result = State.INPUT_OTHER_P
+			if log:
+				print("Select another player")
+		Deck.CardType.Prince:
+			result = State.INPUT_ANY_P
+			if log:
+				print("Select any player")
+	return result
 
 
 func countess_restricted() -> int:
@@ -128,8 +141,9 @@ func ai_move(valid_moves: Array[Move]) -> void:
 	hand.remove_child(c)
 	card_played.emit(c)
 	if my_move._target_player != -1:
-		await Animator.delay(0.5)
+		await Animator.delay(1)
+		_state = next_state(c.type, false)
 		target_player_selected.emit(my_move._target_player)
 	if my_move._target_type != Deck.CardType.Unknown:
-		await Animator.delay(0.5)
+		await Animator.delay(1)
 		target_type_selected.emit(my_move._target_type)
