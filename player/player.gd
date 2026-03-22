@@ -88,15 +88,6 @@ func clear_hand() -> void:
 		ch.queue_free()
 
 
-func reveal_hand(speed: float, hide_afterwards: bool = true) -> void:
-	if hand.get_child_count() > 0:
-		var card: Card = hand.get_child(0)
-		await card.flip(true, speed)
-		await get_tree().create_timer(speed * 4).timeout
-		if hide_afterwards:
-			await card.flip(false, speed)
-
-
 func countess_restricted() -> int:
 	# returns -1 if Countess rule is not in effect
 	var child_types: Array[Deck.CardType] = [hand.get_child(0).type, hand.get_child(1).type]
@@ -112,12 +103,12 @@ func _on_card_input_event(_viewport: Node, event: InputEvent, _shape_idx: int, c
 	match _state:
 		State.SELECT_CARD:
 			if event.is_action_pressed("left_click"):
-				var countess_idx = countess_restricted() 
-				if countess_idx == -1 or countess_idx == card.get_index():
+				var countess_idx = countess_restricted()
+				var card_idx = card.get_index()
+				if countess_idx == -1 or countess_idx == card_idx:
 					hand.remove_child(card)
-					if hand.get_child_count() == 1:
-						var tw = create_tween().set_parallel().set_trans(Tween.TRANS_QUAD)
-						tw.tween_property(hand.get_child(0), "global_position", global_position, get_parent().animation_speed / 2)
+					if card_idx == 0:
+						Animator.move_card(hand.get_child(0), global_position)
 					card_played.emit(card)
 
 
@@ -137,8 +128,8 @@ func ai_move(valid_moves: Array[Move]) -> void:
 	hand.remove_child(c)
 	card_played.emit(c)
 	if my_move._target_player != -1:
-		await get_tree().create_timer(1).timeout
+		await Animator.delay(0.5)
 		target_player_selected.emit(my_move._target_player)
 	if my_move._target_type != Deck.CardType.Unknown:
-		await get_tree().create_timer(1).timeout
+		await Animator.delay(0.5)
 		target_type_selected.emit(my_move._target_type)

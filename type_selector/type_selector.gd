@@ -14,7 +14,6 @@ func _ready() -> void:
 
 func _on_card_input_event(_viewport: Node, event: InputEvent, _shape_idx: int, type: Deck.CardType) -> void:
 	if event.is_action_pressed("left_click"):
-		print("Card " + str(type))
 		type_clicked.emit(type)
 
 

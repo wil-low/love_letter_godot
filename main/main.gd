@@ -71,7 +71,7 @@ func _new_game() -> void:
 func _new_round() -> void:
 	_cur_player = 0
 	for p in _players:
-		await discard(p.hand, 0.5)
+		await discard(p.hand)
 		p.protected = false
 		p.active = true
 	discard(_table)
@@ -86,9 +86,7 @@ func animate_card_move(c: Card, new_parent: Node2D, is_faceup: bool, from: Vecto
 	c.faceup = is_faceup
 	c.global_position = from
 	c.z_index = RenderingServer.CANVAS_ITEM_Z_MAX
-	var tw = create_tween().set_parallel().set_trans(Tween.TRANS_QUAD)
-	tw.tween_property(c, "global_position", to, animation_speed)
-	await tw.finished
+	await Animator.move_card(c, to)
 	c.z_index = 0
 	return c
 
@@ -150,7 +148,6 @@ func _on_card_played(card: Card) -> void:
 
 
 func _on_target_player_selected(idx: int) -> void:
-	print("_on_target_player_selected: " + str(idx))
 	if _players[idx].active:
 		var p = _players[_cur_player]
 		match p._state:
@@ -171,9 +168,8 @@ func _on_target_player_selected(idx: int) -> void:
 
 
 func _on_target_type_selected(type: Deck.CardType) -> void:
-	print("_on_target_type_selected: " + str(type))
 	_type_selector.show_selection(type)
-	await get_tree().create_timer(1).timeout
+	await Animator.delay(0.5)
 	_table.show()
 	_type_selector.hide()
 	_target_type = type
@@ -196,15 +192,15 @@ func resolve_effect() -> void:
 			
 			Deck.CardType.Guard:
 				if tp.hand.get_child(0).type == _target_type:
-					await tp.reveal_hand(animation_speed)
+					await Animator.reveal_hand(tp)
 					tp.active = false
 			Deck.CardType.Priest:
 				if p.is_human():
-					await tp.reveal_hand(animation_speed)
+					await Animator.reveal_hand(tp)
 				print("Priest: reveal hand")
 			Deck.CardType.Baron:
 				if p.is_human():
-					await tp.reveal_hand(animation_speed)
+					await Animator.reveal_hand(tp)
 				var my_type = p.hand.get_child(0).type
 				var their_type = tp.hand.get_child(0).type
 				if my_type > their_type:
@@ -229,16 +225,15 @@ func resolve_effect() -> void:
 				their_card.faceup = p.is_human()
 				var my_hand = p.hand
 				var their_hand = tp.hand
-				var tw = create_tween().set_parallel().set_trans(Tween.TRANS_QUAD)
-				tw.tween_property(my_card, "global_position", tp.global_position,
-					animation_speed)
-				tw.tween_property(their_card, "global_position", p.global_position,
-					animation_speed)
+				await Animator.all([
+					Animator.move_card(my_card, tp.global_position),
+					Animator.move_card(their_card, p.global_position)
+				])
+
 				my_hand.remove_child(my_card)
 				their_hand.remove_child(their_card)
 				p.add_card(their_card)
 				tp.add_card(my_card)
-				await tw.finished
 				print("King: trade hands")
 			Deck.CardType.Princess:
 				p.active = false
@@ -261,17 +256,14 @@ func resolve_effect() -> void:
 		new_turn()
 
 
-func discard(from: Node, speed_multiplier: float = 1) -> void:
+func discard(from: Node) -> void:
 	var for_discard: Array[Card]
 	for ch in from.get_children():
 		if ch is Card:
 			for_discard.append(ch)
 	for ch in for_discard:
 		ch.z_index = RenderingServer.CANVAS_ITEM_Z_MAX
-		var tw = create_tween().set_parallel().set_trans(Tween.TRANS_QUAD)
-		tw.tween_property(ch, "global_position", _discard_marker.global_position,
-			animation_speed * speed_multiplier)
-		await tw.finished
+		await Animator.move_card(ch, _discard_marker.global_position)
 		from.remove_child(ch)
 		ch.queue_free()
 
@@ -281,7 +273,7 @@ func round_over() -> void:
 	var max_type := 0
 	for p in _players:
 		if p.active:
-			p.reveal_hand(animation_speed, false)
+			Animator.reveal_hand(p, false)
 			max_type = max(max_type, p.hand.get_child(0).type)
 	var round_winners := ""
 	var game_winners := ""
@@ -299,13 +291,13 @@ func round_over() -> void:
 		print("Game over! Winners are " + game_winners)
 		_game_over_button.show()
 		if !_players[0].is_human():
-			await get_tree().create_timer(4).timeout
+			await Animator.delay(4)
 			_on_game_over_pressed()
 	elif !round_winners.is_empty():
 		print("Round over! Winners are " + round_winners)
 		_round_over_button.show()
 		if !_players[0].is_human():
-			await get_tree().create_timer(2).timeout
+			await Animator.delay(2)
 			_on_round_over_pressed()
 
 
