@@ -25,7 +25,7 @@ var _cur_player: int:
 @onready var _round_over_button: TextureButton = $RoundOver
 @onready var _game_over_button: TextureButton = $GameOver
 
-var _all_protected: bool
+var _other_protected: bool
 
 var _played_type: Deck.CardType
 
@@ -112,10 +112,10 @@ func deal_card(p: Player) -> void:
 func new_turn():
 	var p = _players[_cur_player]
 	p.protected = false
-	_all_protected = false
+	_other_protected = true
 	for pl in _players:
-		if pl.active and pl.protected and pl.idx != _cur_player:
-			_all_protected = true
+		if pl.active and !pl.protected and pl.idx != _cur_player:
+			_other_protected = false
 	_target_player = -1
 	_target_type = Deck.CardType.Unknown
 	if len(_deck._cards) > 1:
@@ -151,11 +151,11 @@ func _on_card_played(card: Card) -> void:
 
 func _on_target_player_selected(idx: int) -> void:
 	print("_on_target_player_selected: " + str(idx))
-	if _players[idx].active and (!_players[idx].protected or _all_protected):
+	if _players[idx].active:
 		var p = _players[_cur_player]
 		match p._state:
 			Player.State.INPUT_OTHER_P:
-				if _cur_player != idx:
+				if _cur_player != idx and (!_players[idx].protected or _other_protected):
 					_target_player = idx
 					match _played_type:
 						Deck.CardType.Guard:
@@ -165,8 +165,9 @@ func _on_target_player_selected(idx: int) -> void:
 						Deck.CardType.Priest, Deck.CardType.Baron, Deck.CardType.King:
 							resolve_effect()
 			Player.State.INPUT_ANY_P:
-				_target_player = idx
-				resolve_effect()
+				if !_players[idx].protected:
+					_target_player = idx
+					resolve_effect()
 
 
 func _on_target_type_selected(type: Deck.CardType) -> void:
@@ -331,13 +332,13 @@ func find_valid_moves() -> Array[Move]:
 			match type:
 				Deck.CardType.Guard:
 					for p in _players:
-						if p.idx != cp.idx and p.active and (!p.protected or _all_protected):
+						if p.idx != cp.idx and p.active and (!p.protected or _other_protected):
 							for t in range(Deck.CardType.Priest, Deck.CardType.Unknown):
 								move = Move.new()
 								result.append(move.init(type, i, p.idx, t))
 				Deck.CardType.Priest, Deck.CardType.Baron, Deck.CardType.King:
 					for p in _players:
-						if p.idx != cp.idx and p.active and (!p.protected or _all_protected):
+						if p.idx != cp.idx and p.active and (!p.protected or _other_protected):
 							move = Move.new()
 							result.append(move.init(type, i, p.idx))
 				Deck.CardType.Handmaid, Deck.CardType.Princess:
