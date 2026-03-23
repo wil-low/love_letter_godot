@@ -24,6 +24,18 @@ const card_count = [
 	1  # Princess
 ]
 
+const card_names := [
+	"Guard   ",
+	"Priest  ",
+	"Baron   ",
+	"Handmaid",
+	"Prince  ",
+	"King    ",
+	"Countess",
+	"Princess",
+	"Unknown "
+]
+
 var _cards: Array[CardType]
 
 

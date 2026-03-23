@@ -48,7 +48,7 @@ var score: int = 0:
 
 var total_score: int = 0
 
-var _known_cards: Array[Deck.CardType] = [
+var _memory: Array[Deck.CardType] = [
 	Deck.CardType.Unknown,
 	Deck.CardType.Unknown,
 	Deck.CardType.Unknown,
@@ -89,6 +89,21 @@ func clear_hand() -> void:
 	for ch in hand.get_children():
 		hand.remove_child(ch)
 		ch.queue_free()
+
+
+func print_memory() -> void:
+	var s := "Player " + str(idx) + " memory:  "
+	if active:
+		for i in range(len(_memory)):
+			if idx == i:
+				s+= "   " + str(i) + ":         "
+			else:
+				s += "   " + str(i) + ": " + Deck.card_names[_memory[i]]
+	print(s)
+
+
+func update_memory(player_idx: int, type: Deck.CardType = Deck.CardType.Unknown) -> void:
+	_memory[player_idx] = type
 
 
 func countess_restricted() -> int:

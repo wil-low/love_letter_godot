@@ -67,6 +67,7 @@ func _input(event):
 
 
 func _new_game() -> void:
+	print("\n\nNew game")
 	for p in _players:
 		p.score = 0
 	_new_round()
@@ -79,6 +80,8 @@ func _new_round() -> void:
 	for p in _players:
 		p.protected = false
 		p.active = true
+		for i in range(len(p._memory)):
+			p.update_memory(i)
 	discard(_table)
 	for p in _players:
 		await discard(p.hand)
@@ -115,6 +118,9 @@ func deal_card(p: Player) -> void:
 
 
 func new_turn():
+	print("\nnew_turn for Player " + str(_cur_player))
+	for p in _players:
+		p.print_memory()
 	var p = _players[_cur_player]
 	p.protected = false
 	_other_protected = true
@@ -140,6 +146,9 @@ func new_turn():
 func _on_card_played(card: Card) -> void:
 	await animate_card_move(card, _table, true, card.global_position, _marker_0.global_position)
 	_played_card = card.type
+	for p in _players:
+		if p.idx != _cur_player and p._memory[_cur_player] == _played_card:
+			p.update_memory(_cur_player)  # played card is not in hand anymore
 	var st := Player.State.IDLE
 	match card.type:
 		Deck.CardType.Guard, Deck.CardType.Priest, Deck.CardType.Baron, Deck.CardType.King:
@@ -221,6 +230,7 @@ func resolve_effect() -> void:
 			Deck.CardType.Priest:
 				if p.is_human():
 					await Animator.reveal_hand(tp)
+				p.update_memory(tp.idx, tp.hand.get_child(0).type)
 				print("Priest: reveal hand")
 			Deck.CardType.Baron:
 				if p.is_human():
@@ -231,6 +241,9 @@ func resolve_effect() -> void:
 					tp.active = false
 				elif my_type < their_type:
 					p.active = false
+				else:
+					p.update_memory(tp.idx, their_type)
+					tp.update_memory(p.idx, my_type)
 				print("Baron: compare cards")
 			Deck.CardType.Handmaid:
 				p.protected = true
@@ -239,6 +252,9 @@ func resolve_effect() -> void:
 				var type = tp.hand.get_child(0).type
 				await discard(tp.hand)
 				await deal_card(tp)
+				for pl in _players:
+					if pl.idx != _cur_player:
+						pl.update_memory(_cur_player)  # hand is unknown now
 				if type == Deck.CardType.Princess:
 					tp.active = false
 				print("Prince: discard and redraw")
@@ -257,6 +273,13 @@ func resolve_effect() -> void:
 				their_hand.remove_child(their_card)
 				p.add_card(their_card)
 				tp.add_card(my_card)
+				p.update_memory(tp.idx, my_card.type)
+				tp.update_memory(p.idx, their_card.type)
+				for pl in _players:
+					if pl.idx != p.idx and pl.idx != tp.idx:
+						# swap memories
+						pl.update_memory(p.idx, pl._memory[tp.idx])
+						pl.update_memory(tp.idx, pl._memory[p.idx])
 				print("King: trade hands")
 			Deck.CardType.Princess:
 				p.active = false
@@ -277,7 +300,6 @@ func resolve_effect() -> void:
 		_cur_player = (_cur_player + 1) % len(_players)
 		while !_players[_cur_player].active:
 			_cur_player = (_cur_player + 1) % len(_players)
-		print("new_turn for Player " + str(_cur_player))
 		new_turn()
 
 
