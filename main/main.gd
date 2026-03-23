@@ -135,6 +135,10 @@ func new_turn():
 		#_players[_cur_player].hand.get_child(1).type = Deck.CardType.King
 		p.current_mark.show()
 		if p.is_human():
+			var valid_moves = find_valid_moves()
+			p.eval_moves(valid_moves)
+			for m in valid_moves:
+				print("\t" + str(m))
 			p._state = Player.State.SELECT_CARD
 		else:
 			var valid_moves = find_valid_moves()
@@ -371,8 +375,6 @@ func find_valid_moves() -> Array[Move]:
 		move = Move.new(cards[countess_idx], countess_idx)
 		result.append(move)
 	else:
-		if cards[1].type < cards[0].type:
-			cards = [cards[1], cards[0]]
 		for i in range(len(cards)):
 			var type = cards[i].type
 			match type:
@@ -387,7 +389,7 @@ func find_valid_moves() -> Array[Move]:
 						if p.idx != cp.idx and p.active and (!p.protected or _other_protected):
 							move = Move.new(cards[i], i, p.idx)
 							result.append(move)
-				Deck.CardType.Handmaid, Deck.CardType.Princess:
+				Deck.CardType.Handmaid, Deck.CardType.Countess, Deck.CardType.Princess:
 					move = Move.new(cards[i], i)
 					result.append(move)
 				Deck.CardType.Prince:

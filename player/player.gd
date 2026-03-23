@@ -137,31 +137,102 @@ func _on_player_input_event(_viewport: Node, event: InputEvent, _shape_idx: int)
 
 func ai_move(valid_moves: Array[Move]) -> void:
 	print("\nPlayer " + str(idx) + " - ai_move: " + str(len(valid_moves)))
-	#for m in valid_moves:
-	#	print("\t" + str(m))
 	var my_move = select_move(valid_moves)
 	hand.remove_child(my_move._played_card)
 	move_chosen.emit(my_move)
 
 
 func select_move(valid_moves: Array[Move]) -> Move:
+	if ai_level != AI_Level.Level_4:
+		for m in valid_moves:
+			print("\t" + str(m))
 	match ai_level:
 		AI_Level.Level_1:
 			# first valid move
 			return valid_moves[0]
 		AI_Level.Level_2:
-			# last valid move
-			return valid_moves[-1]
-		AI_Level.Level_3:
 			# random valid move
 			return valid_moves[randi() % len(valid_moves)]
-		AI_Level.Level_4:
+		AI_Level.Level_3:
 			# moves of cheaper card
+			var cheaper_idx = 0 if hand.get_child(0).type <= hand.get_child(1).type else 1
 			var filtered: Array[Move]
 			for m in valid_moves:
-				if m._played_card_idx == 0:
+				if m._played_card_idx == cheaper_idx:
 					filtered.append(m)
 			if filtered.is_empty():  # other protected
 				filtered.append_array(valid_moves)
 			return filtered[randi() % len(filtered)]
+		AI_Level.Level_4:
+			# move scoring
+			eval_moves(valid_moves)
+			var sum := 0
+			for m in valid_moves:
+				print("\t" + str(m))
+				sum += m._score
+			if sum == 0:
+				sum = 1
+			var rmove := randi() % sum
+			sum = 0
+			for m in valid_moves:
+				sum += m._score
+				if sum >= rmove:
+					return m
+			return valid_moves[-1]
 	return null
+
+enum EvalScore {
+	LOSE = 0,
+	BAD = 5,
+	WEAK = 10,
+	MODERATE = 20,
+	GOOD = 50
+}
+
+func eval_moves(valid_moves):
+	assert(hand.get_child_count() == 2, "Player " + str(idx) + ": wrong hand count")
+	for m in valid_moves:
+		var my_type = hand.get_child(1 - m._played_card_idx).type  # leftover card
+		var mem := _memory[m._target_player]
+		m._score = EvalScore.LOSE
+		match m._played_card.type:
+			Deck.CardType.Guard:
+				if mem != Deck.CardType.Unknown:
+					if mem == m._target_type:
+						m._score = EvalScore.GOOD
+				else:
+					m._score = EvalScore.BAD
+			Deck.CardType.Priest:
+				if mem == Deck.CardType.Unknown:
+					m._score = EvalScore.WEAK
+			Deck.CardType.Baron:
+				if mem != Deck.CardType.Unknown:
+					if my_type > mem:
+						m._score = EvalScore.GOOD
+					elif my_type == mem:
+						m._score = EvalScore.WEAK
+				else:
+					m._score = EvalScore.WEAK if my_type > Deck.CardType.Handmaid else EvalScore.BAD
+			Deck.CardType.Handmaid:
+				m._score = EvalScore.MODERATE
+			Deck.CardType.Prince:
+				if idx == m._target_player:  # myself
+					if my_type != Deck.CardType.Princess:
+						m._score = EvalScore.WEAK if my_type > Deck.CardType.Handmaid else EvalScore.MODERATE
+				else:
+					if mem != Deck.CardType.Unknown:
+						if mem == Deck.CardType.Princess:
+							m._score = EvalScore.GOOD
+						elif mem > Deck.CardType.Handmaid:
+							m._score = EvalScore.WEAK
+					else:
+						m._score = EvalScore.BAD
+			Deck.CardType.King:
+				if my_type == mem:
+					m._score = EvalScore.WEAK
+				elif mem != Deck.CardType.Unknown:
+					m._score = EvalScore.MODERATE if my_type < mem else EvalScore.BAD
+				else:
+					m._score = EvalScore.BAD
+			Deck.CardType.Countess:
+				m._score = EvalScore.BAD
