@@ -21,16 +21,19 @@ ai_level = 0
 [node name="Player1" parent="." unique_id=1290894075 instance=ExtResource("1_53q0u")]
 position = Vector2(5, 0)
 idx = 1
+ai_level = 2
 
 [node name="Player2" parent="." unique_id=1362357433 instance=ExtResource("1_53q0u")]
 position = Vector2(68, 0)
 idx = 2
 right_score = true
+ai_level = 3
 
 [node name="Player3" parent="." unique_id=369263454 instance=ExtResource("1_53q0u")]
 position = Vector2(68, 31)
 idx = 3
 right_score = true
+ai_level = 4
 
 [node name="DiscardMarker" type="Marker2D" parent="." unique_id=1639788791]
 position = Vector2(37, -31)

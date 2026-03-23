@@ -3,11 +3,14 @@ extends Node2D
 
 signal card_played(card: Card)
 signal target_player_selected(idx: int)
-signal target_type_selected(type: Deck.CardType)
+signal move_chosen(move: Move)
 
 enum AI_Level {
 	Human = 0,
-	Level_1
+	Level_1,
+	Level_2,
+	Level_3,
+	Level_4
 }
 
 enum State {
@@ -43,6 +46,7 @@ var score: int = 0:
 		score = value
 		_score_digit.frame = score
 
+var total_score: int = 0
 
 var _known_cards: Array[Deck.CardType] = [
 	Deck.CardType.Unknown,
@@ -87,16 +91,16 @@ func clear_hand() -> void:
 		ch.queue_free()
 
 
-func next_state(type: Deck.CardType, log: bool) -> State:
+func next_state(type: Deck.CardType, need_print: bool) -> State:
 	var result := State.IDLE
 	match type:
 		Deck.CardType.Guard, Deck.CardType.Priest, Deck.CardType.Baron, Deck.CardType.King:
 			result = State.INPUT_OTHER_P
-			if log:
+			if need_print:
 				print("Select another player")
 		Deck.CardType.Prince:
 			result = State.INPUT_ANY_P
-			if log:
+			if need_print:
 				print("Select any player")
 	return result
 
@@ -131,19 +135,32 @@ func _on_player_input_event(_viewport: Node, event: InputEvent, _shape_idx: int)
 
 
 func ai_move(valid_moves: Array[Move]) -> void:
-	print("\nPlayer " + str(idx) + " - ai_move:")
-	for m in valid_moves:
-		print("\t" + str(m))
-	var choice = randi() % len(valid_moves)
-	var my_move = valid_moves[choice]
-	print("My " + str(my_move))
-	var c = hand.get_child(my_move._played_card_idx)
-	hand.remove_child(c)
-	card_played.emit(c)
-	if my_move._target_player != -1:
-		await Animator.delay(1)
-		_state = next_state(c.type, false)
-		target_player_selected.emit(my_move._target_player)
-	if my_move._target_type != Deck.CardType.Unknown:
-		await Animator.delay(1)
-		target_type_selected.emit(my_move._target_type)
+	print("\nPlayer " + str(idx) + " - ai_move: " + str(len(valid_moves)))
+	#for m in valid_moves:
+	#	print("\t" + str(m))
+	var my_move = select_move(valid_moves)
+	hand.remove_child(my_move._played_card)
+	move_chosen.emit(my_move)
+
+
+func select_move(valid_moves: Array[Move]) -> Move:
+	match ai_level:
+		AI_Level.Level_1:
+			# first valid move
+			return valid_moves[0]
+		AI_Level.Level_2:
+			# last valid move
+			return valid_moves[-1]
+		AI_Level.Level_3:
+			# random valid move
+			return valid_moves[randi() % len(valid_moves)]
+		AI_Level.Level_4:
+			# moves of cheaper card
+			var filtered: Array[Move]
+			for m in valid_moves:
+				if m._played_card_idx == 0:
+					filtered.append(m)
+			if filtered.is_empty():  # other protected
+				filtered.append_array(valid_moves)
+			return filtered[randi() % len(filtered)]
+	return null

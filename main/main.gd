@@ -26,7 +26,7 @@ var _cur_player: int:
 
 var _other_protected: bool
 
-var _played_type: Deck.CardType
+var _player_card: Deck.CardType
 
 var _target_player: int:
 	get:
@@ -44,9 +44,12 @@ func _ready() -> void:
 	seed(random_seed if random_seed != 0 else Time.get_ticks_usec())
 	_players = [$Player0, $Player1, $Player2, $Player3]
 	for p in _players:
-		p.card_played.connect(_on_card_played)
+		assert(p.idx == 0 or !p.is_human(), "Human is allowed for Player 0 only")
+		if p.is_human():
+			p.card_played.connect(_on_card_played)
+		else:
+			p.move_chosen.connect(_on_move_chosen)
 		p.target_player_selected.connect(_on_target_player_selected)
-		p.target_type_selected.connect(_on_target_type_selected)
 	_new_game()
 
 
@@ -131,9 +134,9 @@ func new_turn():
 
 func _on_card_played(card: Card) -> void:
 	await animate_card_move(card, _table, true, card.global_position, _marker_0.global_position)
-	_played_type = card.type
+	_player_card = card.type
 	var p = _players[_cur_player]
-	p._state = p.next_state(_played_type, true)
+	p._state = p.next_state(_player_card, true)
 	if p._state == Player.State.IDLE:
 		resolve_effect()
 
@@ -145,7 +148,7 @@ func _on_target_player_selected(idx: int) -> void:
 			Player.State.INPUT_OTHER_P:
 				if _cur_player != idx and (!_players[idx].protected or _other_protected):
 					_target_player = idx
-					match _played_type:
+					match _player_card:
 						Deck.CardType.Guard:
 							p._state = Player.State.INPUT_T
 							_table.hide()
@@ -157,8 +160,6 @@ func _on_target_player_selected(idx: int) -> void:
 				if !_players[idx].protected:
 					_target_player = idx
 					resolve_effect()
-			_:
-				assert(false, "skip - in state " + Player.State.keys()[p._state])
 
 
 func _on_target_type_selected(type: Deck.CardType) -> void:
@@ -170,19 +171,31 @@ func _on_target_type_selected(type: Deck.CardType) -> void:
 	resolve_effect()
 
 
+func _on_move_chosen(move: Move) -> void:
+	await Animator.delay(1)
+	print("My " + str(move))
+	_on_card_played(move._played_card)
+	if move._target_player != -1:
+		await Animator.delay(1)
+		_on_target_player_selected(move._target_player)
+	if move._target_type != Deck.CardType.Unknown:
+		await Animator.delay(1)
+		_on_target_type_selected(move._target_type)
+
+
 func resolve_effect() -> void:
 	var p = _players[_cur_player]
 	var tp = _players[_target_player]
 	p._state = Player.State.IDLE
 	print("resolve_effect for " + 
-		Deck.CardType.keys()[_played_type] +
+		Deck.CardType.keys()[_player_card] +
 		", player " + str(_target_player) + 
 		", type " + Deck.CardType.keys()[_target_type])
 
 	_player_selection.hide()
 
 	if !tp.protected:
-		match _played_type:
+		match _player_card:
 			
 			Deck.CardType.Guard:
 				if tp.hand.get_child(0).type == _target_type:
@@ -238,7 +251,8 @@ func resolve_effect() -> void:
 	var active_count := 0
 	for pl in _players:
 		if pl.active:
-			assert(p.hand.get_child_count() == 1, "Player " + str(_cur_player) + ": too many cards")
+			assert(p.hand.get_child_count() == 1, "Player " + str(_cur_player) +
+				" has " + str(p.hand.get_child_count()) + " cards")
 			active_count += 1
 	if active_count == 1:
 		round_over()
@@ -246,6 +260,7 @@ func resolve_effect() -> void:
 		_cur_player = (_cur_player + 1) % len(_players)
 		while !_players[_cur_player].active:
 			_cur_player = (_cur_player + 1) % len(_players)
+		print("new_turn for Player " + str(_cur_player))
 		new_turn()
 
 
@@ -273,6 +288,7 @@ func round_over() -> void:
 	for p in _players:
 		if p.active and p.hand.get_child(0).type == max_type:
 			p.score += 1
+			p.total_score += 1
 			if !round_winners.is_empty():
 				round_winners += ", "
 			round_winners += str(p.idx)
@@ -281,10 +297,13 @@ func round_over() -> void:
 					game_winners += ", "
 				game_winners += str(p.idx)
 	if !game_winners.is_empty():
-		print("Game over! Winners are " + game_winners)
+		var s := "Game over! Winners are " + game_winners + ". Total scores: "
+		for p in _players:
+			s += str(p.total_score) + ", "
+		push_warning(s)
 		_game_over_button.show()
 		if !_players[0].is_human():
-			await Animator.delay(4)
+			await Animator.delay(8)
 			_on_game_over_pressed()
 	elif !round_winners.is_empty():
 		print("Round over! Winners are " + round_winners)
@@ -305,33 +324,36 @@ func _on_game_over_pressed() -> void:
 
 func find_valid_moves() -> Array[Move]:
 	var result: Array[Move]
-	var move: Move = Move.new()
+	var move: Move;
 	var cp = _players[_cur_player]
 	var countess_idx = cp.countess_restricted() 
-	var child_types: Array[Deck.CardType] = [cp.hand.get_child(0).type, cp.hand.get_child(1).type]
+	var cards: Array[Card] = [cp.hand.get_child(0), cp.hand.get_child(1)]
 	if countess_idx != -1:
-		result.append(move.init(child_types[countess_idx], countess_idx))
+		move = Move.new(cards[countess_idx], countess_idx)
+		result.append(move)
 	else:
-		for i in range(len(child_types)):
-			var type = child_types[i]
+		if cards[1].type < cards[0].type:
+			cards = [cards[1], cards[0]]
+		for i in range(len(cards)):
+			var type = cards[i].type
 			match type:
 				Deck.CardType.Guard:
 					for p in _players:
 						if p.idx != cp.idx and p.active and (!p.protected or _other_protected):
 							for t in range(Deck.CardType.Priest, Deck.CardType.Unknown):
-								move = Move.new()
-								result.append(move.init(type, i, p.idx, t))
+								move = Move.new(cards[i], i, p.idx, t)
+								result.append(move)
 				Deck.CardType.Priest, Deck.CardType.Baron, Deck.CardType.King:
 					for p in _players:
 						if p.idx != cp.idx and p.active and (!p.protected or _other_protected):
-							move = Move.new()
-							result.append(move.init(type, i, p.idx))
+							move = Move.new(cards[i], i, p.idx)
+							result.append(move)
 				Deck.CardType.Handmaid, Deck.CardType.Princess:
-					move = Move.new()
-					result.append(move.init(type, i))
+					move = Move.new(cards[i], i)
+					result.append(move)
 				Deck.CardType.Prince:
 					for p in _players:
 						if p.active and !p.protected:
-							move = Move.new()
-							result.append(move.init(type, i, p.idx))
+							move = Move.new(cards[i], i, p.idx)
+							result.append(move)
 	return result
