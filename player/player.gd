@@ -91,20 +91,6 @@ func clear_hand() -> void:
 		ch.queue_free()
 
 
-func next_state(type: Deck.CardType, need_print: bool) -> State:
-	var result := State.IDLE
-	match type:
-		Deck.CardType.Guard, Deck.CardType.Priest, Deck.CardType.Baron, Deck.CardType.King:
-			result = State.INPUT_OTHER_P
-			if need_print:
-				print("Select another player")
-		Deck.CardType.Prince:
-			result = State.INPUT_ANY_P
-			if need_print:
-				print("Select any player")
-	return result
-
-
 func countess_restricted() -> int:
 	# returns -1 if Countess rule is not in effect
 	var child_types: Array[Deck.CardType] = [hand.get_child(0).type, hand.get_child(1).type]

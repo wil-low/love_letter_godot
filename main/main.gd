@@ -23,10 +23,12 @@ var _cur_player: int:
 @onready var _discard_marker: Marker2D = $DiscardMarker
 @onready var _round_over_button: TextureButton = $RoundOver
 @onready var _game_over_button: TextureButton = $GameOver
+@onready var _select_other_player: TextureButton = $SelectOtherPlayer
+@onready var _select_any_player: TextureButton = $SelectAnyPlayer
 
 var _other_protected: bool
 
-var _player_card: Deck.CardType
+var _played_card: Deck.CardType
 
 var _target_player: int:
 	get:
@@ -134,10 +136,20 @@ func new_turn():
 
 func _on_card_played(card: Card) -> void:
 	await animate_card_move(card, _table, true, card.global_position, _marker_0.global_position)
-	_player_card = card.type
+	_played_card = card.type
+	var st := Player.State.IDLE
+	match card.type:
+		Deck.CardType.Guard, Deck.CardType.Priest, Deck.CardType.Baron, Deck.CardType.King:
+			st = Player.State.INPUT_OTHER_P
+		Deck.CardType.Prince:
+			st = Player.State.INPUT_ANY_P
 	var p = _players[_cur_player]
-	p._state = p.next_state(_player_card, true)
+	p._state = st
+	if p.is_human():
+		_select_other_player.visible = p._state == Player.State.INPUT_OTHER_P
+		_select_any_player.visible = p._state == Player.State.INPUT_ANY_P
 	if p._state == Player.State.IDLE:
+		await Animator.delay(1)
 		resolve_effect()
 
 
@@ -148,7 +160,8 @@ func _on_target_player_selected(idx: int) -> void:
 			Player.State.INPUT_OTHER_P:
 				if _cur_player != idx and (!_players[idx].protected or _other_protected):
 					_target_player = idx
-					match _player_card:
+					_select_other_player.hide()
+					match _played_card:
 						Deck.CardType.Guard:
 							p._state = Player.State.INPUT_T
 							_table.hide()
@@ -159,6 +172,7 @@ func _on_target_player_selected(idx: int) -> void:
 			Player.State.INPUT_ANY_P:
 				if !_players[idx].protected:
 					_target_player = idx
+					_select_any_player.hide()
 					resolve_effect()
 
 
@@ -188,14 +202,14 @@ func resolve_effect() -> void:
 	var tp = _players[_target_player]
 	p._state = Player.State.IDLE
 	print("resolve_effect for " + 
-		Deck.CardType.keys()[_player_card] +
+		Deck.CardType.keys()[_played_card] +
 		", player " + str(_target_player) + 
 		", type " + Deck.CardType.keys()[_target_type])
 
 	_player_selection.hide()
 
 	if !tp.protected:
-		match _player_card:
+		match _played_card:
 			
 			Deck.CardType.Guard:
 				if tp.hand.get_child(0).type == _target_type:
