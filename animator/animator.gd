@@ -62,7 +62,7 @@ func reveal_hand(p: Player, hide_afterwards: bool = true) -> Signal:
 	return _immediate()
 
 
-func move_card(card: Card, to_global: Vector2) -> Signal:
+func move_card(card: Card, to_global: Vector2, duration: float = 0.5) -> Signal:
 	var tw = create_tween().set_trans(Tween.TRANS_QUAD)
-	tw.tween_property(card, "global_position", to_global, _d(0.5))
+	tw.tween_property(card, "global_position", to_global, _d(duration))
 	return tw.finished

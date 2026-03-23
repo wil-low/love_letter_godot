@@ -73,12 +73,15 @@ func _new_game() -> void:
 	
 	
 func _new_round() -> void:
+	_select_other_player.hide()
+	_select_any_player.hide()
 	_cur_player = 0
 	for p in _players:
-		discard(p.hand)
 		p.protected = false
 		p.active = true
-	await discard(_table)
+	discard(_table)
+	for p in _players:
+		await discard(p.hand)
 	_deck.prepare()
 	for p in _players:
 		await deal_card(p)
@@ -235,7 +238,7 @@ func resolve_effect() -> void:
 			Deck.CardType.Prince:
 				var type = tp.hand.get_child(0).type
 				await discard(tp.hand)
-				deal_card(tp)
+				await deal_card(tp)
 				if type == Deck.CardType.Princess:
 					tp.active = false
 				print("Prince: discard and redraw")
@@ -285,7 +288,7 @@ func discard(from: Node) -> void:
 			for_discard.append(ch)
 	for ch in for_discard:
 		ch.z_index = RenderingServer.CANVAS_ITEM_Z_MAX
-		await Animator.move_card(ch, _discard_marker.global_position)
+		await Animator.move_card(ch, _discard_marker.global_position, 0.25)
 		from.remove_child(ch)
 		ch.queue_free()
 
