@@ -199,16 +199,16 @@ func eval_moves(valid_moves):
 			Deck.CardType.Guard:
 				if mem != Deck.CardType.Unknown:
 					if mem == m._target_type:
-						m._score = EvalScore.GOOD
+						m._score = EvalScore.GOOD * m._target_type
 				else:
-					m._score = EvalScore.BAD
+					m._score = EvalScore.BAD * Deck.card_count[m._target_type]
 			Deck.CardType.Priest:
 				if mem == Deck.CardType.Unknown:
 					m._score = EvalScore.WEAK
 			Deck.CardType.Baron:
 				if mem != Deck.CardType.Unknown:
 					if my_type > mem:
-						m._score = EvalScore.GOOD
+						m._score = EvalScore.GOOD * m._target_type
 					elif my_type == mem:
 						m._score = EvalScore.WEAK
 				else:
@@ -222,7 +222,7 @@ func eval_moves(valid_moves):
 				else:
 					if mem != Deck.CardType.Unknown:
 						if mem == Deck.CardType.Princess:
-							m._score = EvalScore.GOOD
+							m._score = EvalScore.GOOD * m._target_type
 						elif mem > Deck.CardType.Handmaid:
 							m._score = EvalScore.WEAK
 					else:
