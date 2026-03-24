@@ -5,6 +5,9 @@ extends Node2D
 @export var random_seed: int = 42
 
 const max_score: int = 4
+const max_games: int = 1000
+
+var game_counter: int = 0
 
 var _players: Array[Player]
 var _cur_player: int:
@@ -43,6 +46,9 @@ var _target_type: int
 
 # Called when the node enters the scene tree for the first time.
 func _ready() -> void:
+	if Animator._speed == 0: # speedrun
+		RenderingServer.render_loop_enabled = false
+		Engine.print_to_stdout = false
 	seed(random_seed if random_seed != 0 else Time.get_ticks_usec())
 	_players = [$Player0, $Player1, $Player2, $Player3]
 	for p in _players:
@@ -67,10 +73,14 @@ func _input(event):
 
 
 func _new_game() -> void:
-	print("\n\nNew game")
-	for p in _players:
-		p.score = 0
-	_new_round()
+	game_counter += 1
+	if game_counter > max_games:
+		push_warning("Max games count reached, stop")
+	else:
+		print("\n\nNew game " + str(game_counter))
+		for p in _players:
+			p.score = 0
+		_new_round()
 	
 	
 func _new_round() -> void:
@@ -340,7 +350,7 @@ func round_over() -> void:
 					game_winners += ", "
 				game_winners += str(p.idx)
 	if !game_winners.is_empty():
-		var s := "Game over! Winners are " + game_winners + ". Total scores: "
+		var s := "Game " + str(game_counter) + " over! Winners: " + game_winners + ". Total scores: "
 		for p in _players:
 			s += str(p.total_score) + ", "
 		push_warning(s)

@@ -1,6 +1,6 @@
 extends Node
 
-var _speed: float = 1
+var _speed: float = 1  # set to 0 for speedrun with disabled rendering and console output
 
 class _WaitAll:
 	extends RefCounted
@@ -17,7 +17,7 @@ class _WaitAll:
 
 
 func _d(base: float) -> float:
-	return base / _speed
+	return base / _speed if _speed > 0 else 0.0
 
 
 func delay(t: float) -> Signal:
