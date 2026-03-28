@@ -135,14 +135,14 @@ func _on_player_input_event(_viewport: Node, event: InputEvent, _shape_idx: int)
 		target_player_selected.emit(idx)
 
 
-func ai_move(valid_moves: Array[Move]) -> void:
+func ai_move(valid_moves: Array[Move], left_cards: Array[int]) -> void:
 	print("\nPlayer " + str(idx) + " - ai_move: " + str(len(valid_moves)))
-	var my_move = select_move(valid_moves)
+	var my_move = select_move(valid_moves, left_cards)
 	hand.remove_child(my_move._played_card)
 	move_chosen.emit(my_move)
 
 
-func select_move(valid_moves: Array[Move]) -> Move:
+func select_move(valid_moves: Array[Move], left_cards: Array[int]) -> Move:
 	if ai_level != AI_Level.Level_4:
 		for m in valid_moves:
 			print("\t" + str(m))
@@ -165,7 +165,7 @@ func select_move(valid_moves: Array[Move]) -> Move:
 			return filtered[randi() % len(filtered)]
 		AI_Level.Level_4:
 			# move scoring
-			eval_moves(valid_moves)
+			eval_moves(valid_moves, left_cards)
 			var sum := 0
 			for m in valid_moves:
 				print("\t" + str(m))
@@ -176,7 +176,7 @@ func select_move(valid_moves: Array[Move]) -> Move:
 			sum = 0
 			for m in valid_moves:
 				sum += m._score
-				if sum >= rmove:
+				if sum > rmove:
 					return m
 			return valid_moves[-1]
 	return null
@@ -189,7 +189,7 @@ enum EvalScore {
 	GOOD = 50
 }
 
-func eval_moves(valid_moves):
+func eval_moves(valid_moves: Array[Move], left_cards: Array[int]):
 	assert(hand.get_child_count() == 2, "Player " + str(idx) + ": wrong hand count")
 	for m in valid_moves:
 		var my_type = hand.get_child(1 - m._played_card_idx).type  # leftover card
@@ -201,10 +201,10 @@ func eval_moves(valid_moves):
 					if mem == m._target_type:
 						m._score = EvalScore.GOOD * m._target_type
 				else:
-					m._score = EvalScore.BAD * Deck.card_count[m._target_type]
+					m._score = EvalScore.BAD * left_cards[m._target_type]
 			Deck.CardType.Priest:
 				if mem == Deck.CardType.Unknown:
-					m._score = EvalScore.WEAK
+					m._score = EvalScore.MODERATE
 			Deck.CardType.Baron:
 				if mem != Deck.CardType.Unknown:
 					if my_type > mem:

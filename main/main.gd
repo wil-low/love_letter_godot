@@ -131,6 +131,8 @@ func new_turn():
 	print("\nnew_turn for Player " + str(_cur_player))
 	for p in _players:
 		p.print_memory()
+	for i in range(len(_deck._left)):
+		print("Left " + Deck.card_names[i] + ": " + str(_deck._left[i]))
 	var p = _players[_cur_player]
 	p.protected = false
 	_other_protected = true
@@ -146,13 +148,13 @@ func new_turn():
 		p.current_mark.show()
 		if p.is_human():
 			var valid_moves = find_valid_moves()
-			p.eval_moves(valid_moves)
+			p.eval_moves(valid_moves, _deck._left)
 			for m in valid_moves:
 				print("\t" + str(m))
 			p._state = Player.State.SELECT_CARD
 		else:
 			var valid_moves = find_valid_moves()
-			p.ai_move(valid_moves)
+			p.ai_move(valid_moves, _deck._left)
 	else:
 		round_over()
 
@@ -241,6 +243,7 @@ func resolve_effect() -> void:
 				if tp.hand.get_child(0).type == _target_type:
 					await Animator.reveal_hand(tp)
 					tp.active = false
+					discard(tp.hand)
 			Deck.CardType.Priest:
 				if p.is_human():
 					await Animator.reveal_hand(tp)
@@ -253,8 +256,10 @@ func resolve_effect() -> void:
 				var their_type = tp.hand.get_child(0).type
 				if my_type > their_type:
 					tp.active = false
+					discard(tp.hand)
 				elif my_type < their_type:
 					p.active = false
+					discard(p.hand)
 				else:
 					p.update_memory(tp.idx, their_type)
 					tp.update_memory(p.idx, my_type)
@@ -271,6 +276,7 @@ func resolve_effect() -> void:
 						pl.update_memory(_cur_player)  # hand is unknown now
 				if type == Deck.CardType.Princess:
 					tp.active = false
+					discard(tp.hand)
 				print("Prince: discard and redraw")
 			Deck.CardType.King:
 				var my_card: Card = p.hand.get_child(0)
@@ -297,6 +303,7 @@ func resolve_effect() -> void:
 				print("King: trade hands")
 			Deck.CardType.Princess:
 				p.active = false
+				discard(p.hand)
 				print("Princess: discarded")
 	else:
 		print("Player " + str(tp.idx) + " protected, no effect")
@@ -305,8 +312,8 @@ func resolve_effect() -> void:
 	var active_count := 0
 	for pl in _players:
 		if pl.active:
-			assert(p.hand.get_child_count() == 1, "Player " + str(_cur_player) +
-				" has " + str(p.hand.get_child_count()) + " cards")
+			assert(pl.hand.get_child_count() == 1, "Player " + str(pl.idx) +
+				" has " + str(pl.hand.get_child_count()) + " cards")
 			active_count += 1
 	if active_count == 1:
 		round_over()
@@ -323,6 +330,8 @@ func discard(from: Node) -> void:
 		if ch is Card:
 			for_discard.append(ch)
 	for ch in for_discard:
+		_deck._left[ch.type] -= 1
+		assert(_deck._left[ch.type] >= 0)
 		ch.z_index = RenderingServer.CANVAS_ITEM_Z_MAX
 		await Animator.move_card(ch, _discard_marker.global_position, 0.25)
 		from.remove_child(ch)

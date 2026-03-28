@@ -37,11 +37,14 @@ const card_names := [
 ]
 
 var _cards: Array[CardType]
+var _left: Array[int]
 
 
 func prepare() -> void:
 	_cards = []
+	_left = []
 	for i in range(card_count.size()):
+		_left.append(card_count[i])
 		for j in range(card_count[i]):
 			_cards.append(i)
 	_cards.shuffle()
