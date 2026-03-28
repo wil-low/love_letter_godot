@@ -24,9 +24,9 @@ Animator="*uid://dn44wqmq5axw5"
 window/size/viewport_width=672
 window/size/viewport_height=384
 window/size/mode=2
-window/stretch/mode="viewport"
-window/stretch/aspect="expand"
+window/stretch/mode="canvas_items"
 window/stretch/scale=8.0
+window/handheld/orientation=6
 
 [input]
 
