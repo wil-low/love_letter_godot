@@ -1,6 +1,6 @@
 extends Node
 
-var _speed: float = 1  # set to 0 for speedrun with disabled rendering and console output
+var _speed: float = 2  # set to 0 for speedrun with disabled rendering and console output
 
 class _WaitAll:
 	extends RefCounted

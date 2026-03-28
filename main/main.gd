@@ -80,13 +80,13 @@ func _new_game() -> void:
 		print("\n\nNew game " + str(game_counter))
 		for p in _players:
 			p.score = 0
+		_cur_player = 0
 		_new_round()
 	
 	
 func _new_round() -> void:
 	_select_other_player.hide()
 	_select_any_player.hide()
-	_cur_player = 0
 	for p in _players:
 		p.protected = false
 		p.active = true
@@ -345,15 +345,17 @@ func round_over() -> void:
 		if p.active:
 			Animator.reveal_hand(p, false)
 			max_type = max(max_type, p.hand.get_child(0).type)
-	var round_winners := ""
+	var round_winners: Array[int]
+	var round_winners_str := ""
 	var game_winners := ""
 	for p in _players:
 		if p.active and p.hand.get_child(0).type == max_type:
 			p.score += 1
 			p.total_score += 1
-			if !round_winners.is_empty():
-				round_winners += ", "
-			round_winners += str(p.idx)
+			if !round_winners_str.is_empty():
+				round_winners_str += ", "
+			round_winners_str += str(p.idx)
+			round_winners.append(p.idx)
 			if p.score >= max_score:
 				if !game_winners.is_empty():
 					game_winners += ", "
@@ -367,8 +369,9 @@ func round_over() -> void:
 		if !_players[0].is_human():
 			await Animator.delay(8)
 			_on_game_over_pressed()
-	elif !round_winners.is_empty():
-		print("Round over! Winners are " + round_winners)
+	elif !round_winners_str.is_empty():
+		print("Round over! Winners are " + round_winners_str)
+		_cur_player = round_winners[randi() % len(round_winners)]
 		_round_over_button.show()
 		if !_players[0].is_human():
 			await Animator.delay(2)

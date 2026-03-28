@@ -14,7 +14,7 @@
 [node name="Main" type="Node2D" unique_id=287543303]
 script = ExtResource("1_xwkvk")
 card_scene = ExtResource("4_c651c")
-random_seed = 43
+random_seed = 0
 
 [node name="Player0" parent="." unique_id=1231112012 instance=ExtResource("1_53q0u")]
 position = Vector2(5, 31)
@@ -23,13 +23,13 @@ ai_level = 0
 [node name="Player1" parent="." unique_id=1290894075 instance=ExtResource("1_53q0u")]
 position = Vector2(5, 0)
 idx = 1
-ai_level = 2
+ai_level = 4
 
 [node name="Player2" parent="." unique_id=1362357433 instance=ExtResource("1_53q0u")]
 position = Vector2(68, 0)
 idx = 2
 right_score = true
-ai_level = 3
+ai_level = 4
 
 [node name="Player3" parent="." unique_id=369263454 instance=ExtResource("1_53q0u")]
 position = Vector2(68, 31)
