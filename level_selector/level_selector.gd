@@ -1,14 +1,16 @@
 class_name LevelSelector
 extends Node2D
 
-signal ai_levels_changed(levels: Array[Player.AI_Level])
+signal levels_changed(levels: Array[Player.AI_Level], speed: int)
 
 @onready var _levels: Node2D = $Levels
+@onready var _speed_level: Node2D = $SpeedLevel
 
 
-func set_levels(arr: Array[Player.AI_Level]) -> void:
+func set_levels(arr: Array[Player.AI_Level], speed: int) -> void:
 	for i in range(len(arr)):
 		_levels.get_child(i).ai_level = arr[i]
+	_speed_level.level = speed
 
 
 func _on_back_button_pressed() -> void:
@@ -21,6 +23,6 @@ func _on_back_button_pressed() -> void:
 			player_count += 1
 	if player_count > 1:
 		hide()
-		ai_levels_changed.emit(result)
+		levels_changed.emit(result, _speed_level.level)
 	else:
 		print("Too few players")

@@ -17,13 +17,14 @@ func _ready() -> void:
 		Player.AI_Level.Level_4,
 		Player.AI_Level.Level_4
 		]
-	_level_selector.set_levels(levels)
-	_on_level_selector_ai_levels_changed(levels)
+	_level_selector.set_levels(levels, 2)
+	_level_selector._on_back_button_pressed()
 
 
-func _on_level_selector_ai_levels_changed(levels: Array[Player.AI_Level]) -> void:
+func _on_level_selector_levels_changed(levels: Array[Player.AI_Level], speed: int) -> void:
 	for i in range(len(_main._players)):
 		_main._players[i].ai_level = levels[i]
+	Animator._speed = speed
 	_start.show()
 
 

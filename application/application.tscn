@@ -24,6 +24,6 @@ visible = false
 [connection signal="play_pressed" from="Start" to="." method="_on_start_play_pressed"]
 [connection signal="settings_pressed" from="Start" to="." method="_on_start_settings_pressed"]
 [connection signal="menu_pressed" from="Main" to="." method="_on_main_menu_pressed"]
-[connection signal="ai_levels_changed" from="LevelSelector" to="." method="_on_level_selector_ai_levels_changed"]
+[connection signal="levels_changed" from="LevelSelector" to="." method="_on_level_selector_levels_changed"]
 [connection signal="exit_pressed" from="Pause" to="." method="_on_pause_exit_pressed"]
 [connection signal="resume_pressed" from="Pause" to="." method="_on_pause_resume_pressed"]
