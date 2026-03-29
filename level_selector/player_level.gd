@@ -1,0 +1,41 @@
+class_name PlayerLevel
+extends Node2D
+
+@export var player_num: int = 0
+@onready var _number: Sprite2D = $Number
+@onready var _level: Sprite2D = $Level
+@onready var _left_button: DigitButton = $LeftButton
+@onready var _right_button: DigitButton = $RightButton
+
+var ai_level: Player.AI_Level:
+	get:
+		return ai_level
+	set(value):
+		ai_level = value
+		_level.visible = value != Player.AI_Level.Disabled
+		if _level.visible:
+			if value == Player.AI_Level.Human:
+				_level.frame = DigitButton.FrameType.Frame_Human
+			else:
+				_level.frame = value
+		_left_button.visible = value > Player.AI_Level.Disabled
+		_right_button.visible = value < Player.AI_Level.Level_4
+
+
+func _ready():
+	_number.frame = player_num
+	ai_level = Player.AI_Level.Level_1
+
+
+func _on_left_button_pressed() -> void:
+	if ai_level > (Player.AI_Level.Human if player_num == 0 else Player.AI_Level.Level_1):
+		ai_level -= 1
+	else:
+		ai_level = Player.AI_Level.Disabled
+
+
+func _on_right_button_pressed() -> void:
+	if ai_level == Player.AI_Level.Disabled:
+		ai_level = (Player.AI_Level.Human if player_num == 0 else Player.AI_Level.Level_1)
+	elif ai_level < Player.AI_Level.Level_4:
+		ai_level += 1

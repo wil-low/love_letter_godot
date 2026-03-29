@@ -1,0 +1,33 @@
+[gd_scene format=3 uid="uid://cx1ujd67o4r8d"]
+
+[ext_resource type="Script" uid="uid://o3hfok486hgx" path="res://level_selector/player_level.gd" id="1_u1k2r"]
+[ext_resource type="Texture2D" uid="uid://dkckendxo3yyu" path="res://level_selector/player.png" id="2_ko7kp"]
+[ext_resource type="PackedScene" uid="uid://duu00tu6jeqix" path="res://digit_sprite/digit_sprite.tscn" id="3_31d3w"]
+[ext_resource type="PackedScene" uid="uid://bupgluwgnp7vr" path="res://level_selector/digit_button.tscn" id="5_u1k2r"]
+
+[node name="PlayerLevel" type="Node2D" unique_id=19770039]
+script = ExtResource("1_u1k2r")
+
+[node name="Player" type="Sprite2D" parent="." unique_id=1557179038]
+position = Vector2(0, 2)
+texture = ExtResource("2_ko7kp")
+offset = Vector2(16, 2.5)
+
+[node name="Number" parent="." unique_id=1239470012 instance=ExtResource("3_31d3w")]
+position = Vector2(27, 2)
+
+[node name="LeftButton" parent="." unique_id=1431926987 instance=ExtResource("5_u1k2r")]
+offset_left = 36.0
+offset_right = 45.0
+frame = 12
+
+[node name="Level" parent="." unique_id=658294299 instance=ExtResource("3_31d3w")]
+position = Vector2(49, 2)
+
+[node name="RightButton" parent="." unique_id=1448007981 instance=ExtResource("5_u1k2r")]
+offset_left = 56.0
+offset_right = 65.0
+frame = 13
+
+[connection signal="pressed" from="LeftButton" to="." method="_on_left_button_pressed"]
+[connection signal="pressed" from="RightButton" to="." method="_on_right_button_pressed"]

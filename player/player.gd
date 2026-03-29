@@ -6,6 +6,7 @@ signal target_player_selected(idx: int)
 signal move_chosen(move: Move)
 
 enum AI_Level {
+	Disabled = -1,
 	Human = 0,
 	Level_1,
 	Level_2,

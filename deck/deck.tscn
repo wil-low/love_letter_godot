@@ -2,7 +2,8 @@
 
 [ext_resource type="Texture2D" uid="uid://0wtrstfdbwii" path="res://card/cards.png" id="1_iau1w"]
 [ext_resource type="Script" uid="uid://de38ptl6brmuh" path="res://deck/deck.gd" id="2_rqbxk"]
-[ext_resource type="Texture2D" uid="uid://qm0w2n8lmir3" path="res://player/0-4.png" id="3_pihgb"]
+[ext_resource type="Texture2D" uid="uid://mcerqvsiicl4" path="res://digit_sprite/digits.png" id="3_8n6od"]
+[ext_resource type="Script" uid="uid://ckrpkic78nsr3" path="res://digit_sprite/digit_sprite.gd" id="4_878yv"]
 
 [node name="Deck" type="Node2D" unique_id=89891141]
 script = ExtResource("2_rqbxk")
@@ -20,9 +21,11 @@ offset = Vector2(5.5, 8.5)
 hframes = 9
 frame = 8
 
-[node name="CardCounter" type="Sprite2D" parent="." unique_id=1345957177]
+[node name="CardCounter" type="Sprite2D" parent="." unique_id=1641546521]
 visible = false
 position = Vector2(12, 6)
-texture = ExtResource("3_pihgb")
+texture = ExtResource("3_8n6od")
 offset = Vector2(1.5, 2.5)
 hframes = 5
+script = ExtResource("4_878yv")
+metadata/_custom_type_script = "uid://ckrpkic78nsr3"
