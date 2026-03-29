@@ -102,7 +102,7 @@ func _new_round() -> void:
 	discard(_table)
 	for p in _players:
 		await discard(p.hand)
-	_deck.prepare()
+	_deck.prepare(len(_players))
 	for p in _players:
 		await deal_card(p)
 	new_turn()
@@ -118,18 +118,21 @@ func animate_card_move(c: Card, new_parent: Node2D, is_faceup: bool, from: Vecto
 	return c
 
 
-func deal_card(p: Player) -> void:
+func deal_card(p: Player, allow_widow: bool = false) -> void:
 	_deal_audio_player.play()
-	var card_type = _deck.pop()
+	var result := _deck.pop(allow_widow)
+	var card_type = result["type"]
+	var src = result["src"]
 	var is_faceup = p.is_human()
 	var c = card_scene.instantiate()
 	add_child(c)
 	c.type = card_type
-	c.global_position = _deck.global_position
+	c.global_position = src.global_position
+	_deck.update_piles()
 	remove_child(c)
 	await animate_card_move(
 		c, self, is_faceup,
-		_deck.global_position,
+		src.global_position,
 		p.drawn_card_position())
 	remove_child(c)
 	p.add_card(c)
@@ -149,7 +152,7 @@ func new_turn():
 			_other_protected = false
 	_target_player = -1
 	_target_type = Deck.CardType.Unknown
-	if len(_deck._cards) > 1:
+	if _deck._main.visible:
 		await deal_card(p)
 		#_players[_cur_player].hand.get_child(0).type = Deck.CardType.Baron
 		#_players[_cur_player].hand.get_child(1).type = Deck.CardType.King
@@ -281,7 +284,7 @@ func resolve_effect() -> void:
 			Deck.CardType.Prince:
 				var type = tp.hand.get_child(0).type
 				await discard(tp.hand)
-				await deal_card(tp)
+				await deal_card(tp, true)
 				for pl in _players:
 					if pl.idx != _cur_player:
 						pl.update_memory(_cur_player)  # hand is unknown now
