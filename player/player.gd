@@ -41,6 +41,7 @@ var ai_level: AI_Level = AI_Level.Level_1:
 		if ai_level > AI_Level.Human:
 			_badge.frame = ai_level - 1
 		_badge.visible = ai_level > AI_Level.Human
+		_score_digit.visible = ai_level > AI_Level.Disabled
 
 var active: bool = true:
 	get:
@@ -96,6 +97,10 @@ func is_human() -> bool:
 	return ai_level == AI_Level.Human
 
 
+func is_active() -> bool:
+	return ai_level > AI_Level.Disabled and active
+
+
 func clear_hand() -> void:
 	for ch in hand.get_children():
 		hand.remove_child(ch)
@@ -104,7 +109,7 @@ func clear_hand() -> void:
 
 func print_memory() -> void:
 	var s := "Player " + str(idx) + " memory:  "
-	if active:
+	if is_active():
 		for i in range(len(_memory)):
 			if idx == i:
 				s+= "   " + str(i) + ":         "

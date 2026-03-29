@@ -6,12 +6,13 @@ signal menu_pressed
 @export var card_scene: PackedScene
 @export var random_seed: int = 42
 
-const max_score: int = 4
 const max_games: int = 1000
 
 var game_counter: int = 0
 var interrupted: bool
 
+var _player_count: int
+var _max_score: int
 var _players: Array[Player]
 var _cur_player: int:
 	get:
@@ -66,16 +67,17 @@ func init_players() -> void:
 	_select_any_player.hide()
 	for p in _players:
 		assert(p.idx == 0 or !p.is_human(), "Human is allowed for Player 0 only")
-		if p.is_human():
-			if p.move_chosen.is_connected(_on_move_chosen):
-				p.move_chosen.disconnect(_on_move_chosen)
-			if !p.card_played.is_connected(_on_card_played):
-				p.card_played.connect(_on_card_played)
-		else:
-			if !p.move_chosen.is_connected(_on_move_chosen):
-				p.move_chosen.connect(_on_move_chosen)
-		if !p.target_player_selected.is_connected(_on_target_player_selected):
-			p.target_player_selected.connect(_on_target_player_selected)
+		if p.is_active():
+			if p.is_human():
+				if p.move_chosen.is_connected(_on_move_chosen):
+					p.move_chosen.disconnect(_on_move_chosen)
+				if !p.card_played.is_connected(_on_card_played):
+					p.card_played.connect(_on_card_played)
+			else:
+				if !p.move_chosen.is_connected(_on_move_chosen):
+					p.move_chosen.connect(_on_move_chosen)
+			if !p.target_player_selected.is_connected(_on_target_player_selected):
+				p.target_player_selected.connect(_on_target_player_selected)
 		p.clear_hand()
 	for ch in _table.get_children():
 		if ch is Card:
@@ -102,8 +104,17 @@ func _new_game() -> void:
 		push_warning("Max games count reached, stop")
 	else:
 		print("\n\nNew game " + str(game_counter))
+		_player_count = 0
 		for p in _players:
 			p.score = 0
+			if p.is_active():
+				_player_count += 1
+		if _player_count == 2:
+			_max_score = 6
+		elif _player_count == 3:
+			_max_score = 5
+		elif _player_count == 4:
+			_max_score = 4
 		_cur_player = 0
 		_new_round()
 	
@@ -119,9 +130,10 @@ func _new_round() -> void:
 	discard(_table)
 	for p in _players:
 		await discard(p.hand)
-	_deck.prepare(len(_players))
+	_deck.prepare(_player_count)
 	for p in _players:
-		await deal_card(p)
+		if p.is_active():
+			await deal_card(p)
 	new_turn()
 
 
@@ -154,7 +166,7 @@ func new_turn():
 	p.protected = false
 	_other_protected = true
 	for pl in _players:
-		if pl.active and !pl.protected and pl.idx != _cur_player:
+		if pl.is_active() and !pl.protected and pl.idx != _cur_player:
 			_other_protected = false
 	_target_player = -1
 	_target_type = Deck.CardType.Unknown
@@ -210,7 +222,7 @@ func _on_card_played(card: Card) -> void:
 func _on_target_player_selected(idx: int) -> void:
 	if interrupted:
 		return
-	if _players[idx].active:
+	if _players[idx].is_active():
 		var p = _players[_cur_player]
 		match p._state:
 			Player.State.INPUT_OTHER_P:
@@ -352,7 +364,7 @@ func resolve_effect() -> void:
 	await discard(_table)
 	var active_count := 0
 	for pl in _players:
-		if pl.active:
+		if pl.is_active():
 			assert(pl.hand.get_child_count() == 1, "Player " + str(pl.idx) +
 				" has " + str(pl.hand.get_child_count()) + " cards")
 			active_count += 1
@@ -360,7 +372,7 @@ func resolve_effect() -> void:
 		round_over()
 	else:
 		_cur_player = (_cur_player + 1) % len(_players)
-		while !_players[_cur_player].active:
+		while !_players[_cur_player].is_active():
 			_cur_player = (_cur_player + 1) % len(_players)
 		new_turn()
 
@@ -383,21 +395,21 @@ func round_over() -> void:
 	print("Round over! Update scores")
 	var max_type := 0
 	for p in _players:
-		if p.active:
+		if p.is_active():
 			Animator.reveal_hand(p, false)
 			max_type = max(max_type, p.hand.get_child(0).type)
 	var round_winners: Array[int]
 	var round_winners_str := ""
 	var game_winners := ""
 	for p in _players:
-		if p.active and p.hand.get_child(0).type == max_type:
+		if p.is_active() and p.hand.get_child(0).type == max_type:
 			p.score += 1
 			p.total_score += 1
 			if !round_winners_str.is_empty():
 				round_winners_str += ", "
 			round_winners_str += str(p.idx)
 			round_winners.append(p.idx)
-			if p.score >= max_score:
+			if p.score >= _max_score:
 				if !game_winners.is_empty():
 					game_winners += ", "
 				game_winners += str(p.idx)
@@ -445,13 +457,13 @@ func find_valid_moves() -> Array[Move]:
 			match type:
 				Deck.CardType.Guard:
 					for p in _players:
-						if p.idx != cp.idx and p.active and (!p.protected or _other_protected):
+						if p.idx != cp.idx and p.is_active() and (!p.protected or _other_protected):
 							for t in range(Deck.CardType.Priest, Deck.CardType.Unknown):
 								move = Move.new(cards[i], i, p.idx, t)
 								result.append(move)
 				Deck.CardType.Priest, Deck.CardType.Baron, Deck.CardType.King:
 					for p in _players:
-						if p.idx != cp.idx and p.active and (!p.protected or _other_protected):
+						if p.idx != cp.idx and p.is_active() and (!p.protected or _other_protected):
 							move = Move.new(cards[i], i, p.idx)
 							result.append(move)
 				Deck.CardType.Handmaid, Deck.CardType.Countess, Deck.CardType.Princess:
@@ -459,7 +471,7 @@ func find_valid_moves() -> Array[Move]:
 					result.append(move)
 				Deck.CardType.Prince:
 					for p in _players:
-						if p.active and !p.protected:
+						if p.is_active() and !p.protected:
 							move = Move.new(cards[i], i, p.idx)
 							result.append(move)
 	return result
