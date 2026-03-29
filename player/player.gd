@@ -219,7 +219,12 @@ func eval_moves(valid_moves: Array[Move], left_cards: Array[int]):
 					if mem == m._target_type:
 						m._score = EvalScore.GOOD * m._target_type
 				else:
-					m._score = EvalScore.BAD * left_cards[m._target_type]
+					var left := left_cards[m._target_type]
+					if hand.get_child(0).type == m._target_type:
+						left -= 1
+					if hand.get_child(1).type == m._target_type:
+						left -= 1
+					m._score = EvalScore.BAD * left
 			Deck.CardType.Priest:
 				if mem == Deck.CardType.Unknown:
 					m._score = EvalScore.MODERATE

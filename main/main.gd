@@ -150,7 +150,6 @@ func deal_card(p: Player, allow_widow: bool = false) -> void:
 	c.global_position = src.global_position
 	_deck.update_piles()
 	var dst := p.drawn_card_position()
-	print("deal_card from " + str(src.global_position) + " to " + str(dst))
 	await Animator.move_card(c, dst)
 	p.add_card(c)
 	c.position = p.hand.to_local(dst)
