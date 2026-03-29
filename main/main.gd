@@ -46,6 +46,9 @@ var _target_type: int
 
 # Called when the node enters the scene tree for the first time.
 func _ready() -> void:
+	var platform := OS.get_name()
+	if platform == "Android" or platform == "iOS":
+		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_MAXIMIZED)
 	if Animator._speed == 0: # speedrun
 		RenderingServer.render_loop_enabled = false
 		Engine.print_to_stdout = false
