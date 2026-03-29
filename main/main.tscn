@@ -14,44 +14,43 @@
 [ext_resource type="AudioStream" uid="uid://csabdybwq3xhg" path="res://audio/jingles-retro_14.ogg" id="12_73k8k"]
 [ext_resource type="AudioStream" uid="uid://qk6h0jhduswp" path="res://audio/jingles-retro_03.ogg" id="13_73k8k"]
 [ext_resource type="AudioStream" uid="uid://2vcog88ais1h" path="res://audio/jingles-retro_16.ogg" id="14_5xyti"]
+[ext_resource type="Texture2D" uid="uid://baf5mpfexuvjq" path="res://main/menu.png" id="15_5xyti"]
 
 [node name="Main" type="Node2D" unique_id=287543303]
 script = ExtResource("1_xwkvk")
 card_scene = ExtResource("4_c651c")
 random_seed = 0
+metadata/_edit_horizontal_guides_ = [24.0, 48.0]
+metadata/_edit_vertical_guides_ = [84.0]
 
 [node name="Player0" parent="." unique_id=1231112012 instance=ExtResource("1_53q0u")]
 position = Vector2(5, 31)
-ai_level = 0
 
 [node name="Player1" parent="." unique_id=1290894075 instance=ExtResource("1_53q0u")]
 position = Vector2(5, 0)
 idx = 1
-ai_level = 4
 
 [node name="Player2" parent="." unique_id=1362357433 instance=ExtResource("1_53q0u")]
 position = Vector2(68, 0)
 idx = 2
 right_score = true
-ai_level = 4
 
 [node name="Player3" parent="." unique_id=369263454 instance=ExtResource("1_53q0u")]
 position = Vector2(68, 31)
 idx = 3
 right_score = true
-ai_level = 4
 
 [node name="DiscardMarker" type="Marker2D" parent="." unique_id=1639788791]
-position = Vector2(37, -31)
+position = Vector2(50, -31)
 
 [node name="Table" type="Node2D" parent="." unique_id=1363849722]
 position = Vector2(21, 5)
 
 [node name="Deck" parent="Table" unique_id=535832791 instance=ExtResource("2_pjrb6")]
-position = Vector2(0, -3)
+position = Vector2(0, -2)
 
 [node name="Marker0" type="Marker2D" parent="Table" unique_id=1314393868]
-position = Vector2(16, 8)
+position = Vector2(16, 10)
 
 [node name="PlayerSelection" type="Sprite2D" parent="." unique_id=1335904967]
 visible = false
@@ -113,6 +112,16 @@ volume_db = -10.0
 stream = ExtResource("14_5xyti")
 volume_db = -10.0
 
+[node name="MenuButton" type="TextureButton" parent="." unique_id=1431577744]
+offset_left = 78.0
+offset_top = 21.0
+offset_right = 83.0
+offset_bottom = 26.0
+texture_normal = ExtResource("15_5xyti")
+
+[node name="AnimationLayer" type="Node2D" parent="." unique_id=150676236]
+
 [connection signal="type_clicked" from="TypeSelector" to="." method="_on_target_type_selected"]
 [connection signal="pressed" from="RoundOver" to="." method="_on_round_over_pressed"]
 [connection signal="pressed" from="GameOver" to="." method="_on_game_over_pressed"]
+[connection signal="pressed" from="MenuButton" to="." method="_on_menu_button_pressed"]

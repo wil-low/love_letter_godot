@@ -26,12 +26,21 @@ var _state: State = State.IDLE
 
 @export var idx: int = 0
 @export var right_score: bool = false
-@export var ai_level: AI_Level = AI_Level.Level_1
-@onready var hand: Node = $Hand
+@onready var hand: Node2D = $Hand
 @onready var _shield: Sprite2D = $Shield
 @onready var _inactive: Sprite2D = $Inactive
 @onready var _score_digit: Sprite2D = $Score
+@onready var _badge: Sprite2D = $Badge
 @onready var current_mark: ColorRect = $Current
+
+var ai_level: AI_Level = AI_Level.Level_1:
+	get:
+		return ai_level
+	set(value):
+		ai_level = value
+		if ai_level > AI_Level.Human:
+			_badge.frame = ai_level - 1
+		_badge.visible = ai_level > AI_Level.Human
 
 var active: bool = true:
 	get:
@@ -68,6 +77,7 @@ func _ready() -> void:
 	if right_score:
 		_score_digit.position.x = 12
 		current_mark.position.x = 12
+		_badge.position.x = 12
 
 
 func drawn_card_position() -> Vector2:
@@ -77,7 +87,7 @@ func drawn_card_position() -> Vector2:
 
 
 func add_card(card: Card) -> void:
-	hand.add_child(card)
+	card.reparent(hand)
 	if is_human():
 		card.input_event.connect(_on_card_input_event.bind(card))
 
@@ -125,9 +135,9 @@ func _on_card_input_event(_viewport: Node, event: InputEvent, _shape_idx: int, c
 				var countess_idx = countess_restricted()
 				var card_idx = card.get_index()
 				if countess_idx == -1 or countess_idx == card_idx:
-					hand.remove_child(card)
+					#hand.remove_child(card)
 					if card_idx == 0:
-						Animator.move_card(hand.get_child(0), global_position)
+						Animator.move_card(hand.get_child(1), global_position)
 					card_played.emit(card)
 
 
@@ -139,7 +149,7 @@ func _on_player_input_event(_viewport: Node, event: InputEvent, _shape_idx: int)
 func ai_move(valid_moves: Array[Move], left_cards: Array[int]) -> void:
 	print("\nPlayer " + str(idx) + " - ai_move: " + str(len(valid_moves)))
 	var my_move = select_move(valid_moves, left_cards)
-	hand.remove_child(my_move._played_card)
+	#hand.remove_child(my_move._played_card)
 	move_chosen.emit(my_move)
 
 
@@ -180,6 +190,8 @@ func select_move(valid_moves: Array[Move], left_cards: Array[int]) -> Move:
 				if sum > rmove:
 					return m
 			return valid_moves[-1]
+		_:
+			assert(false)
 	return null
 
 enum EvalScore {

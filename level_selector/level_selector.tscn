@@ -5,7 +5,7 @@
 [ext_resource type="PackedScene" uid="uid://bupgluwgnp7vr" path="res://level_selector/digit_button.tscn" id="2_28gom"]
 [ext_resource type="PackedScene" uid="uid://cx1ujd67o4r8d" path="res://level_selector/player_level.tscn" id="3_8rcln"]
 
-[node name="LevelSelector" type="Node2D" unique_id=133821628]
+[node name="LevelSelector" type="Node2D" unique_id=1410680190]
 script = ExtResource("1_8rcln")
 
 [node name="BackButton" parent="." unique_id=1431926987 instance=ExtResource("2_28gom")]
@@ -16,18 +16,20 @@ position = Vector2(26, 2)
 texture = ExtResource("1_hfeca")
 offset = Vector2(17.5, 2.5)
 
-[node name="P_0" parent="." unique_id=19770039 instance=ExtResource("3_8rcln")]
+[node name="Levels" type="Node2D" parent="." unique_id=1888645015]
+
+[node name="P_0" parent="Levels" unique_id=19770039 instance=ExtResource("3_8rcln")]
 position = Vector2(11, 9)
 
-[node name="P_1" parent="." unique_id=2121058361 instance=ExtResource("3_8rcln")]
+[node name="P_1" parent="Levels" unique_id=2121058361 instance=ExtResource("3_8rcln")]
 position = Vector2(11, 19)
 player_num = 1
 
-[node name="P_2" parent="." unique_id=980193693 instance=ExtResource("3_8rcln")]
+[node name="P_2" parent="Levels" unique_id=980193693 instance=ExtResource("3_8rcln")]
 position = Vector2(11, 29)
 player_num = 2
 
-[node name="P_3" parent="." unique_id=493422549 instance=ExtResource("3_8rcln")]
+[node name="P_3" parent="Levels" unique_id=493422549 instance=ExtResource("3_8rcln")]
 position = Vector2(11, 39)
 player_num = 3
 

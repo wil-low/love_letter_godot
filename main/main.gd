@@ -1,6 +1,8 @@
 class_name Main
 extends Node2D
 
+signal menu_pressed
+
 @export var card_scene: PackedScene
 @export var random_seed: int = 42
 
@@ -8,6 +10,7 @@ const max_score: int = 4
 const max_games: int = 1000
 
 var game_counter: int = 0
+var interrupted: bool
 
 var _players: Array[Player]
 var _cur_player: int:
@@ -22,6 +25,7 @@ var _cur_player: int:
 @onready var _marker_0: Marker2D = $Table/Marker0
 @onready var _player_selection: Sprite2D = $PlayerSelection
 @onready var _table: Node2D = $Table
+@onready var _animation_layer: Node2D = $AnimationLayer
 @onready var _type_selector: Node2D = $TypeSelector
 @onready var _discard_marker: Marker2D = $DiscardMarker
 @onready var _round_over_button: TextureButton = $RoundOver
@@ -48,23 +52,35 @@ var _target_player: int:
 		
 var _target_type: int
 
-# Called when the node enters the scene tree for the first time.
+
 func _ready() -> void:
-	var platform := OS.get_name()
-	if platform == "Android" or platform == "iOS":
-		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_MAXIMIZED)
 	if Animator._speed == 0: # speedrun
 		RenderingServer.render_loop_enabled = false
 		Engine.print_to_stdout = false
-	seed(random_seed if random_seed != 0 else Time.get_ticks_usec())
 	_players = [$Player0, $Player1, $Player2, $Player3]
+
+
+func init_players() -> void:
+	seed(random_seed if random_seed != 0 else Time.get_ticks_usec())
+	_select_other_player.hide()
+	_select_any_player.hide()
 	for p in _players:
 		assert(p.idx == 0 or !p.is_human(), "Human is allowed for Player 0 only")
 		if p.is_human():
-			p.card_played.connect(_on_card_played)
+			if p.move_chosen.is_connected(_on_move_chosen):
+				p.move_chosen.disconnect(_on_move_chosen)
+			if !p.card_played.is_connected(_on_card_played):
+				p.card_played.connect(_on_card_played)
 		else:
-			p.move_chosen.connect(_on_move_chosen)
-		p.target_player_selected.connect(_on_target_player_selected)
+			if !p.move_chosen.is_connected(_on_move_chosen):
+				p.move_chosen.connect(_on_move_chosen)
+		if !p.target_player_selected.is_connected(_on_target_player_selected):
+			p.target_player_selected.connect(_on_target_player_selected)
+		p.clear_hand()
+	for ch in _table.get_children():
+		if ch is Card:
+			_table.remove_child(ch)
+			ch.queue_free()
 	_new_game()
 
 
@@ -80,6 +96,7 @@ func _input(event):
 
 
 func _new_game() -> void:
+	interrupted = false
 	game_counter += 1
 	if game_counter > max_games:
 		push_warning("Max games count reached, stop")
@@ -108,16 +125,6 @@ func _new_round() -> void:
 	new_turn()
 
 
-func animate_card_move(c: Card, new_parent: Node2D, is_faceup: bool, from: Vector2, to: Vector2) -> Card:
-	new_parent.add_child(c)
-	c.faceup = is_faceup
-	c.global_position = from
-	c.z_index = RenderingServer.CANVAS_ITEM_Z_MAX
-	await Animator.move_card(c, to)
-	c.z_index = 0
-	return c
-
-
 func deal_card(p: Player, allow_widow: bool = false) -> void:
 	_deal_audio_player.play()
 	var result := _deck.pop(allow_widow)
@@ -125,21 +132,20 @@ func deal_card(p: Player, allow_widow: bool = false) -> void:
 	var src = result["src"]
 	var is_faceup = p.is_human()
 	var c = card_scene.instantiate()
-	add_child(c)
+	_animation_layer.add_child(c)
 	c.type = card_type
+	c.faceup = is_faceup
 	c.global_position = src.global_position
 	_deck.update_piles()
-	remove_child(c)
-	await animate_card_move(
-		c, self, is_faceup,
-		src.global_position,
-		p.drawn_card_position())
-	remove_child(c)
+	var dst := p.drawn_card_position()
+	print("deal_card from " + str(src.global_position) + " to " + str(dst))
+	await Animator.move_card(c, dst)
 	p.add_card(c)
+	c.position = p.hand.to_local(dst)
 
 
 func new_turn():
-	print("\nnew_turn for Player " + str(_cur_player))
+	print("\nnew_turn for Player " + str(_cur_player) + ", level " + str(_players[_cur_player].ai_level))
 	for p in _players:
 		p.print_memory()
 	for i in range(len(_deck._left)):
@@ -171,7 +177,16 @@ func new_turn():
 
 
 func _on_card_played(card: Card) -> void:
-	await animate_card_move(card, _table, true, card.global_position, _marker_0.global_position)
+	if interrupted:
+		return
+	card.faceup = true
+	var g = card.global_position
+	assert(card.get_parent())
+	card.reparent(_animation_layer)
+	card.global_position = g
+	await Animator.move_card(card, _marker_0.global_position)
+	card.reparent(_table)
+	card.position = _table.to_local(card.global_position)
 	_played_card = card.type
 	for p in _players:
 		if p.idx != _cur_player and p._memory[_cur_player] == _played_card:
@@ -193,6 +208,8 @@ func _on_card_played(card: Card) -> void:
 
 
 func _on_target_player_selected(idx: int) -> void:
+	if interrupted:
+		return
 	if _players[idx].active:
 		var p = _players[_cur_player]
 		match p._state:
@@ -216,6 +233,8 @@ func _on_target_player_selected(idx: int) -> void:
 
 
 func _on_target_type_selected(type: Deck.CardType) -> void:
+	if interrupted:
+		return
 	_type_selector.set_selection(type)
 	await Animator.delay(1)
 	_table.show()
@@ -225,6 +244,8 @@ func _on_target_type_selected(type: Deck.CardType) -> void:
 
 
 func _on_move_chosen(move: Move) -> void:
+	if interrupted:
+		return
 	await Animator.delay(1)
 	print("My " + str(move))
 	_on_card_played(move._played_card)
@@ -243,6 +264,8 @@ func set_inactive(p: Player):
 
 
 func resolve_effect() -> void:
+	if interrupted:
+		return
 	var p = _players[_cur_player]
 	var tp = _players[_target_player]
 	p._state = Player.State.IDLE
@@ -296,16 +319,20 @@ func resolve_effect() -> void:
 				var their_card: Card = tp.hand.get_child(0)
 				my_card.faceup = tp.is_human()
 				their_card.faceup = p.is_human()
-				var my_hand = p.hand
-				var their_hand = tp.hand
+				var g := my_card.global_position
+				my_card.reparent(_animation_layer)
+				my_card.global_position = g
+				g = their_card.global_position
+				their_card.reparent(_animation_layer)
+				their_card.global_position = g
 				await Animator.all([
 					Animator.move_card(my_card, tp.global_position),
 					Animator.move_card(their_card, p.global_position)
 				])
-				my_hand.remove_child(my_card)
-				their_hand.remove_child(their_card)
 				p.add_card(their_card)
+				their_card.position = p.hand.to_local(their_card.global_position)
 				tp.add_card(my_card)
+				my_card.position = tp.hand.to_local(my_card.global_position)
 				p.update_memory(tp.idx, my_card.type)
 				tp.update_memory(p.idx, their_card.type)
 				for pl in _players:
@@ -320,6 +347,8 @@ func resolve_effect() -> void:
 	else:
 		print("Player " + str(tp.idx) + " protected, no effect")
 
+	if interrupted:
+		return
 	await discard(_table)
 	var active_count := 0
 	for pl in _players:
@@ -336,7 +365,7 @@ func resolve_effect() -> void:
 		new_turn()
 
 
-func discard(from: Node) -> void:
+func discard(from: Node2D) -> void:
 	var for_discard: Array[Card]
 	for ch in from.get_children():
 		if ch is Card:
@@ -434,3 +463,7 @@ func find_valid_moves() -> Array[Move]:
 							move = Move.new(cards[i], i, p.idx)
 							result.append(move)
 	return result
+
+
+func _on_menu_button_pressed() -> void:
+	menu_pressed.emit()
