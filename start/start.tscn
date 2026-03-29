@@ -2,12 +2,18 @@
 
 [ext_resource type="Texture2D" uid="uid://30b4o6prq6qs" path="res://start/play.png" id="1_275hl"]
 [ext_resource type="Script" uid="uid://cegfg78d2iqjs" path="res://start/start.gd" id="1_pgi65"]
+[ext_resource type="Texture2D" uid="uid://booupp8gfhwro" path="res://start/ll.png" id="2_k11ym"]
 [ext_resource type="Texture2D" uid="uid://c3sr4npmtg2kb" path="res://start/settings.png" id="2_pgi65"]
 
 [node name="Start" type="Node2D" unique_id=1602353910]
 script = ExtResource("1_pgi65")
-metadata/_edit_vertical_guides_ = [84.0]
+metadata/_edit_vertical_guides_ = [84.0, 42.0]
 metadata/_edit_horizontal_guides_ = [48.0]
+
+[node name="Title" type="Sprite2D" parent="." unique_id=1833148592]
+position = Vector2(21, 3)
+texture = ExtResource("2_k11ym")
+offset = Vector2(21.5, 2.5)
 
 [node name="PlayButton" type="TextureButton" parent="." unique_id=1441879915]
 offset_left = 35.0
