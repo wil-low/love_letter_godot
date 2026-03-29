@@ -28,6 +28,10 @@ var _cur_player: int:
 @onready var _game_over_button: TextureButton = $GameOver
 @onready var _select_other_player: TextureButton = $SelectOtherPlayer
 @onready var _select_any_player: TextureButton = $SelectAnyPlayer
+@onready var _deal_audio_player: AudioStreamPlayer = $DealAudioPlayer
+@onready var _inactive_audio_player: AudioStreamPlayer = $InactiveAudioPlayer
+@onready var _round_over_audio_player: AudioStreamPlayer = $RoundOverAudioPlayer
+@onready var _game_over_audio_player: AudioStreamPlayer = $GameOverAudioPlayer
 
 var _other_protected: bool
 
@@ -115,6 +119,7 @@ func animate_card_move(c: Card, new_parent: Node2D, is_faceup: bool, from: Vecto
 
 
 func deal_card(p: Player) -> void:
+	_deal_audio_player.play()
 	var card_type = _deck.pop()
 	var is_faceup = p.is_human()
 	var c = card_scene.instantiate()
@@ -228,6 +233,12 @@ func _on_move_chosen(move: Move) -> void:
 		_on_target_type_selected(move._target_type)
 
 
+func set_inactive(p: Player):
+	p.active = false
+	_inactive_audio_player.play()
+	discard(p.hand)
+
+
 func resolve_effect() -> void:
 	var p = _players[_cur_player]
 	var tp = _players[_target_player]
@@ -245,8 +256,7 @@ func resolve_effect() -> void:
 			Deck.CardType.Guard:
 				if tp.hand.get_child(0).type == _target_type:
 					await Animator.reveal_hand(tp)
-					tp.active = false
-					discard(tp.hand)
+					set_inactive(tp)
 			Deck.CardType.Priest:
 				if p.is_human():
 					await Animator.reveal_hand(tp)
@@ -258,11 +268,9 @@ func resolve_effect() -> void:
 				var my_type = p.hand.get_child(0).type
 				var their_type = tp.hand.get_child(0).type
 				if my_type > their_type:
-					tp.active = false
-					discard(tp.hand)
+					set_inactive(tp)
 				elif my_type < their_type:
-					p.active = false
-					discard(p.hand)
+					set_inactive(p)
 				else:
 					p.update_memory(tp.idx, their_type)
 					tp.update_memory(p.idx, my_type)
@@ -278,8 +286,7 @@ func resolve_effect() -> void:
 					if pl.idx != _cur_player:
 						pl.update_memory(_cur_player)  # hand is unknown now
 				if type == Deck.CardType.Princess:
-					tp.active = false
-					discard(tp.hand)
+					set_inactive(tp)
 				print("Prince: discard and redraw")
 			Deck.CardType.King:
 				var my_card: Card = p.hand.get_child(0)
@@ -305,8 +312,7 @@ func resolve_effect() -> void:
 						pl.update_memory(tp.idx, pl._memory[p.idx])
 				print("King: trade hands")
 			Deck.CardType.Princess:
-				p.active = false
-				discard(p.hand)
+				set_inactive(p)
 				print("Princess: discarded")
 	else:
 		print("Player " + str(tp.idx) + " protected, no effect")
@@ -364,6 +370,7 @@ func round_over() -> void:
 					game_winners += ", "
 				game_winners += str(p.idx)
 	if !game_winners.is_empty():
+		_game_over_audio_player.play()
 		var s := "Game " + str(game_counter) + " over! Winners: " + game_winners + ". Total scores: "
 		for p in _players:
 			s += str(p.total_score) + ", "
@@ -373,6 +380,7 @@ func round_over() -> void:
 			await Animator.delay(8)
 			_on_game_over_pressed()
 	elif !round_winners_str.is_empty():
+		_round_over_audio_player.play()
 		print("Round over! Winners are " + round_winners_str)
 		_cur_player = round_winners[randi() % len(round_winners)]
 		_round_over_button.show()
