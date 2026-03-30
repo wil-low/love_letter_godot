@@ -18,7 +18,7 @@ var ai_level: Player.AI_Level:
 				_level.frame = DigitButton.FrameType.Frame_Human
 			else:
 				_level.frame = value
-		_left_button.visible = value > Player.AI_Level.Disabled
+		_left_button.visible = value > (Player.AI_Level.Human if player_num == 0 else Player.AI_Level.Disabled)
 		_right_button.visible = value < Player.AI_Level.Level_4
 
 
@@ -28,7 +28,11 @@ func _ready():
 
 
 func _on_left_button_pressed() -> void:
-	if ai_level > (Player.AI_Level.Human if player_num == 0 else Player.AI_Level.Level_1):
+	if player_num == 0:
+		if ai_level > Player.AI_Level.Human:
+			ai_level -= 1
+		return
+	if ai_level > Player.AI_Level.Level_1:
 		ai_level -= 1
 	else:
 		ai_level = Player.AI_Level.Disabled

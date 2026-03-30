@@ -11,6 +11,7 @@ func _ready() -> void:
 	var platform := OS.get_name()
 	if platform == "Android" or platform == "iOS":
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
+		Engine.print_to_stdout = false
 	var levels: Array[Player.AI_Level] = [
 		Player.AI_Level.Human,
 		Player.AI_Level.Level_4,

@@ -63,6 +63,10 @@ func _ready() -> void:
 
 func init_players() -> void:
 	seed(random_seed if random_seed != 0 else Time.get_ticks_usec())
+	_table.show()
+	_type_selector.hide()
+	_round_over_button.hide()
+	_game_over_button.hide()
 	_select_other_player.hide()
 	_select_any_player.hide()
 	for p in _players:
@@ -107,7 +111,7 @@ func _new_game() -> void:
 		_player_count = 0
 		for p in _players:
 			p.score = 0
-			if p.is_active():
+			if p.ai_level != Player.AI_Level.Disabled:
 				_player_count += 1
 		if _player_count == 2:
 			_max_score = 6
