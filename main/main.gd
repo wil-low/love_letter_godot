@@ -92,11 +92,14 @@ func init_players() -> void:
 
 func _input(event):
 	if event.is_action_pressed("debug_show_hands"):
+		var winners: Array[Node]
 		for p in _players:
 			var s = str(p.idx) + ":"
 			for ch in p.hand.get_children():
 				s += " " + Deck.CardType.keys()[ch.type]
 			print(s)
+			winners.append(p.hand)
+		Animator.flash(10, winners)
 	if event.is_action_pressed("debug_reset_game"):
 		_new_game()
 
@@ -129,6 +132,7 @@ func _new_round() -> void:
 	for p in _players:
 		p.protected = false
 		p.active = true
+		p.hand.modulate.a = 1.0
 		for i in range(len(p._memory)):
 			p.update_memory(i)
 	discard(_table)
@@ -403,7 +407,8 @@ func round_over() -> void:
 			max_type = max(max_type, p.hand.get_child(0).type)
 	var round_winners: Array[int]
 	var round_winners_str := ""
-	var game_winners := ""
+	var game_winners : Array[int]
+	var game_winners_str := ""
 	for p in _players:
 		if p.is_active() and p.hand.get_child(0).type == max_type:
 			p.score += 1
@@ -413,12 +418,14 @@ func round_over() -> void:
 			round_winners_str += str(p.idx)
 			round_winners.append(p.idx)
 			if p.score >= _max_score:
-				if !game_winners.is_empty():
-					game_winners += ", "
-				game_winners += str(p.idx)
+				if !game_winners_str.is_empty():
+					game_winners_str += ", "
+				game_winners_str += str(p.idx)
+				game_winners.append(p.idx)
 	if !game_winners.is_empty():
+		flash_winners(game_winners)
 		_game_over_audio_player.play()
-		var s := "Game " + str(game_counter) + " over! Winners: " + game_winners + ". Total scores: "
+		var s := "Game " + str(game_counter) + " over! Winners: " + game_winners_str + ". Total scores: "
 		for p in _players:
 			s += str(p.total_score) + ", "
 		push_warning(s)
@@ -426,7 +433,8 @@ func round_over() -> void:
 		if !_players[0].is_human():
 			await Animator.delay(8)
 			_on_game_over_pressed()
-	elif !round_winners_str.is_empty():
+	elif !round_winners.is_empty():
+		flash_winners(round_winners)
 		_round_over_audio_player.play()
 		print("Round over! Winners are " + round_winners_str)
 		_cur_player = round_winners[randi() % len(round_winners)]
@@ -436,14 +444,24 @@ func round_over() -> void:
 			_on_round_over_pressed()
 
 
+func flash_winners(indices: Array[int]) -> void:
+	var nodes: Array[Node]
+	for i in indices:
+		nodes.append(_players[i].hand)
+	await Animator.flash(500, nodes)
+
+
 func _on_round_over_pressed() -> void:
+	await Animator.flash(0, [])
 	_round_over_button.hide()
 	_new_round()
 
 
 func _on_game_over_pressed() -> void:
+	await Animator.flash(0, [])
 	_game_over_button.hide()
 	_new_game()
+
 
 func find_valid_moves() -> Array[Move]:
 	var result: Array[Move]

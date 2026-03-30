@@ -1,6 +1,7 @@
 extends Node
 
 var _speed: float = 2  # set to 0 for speedrun with disabled rendering and console output
+var _winner_tween: Tween
 
 class _WaitAll:
 	extends RefCounted
@@ -66,3 +67,17 @@ func move_card(card: Card, to_global: Vector2, duration: float = 0.5) -> Signal:
 	var tw = create_tween().set_trans(Tween.TRANS_QUAD)
 	tw.tween_property(card, "global_position", to_global, _d(duration))
 	return tw.finished
+
+
+func flash(loops: int, nodes: Array[Node]) -> Signal:
+	if _winner_tween != null and _winner_tween.is_running():
+		_winner_tween.kill()
+	if loops > 0 and !nodes.is_empty(): 
+		var alpha: float = 0.0
+		for i in range(loops * 2):
+			_winner_tween = create_tween().set_trans(Tween.TRANS_QUAD).set_parallel()
+			for n in nodes:
+				_winner_tween.tween_property(n, "modulate:a", alpha, _d(1))
+			alpha = 1 - alpha
+			await _winner_tween.finished
+	return _immediate()
