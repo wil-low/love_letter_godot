@@ -44,7 +44,7 @@ look at their hand (without revealing it to anyone else)."
 visible = false
 card_type = 2
 card_name = "Baron"
-card_description = "   Choose another player. You compare your hands. Lower-value card is out of the round. No one is out if tied."
+card_description = "   Choose another player and compare your hands. Owner of the lower-value card is out of the round."
 
 [node name="Handmaid" parent="Pages" unique_id=961613203 instance=ExtResource("1_kcg8g")]
 visible = false
