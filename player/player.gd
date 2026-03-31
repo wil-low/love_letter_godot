@@ -29,7 +29,7 @@ var _state: State = State.IDLE
 @onready var hand: Node2D = $Hand
 @onready var _shield: Sprite2D = $Shield
 @onready var _inactive: Sprite2D = $Inactive
-@onready var _score_digit: Sprite2D = $Score
+@onready var _score_digit: Label = $Score
 @onready var _badge: Sprite2D = $Badge
 @onready var current_mark: ColorRect = $Current
 
@@ -55,7 +55,7 @@ var score: int = 0:
 		return score
 	set(value):
 		score = value
-		_score_digit.frame = score
+		_score_digit.text = str(score)
 
 var total_score: int = 0
 

@@ -1,34 +1,86 @@
 [gd_scene format=3 uid="uid://cnutq3ty1kcof"]
 
-[ext_resource type="Texture2D" uid="uid://bbxdkt4ywroqd" path="res://pause/resume.png" id="1_mwgvy"]
 [ext_resource type="Script" uid="uid://h6phrf7dvr04" path="res://pause/pause.gd" id="1_qhaht"]
-[ext_resource type="Texture2D" uid="uid://dtaj0b6lg5wyy" path="res://pause/statistics.png" id="2_qhaht"]
-[ext_resource type="Texture2D" uid="uid://bnktaynwkm4ts" path="res://pause/exit.png" id="3_m0fkg"]
+[ext_resource type="LabelSettings" uid="uid://bqe2prdrlv84l" path="res://tres/label_settings.tres" id="5_m0fkg"]
 
 [node name="Pause" type="Node2D" unique_id=1945187376]
 script = ExtResource("1_qhaht")
 
-[node name="ResumeButton" type="TextureButton" parent="." unique_id=527331226]
-offset_left = 31.0
+[node name="ResumeLabel" type="Label" parent="." unique_id=527095475]
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = 27.0
 offset_top = 11.0
-offset_right = 54.0
-offset_bottom = 16.0
-texture_normal = ExtResource("1_mwgvy")
+offset_right = 59.0
+offset_bottom = 17.0
+grow_horizontal = 2
+grow_vertical = 2
+text = "RESUME"
+label_settings = ExtResource("5_m0fkg")
+horizontal_alignment = 1
 
-[node name="StatisticsButton" type="TextureButton" parent="." unique_id=1348391719]
-offset_left = 23.0
+[node name="ResumeButton" type="Button" parent="ResumeLabel" unique_id=1126956716]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+flat = true
+
+[node name="StatisticsLabel" type="Label" parent="." unique_id=785786658]
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = 19.0
 offset_top = 21.0
-offset_right = 62.0
-offset_bottom = 26.0
-texture_normal = ExtResource("2_qhaht")
+offset_right = 67.0
+offset_bottom = 27.0
+grow_horizontal = 2
+grow_vertical = 2
+text = "STATISTICS"
+label_settings = ExtResource("5_m0fkg")
+horizontal_alignment = 1
 
-[node name="ExitButton" type="TextureButton" parent="." unique_id=1169887106]
-offset_left = 35.0
+[node name="StatisticsButton" type="Button" parent="StatisticsLabel" unique_id=1664387942]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+flat = true
+
+[node name="ExitLabel" type="Label" parent="." unique_id=276000493]
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = 31.0
 offset_top = 31.0
-offset_right = 50.0
-offset_bottom = 36.0
-texture_normal = ExtResource("3_m0fkg")
+offset_right = 55.0
+offset_bottom = 37.0
+grow_horizontal = 2
+grow_vertical = 2
+text = "EXIT"
+label_settings = ExtResource("5_m0fkg")
+horizontal_alignment = 1
 
-[connection signal="pressed" from="ResumeButton" to="." method="_on_resume_button_pressed"]
-[connection signal="pressed" from="StatisticsButton" to="." method="_on_statistics_button_pressed"]
-[connection signal="pressed" from="ExitButton" to="." method="_on_exit_button_pressed"]
+[node name="ExitButton" type="Button" parent="ExitLabel" unique_id=169342193]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+flat = true
+
+[connection signal="pressed" from="ResumeLabel/ResumeButton" to="." method="_on_resume_button_pressed"]
+[connection signal="pressed" from="StatisticsLabel/StatisticsButton" to="." method="_on_statistics_button_pressed"]
+[connection signal="pressed" from="ExitLabel/ExitButton" to="." method="_on_exit_button_pressed"]

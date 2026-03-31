@@ -1,7 +1,7 @@
 class_name SpeedLevel
 extends Node2D
 
-@onready var _level: Sprite2D = $Level
+@onready var _level: Label = $Level
 @onready var _left_button: DigitButton = $LeftButton
 @onready var _right_button: DigitButton = $RightButton
 
@@ -13,7 +13,7 @@ var level: Player.AI_Level:
 		return level
 	set(value):
 		level = value
-		_level.frame = level
+		_level.text = str(level)
 		_left_button.visible = value > _min_speed
 		_right_button.visible = value < _max_speed
 

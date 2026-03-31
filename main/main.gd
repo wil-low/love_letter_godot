@@ -29,10 +29,10 @@ var _cur_player: int:
 @onready var _animation_layer: Node2D = $AnimationLayer
 @onready var _type_selector: Node2D = $TypeSelector
 @onready var _discard_marker: Marker2D = $DiscardMarker
-@onready var _round_over_button: TextureButton = $RoundOver
-@onready var _game_over_button: TextureButton = $GameOver
-@onready var _select_other_player: TextureButton = $SelectOtherPlayer
-@onready var _select_any_player: TextureButton = $SelectAnyPlayer
+@onready var _round_over_label: Label = $RoundOverLabel
+@onready var _game_over_label: Label = $GameOverLabel
+@onready var _select_other_player: Label = $SelectOtherPlayer
+@onready var _select_any_player: Label = $SelectAnyPlayer
 @onready var _deal_audio_player: AudioStreamPlayer = $DealAudioPlayer
 @onready var _inactive_audio_player: AudioStreamPlayer = $InactiveAudioPlayer
 @onready var _round_over_audio_player: AudioStreamPlayer = $RoundOverAudioPlayer
@@ -65,10 +65,11 @@ func init_players() -> void:
 	seed(random_seed if random_seed != 0 else Time.get_ticks_usec())
 	_table.show()
 	_type_selector.hide()
-	_round_over_button.hide()
-	_game_over_button.hide()
+	_round_over_label.hide()
+	_game_over_label.hide()
 	_select_other_player.hide()
 	_select_any_player.hide()
+	await Animator.flash(0, [])
 	for p in _players:
 		assert(p.idx == 0 or !p.is_human(), "Human is allowed for Player 0 only")
 		if p.is_active():
@@ -430,7 +431,7 @@ func round_over() -> void:
 		for p in _players:
 			s += str(p.total_score) + ", "
 		push_warning(s)
-		_game_over_button.show()
+		_game_over_label.show()
 		if !_players[0].is_human():
 			await Animator.delay(8)
 			_on_game_over_pressed()
@@ -439,7 +440,7 @@ func round_over() -> void:
 		_round_over_audio_player.play()
 		print("Round over! Winners are " + round_winners_str)
 		_cur_player = round_winners[randi() % len(round_winners)]
-		_round_over_button.show()
+		_round_over_label.show()
 		if !_players[0].is_human():
 			await Animator.delay(2)
 			_on_round_over_pressed()
@@ -454,13 +455,13 @@ func flash_winners(indices: Array[int]) -> void:
 
 func _on_round_over_pressed() -> void:
 	await Animator.flash(0, [])
-	_round_over_button.hide()
+	_round_over_label.hide()
 	_new_round()
 
 
 func _on_game_over_pressed() -> void:
 	await Animator.flash(0, [])
-	_game_over_button.hide()
+	_game_over_label.hide()
 	_new_game()
 
 

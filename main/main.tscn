@@ -6,15 +6,12 @@
 [ext_resource type="PackedScene" uid="uid://d0q3mfx7nmlf5" path="res://card/card.tscn" id="4_c651c"]
 [ext_resource type="Texture2D" uid="uid://bh8cexw1n4pj5" path="res://card/selection.png" id="6_grrlh"]
 [ext_resource type="PackedScene" uid="uid://b4uru0hgkb6b2" path="res://type_selector/type_selector.tscn" id="7_4dugh"]
-[ext_resource type="Texture2D" uid="uid://bstdwlr6wfbgi" path="res://main/round_over.png" id="8_67ri8"]
-[ext_resource type="Texture2D" uid="uid://b4d5en13i0ld1" path="res://main/select_other.png" id="9_0i4oc"]
-[ext_resource type="Texture2D" uid="uid://5c7fukmgi5ty" path="res://main/game_over.png" id="9_grrlh"]
-[ext_resource type="Texture2D" uid="uid://qys1yrx76qhf" path="res://main/select_any.png" id="10_0i4oc"]
 [ext_resource type="AudioStream" uid="uid://bxtkduj623yg1" path="res://audio/card-slide-6.ogg" id="11_bsumw"]
 [ext_resource type="AudioStream" uid="uid://csabdybwq3xhg" path="res://audio/jingles-retro_14.ogg" id="12_73k8k"]
 [ext_resource type="AudioStream" uid="uid://qk6h0jhduswp" path="res://audio/jingles-retro_03.ogg" id="13_73k8k"]
 [ext_resource type="AudioStream" uid="uid://2vcog88ais1h" path="res://audio/jingles-retro_16.ogg" id="14_5xyti"]
 [ext_resource type="Texture2D" uid="uid://baf5mpfexuvjq" path="res://main/menu.png" id="15_5xyti"]
+[ext_resource type="LabelSettings" uid="uid://bqe2prdrlv84l" path="res://tres/label_settings.tres" id="16_n3o0a"]
 
 [node name="Main" type="Node2D" unique_id=287543303]
 script = ExtResource("1_xwkvk")
@@ -64,37 +61,80 @@ offset = Vector2(5.5, 8.5)
 visible = false
 z_index = 10
 
-[node name="RoundOver" type="TextureButton" parent="." unique_id=65891047]
+[node name="RoundOverLabel" type="Label" parent="." unique_id=1684390544]
 visible = false
-offset_left = 23.0
-offset_top = 22.0
-offset_right = 61.0
-offset_bottom = 27.0
-texture_normal = ExtResource("8_67ri8")
-
-[node name="GameOver" type="TextureButton" parent="." unique_id=1347489935]
-visible = false
-offset_left = 23.0
-offset_top = 22.0
-offset_right = 61.0
-offset_bottom = 27.0
-texture_normal = ExtResource("9_grrlh")
-
-[node name="SelectOtherPlayer" type="TextureButton" parent="." unique_id=639918586]
-visible = false
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
 offset_left = 19.0
-offset_top = 36.0
-offset_right = 66.0
-offset_bottom = 48.0
-texture_normal = ExtResource("9_0i4oc")
+offset_top = 22.0
+offset_right = 67.0
+offset_bottom = 28.0
+grow_horizontal = 2
+grow_vertical = 2
+text = "ROUND OVER"
+label_settings = ExtResource("16_n3o0a")
+horizontal_alignment = 1
 
-[node name="SelectAnyPlayer" type="TextureButton" parent="." unique_id=1669627058]
+[node name="RoundOver" type="Button" parent="RoundOverLabel" unique_id=848743360]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+flat = true
+
+[node name="GameOverLabel" type="Label" parent="." unique_id=326608951]
 visible = false
-offset_left = 23.0
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = 19.0
+offset_top = 22.0
+offset_right = 67.0
+offset_bottom = 28.0
+grow_horizontal = 2
+grow_vertical = 2
+text = "GAME OVER!"
+label_settings = ExtResource("16_n3o0a")
+horizontal_alignment = 1
+
+[node name="GameOver" type="Button" parent="GameOverLabel" unique_id=366719054]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+flat = true
+
+[node name="SelectOtherPlayer" type="Label" parent="." unique_id=1613903432]
+visible = false
+offset_left = 18.0
 offset_top = 36.0
-offset_right = 70.0
-offset_bottom = 48.0
-texture_normal = ExtResource("10_0i4oc")
+offset_right = 68.0
+offset_bottom = 60.0
+text = "Select other player"
+label_settings = ExtResource("16_n3o0a")
+horizontal_alignment = 1
+autowrap_mode = 2
+
+[node name="SelectAnyPlayer" type="Label" parent="." unique_id=1734138816]
+visible = false
+offset_left = 18.0
+offset_top = 36.0
+offset_right = 68.0
+offset_bottom = 60.0
+text = "Select
+any player"
+label_settings = ExtResource("16_n3o0a")
+horizontal_alignment = 1
+autowrap_mode = 2
 
 [node name="DealAudioPlayer" type="AudioStreamPlayer" parent="." unique_id=248928592]
 stream = ExtResource("11_bsumw")
@@ -122,6 +162,6 @@ texture_normal = ExtResource("15_5xyti")
 [node name="AnimationLayer" type="Node2D" parent="." unique_id=150676236]
 
 [connection signal="type_clicked" from="TypeSelector" to="." method="_on_target_type_selected"]
-[connection signal="pressed" from="RoundOver" to="." method="_on_round_over_pressed"]
-[connection signal="pressed" from="GameOver" to="." method="_on_game_over_pressed"]
+[connection signal="pressed" from="RoundOverLabel/RoundOver" to="." method="_on_round_over_pressed"]
+[connection signal="pressed" from="GameOverLabel/GameOver" to="." method="_on_game_over_pressed"]
 [connection signal="pressed" from="MenuButton" to="." method="_on_menu_button_pressed"]

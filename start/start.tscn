@@ -1,33 +1,79 @@
 [gd_scene format=3 uid="uid://c37whatool5hs"]
 
-[ext_resource type="Texture2D" uid="uid://30b4o6prq6qs" path="res://start/play.png" id="1_275hl"]
 [ext_resource type="Script" uid="uid://cegfg78d2iqjs" path="res://start/start.gd" id="1_pgi65"]
-[ext_resource type="Texture2D" uid="uid://booupp8gfhwro" path="res://start/ll.png" id="2_k11ym"]
-[ext_resource type="Texture2D" uid="uid://c3sr4npmtg2kb" path="res://start/settings.png" id="2_pgi65"]
+[ext_resource type="LabelSettings" uid="uid://bqe2prdrlv84l" path="res://tres/label_settings.tres" id="2_s0q5u"]
 
 [node name="Start" type="Node2D" unique_id=1602353910]
 script = ExtResource("1_pgi65")
 metadata/_edit_vertical_guides_ = [84.0, 42.0]
 metadata/_edit_horizontal_guides_ = [48.0]
 
-[node name="Title" type="Sprite2D" parent="." unique_id=1833148592]
-position = Vector2(21, 3)
-texture = ExtResource("2_k11ym")
-offset = Vector2(21.5, 2.5)
+[node name="Title" type="Label" parent="." unique_id=165448473]
+offset_top = 3.0
+offset_right = 84.0
+offset_bottom = 9.0
+text = "LOVE LETTER"
+label_settings = ExtResource("2_s0q5u")
+horizontal_alignment = 1
 
-[node name="PlayButton" type="TextureButton" parent="." unique_id=1441879915]
-offset_left = 35.0
+[node name="Button" type="Button" parent="Title" unique_id=1436308499]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+flat = true
+
+[node name="PlayLabel" type="Label" parent="." unique_id=454541843]
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = 31.0
 offset_top = 17.0
-offset_right = 50.0
-offset_bottom = 22.0
-texture_normal = ExtResource("1_275hl")
+offset_right = 55.0
+offset_bottom = 23.0
+grow_horizontal = 2
+grow_vertical = 2
+text = "PLAY"
+label_settings = ExtResource("2_s0q5u")
+horizontal_alignment = 1
 
-[node name="SettingsButton" type="TextureButton" parent="." unique_id=471122430]
-offset_left = 27.0
+[node name="PlayButton" type="Button" parent="PlayLabel" unique_id=146084697]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+flat = true
+
+[node name="SettingsLabel" type="Label" parent="." unique_id=1464790290]
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = 23.0
 offset_top = 27.0
-offset_right = 58.0
-offset_bottom = 32.0
-texture_normal = ExtResource("2_pgi65")
+offset_right = 63.0
+offset_bottom = 33.0
+grow_horizontal = 2
+grow_vertical = 2
+text = "SETTINGS"
+label_settings = ExtResource("2_s0q5u")
+horizontal_alignment = 1
 
-[connection signal="pressed" from="PlayButton" to="." method="_on_play_button_pressed"]
-[connection signal="pressed" from="SettingsButton" to="." method="_on_settings_button_pressed"]
+[node name="SettingsButton" type="Button" parent="SettingsLabel" unique_id=103483315]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+flat = true
+
+[connection signal="pressed" from="PlayLabel/PlayButton" to="." method="_on_play_button_pressed"]
+[connection signal="pressed" from="SettingsLabel/SettingsButton" to="." method="_on_settings_button_pressed"]
