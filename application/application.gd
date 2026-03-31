@@ -3,6 +3,7 @@ extends Node2D
 @onready var _start: Start = $Start
 @onready var _main: Main = $Main
 @onready var _level_selector: LevelSelector = $LevelSelector
+@onready var _help: Node2D = $Help
 @onready var _pause: Node2D = $Pause
 
 
@@ -53,3 +54,17 @@ func _on_pause_exit_pressed() -> void:
 	_main.interrupted = true
 	_main.get_tree().paused = false
 	_start.show()
+
+
+func _on_start_help_pressed() -> void:
+	_help.invoker = _start
+	_help.show()
+
+
+func _on_help_back_pressed() -> void:
+	_help.invoker.show()
+
+
+func _on_pause_help_pressed() -> void:
+	_help.invoker = _pause
+	_help.show()

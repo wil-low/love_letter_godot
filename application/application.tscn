@@ -4,6 +4,7 @@
 [ext_resource type="PackedScene" uid="uid://c5r2e1aj3mjeo" path="res://main/main.tscn" id="2_iw25e"]
 [ext_resource type="PackedScene" uid="uid://c37whatool5hs" path="res://start/start.tscn" id="2_q47qx"]
 [ext_resource type="PackedScene" uid="uid://ru737cyvq1i7" path="res://level_selector/level_selector.tscn" id="3_q47qx"]
+[ext_resource type="PackedScene" uid="uid://b8o5ucmniyq87" path="res://help/help.tscn" id="5_hn6yr"]
 [ext_resource type="PackedScene" uid="uid://cnutq3ty1kcof" path="res://pause/pause.tscn" id="5_nscpw"]
 
 [node name="Application" type="Node2D" unique_id=653458706]
@@ -17,13 +18,20 @@ visible = false
 [node name="LevelSelector" parent="." unique_id=545755234 instance=ExtResource("3_q47qx")]
 visible = false
 
+[node name="Help" parent="." unique_id=2023718030 instance=ExtResource("5_hn6yr")]
+process_mode = 3
+visible = false
+
 [node name="Pause" parent="." unique_id=1945187376 instance=ExtResource("5_nscpw")]
 process_mode = 3
 visible = false
 
+[connection signal="help_pressed" from="Start" to="." method="_on_start_help_pressed"]
 [connection signal="play_pressed" from="Start" to="." method="_on_start_play_pressed"]
 [connection signal="settings_pressed" from="Start" to="." method="_on_start_settings_pressed"]
 [connection signal="menu_pressed" from="Main" to="." method="_on_main_menu_pressed"]
 [connection signal="levels_changed" from="LevelSelector" to="." method="_on_level_selector_levels_changed"]
+[connection signal="back_pressed" from="Help" to="." method="_on_help_back_pressed"]
 [connection signal="exit_pressed" from="Pause" to="." method="_on_pause_exit_pressed"]
+[connection signal="help_pressed" from="Pause" to="." method="_on_pause_help_pressed"]
 [connection signal="resume_pressed" from="Pause" to="." method="_on_pause_resume_pressed"]

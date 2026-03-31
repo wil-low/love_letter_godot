@@ -9,21 +9,12 @@ metadata/_edit_vertical_guides_ = [84.0, 42.0]
 metadata/_edit_horizontal_guides_ = [48.0]
 
 [node name="Title" type="Label" parent="." unique_id=165448473]
-offset_top = 3.0
+offset_top = 4.0
 offset_right = 84.0
-offset_bottom = 9.0
+offset_bottom = 10.0
 text = "LOVE LETTER"
 label_settings = ExtResource("2_s0q5u")
 horizontal_alignment = 1
-
-[node name="Button" type="Button" parent="Title" unique_id=1436308499]
-layout_mode = 1
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-flat = true
 
 [node name="PlayLabel" type="Label" parent="." unique_id=454541843]
 anchors_preset = 8
@@ -75,5 +66,31 @@ grow_horizontal = 2
 grow_vertical = 2
 flat = true
 
+[node name="HelpLabel" type="Label" parent="." unique_id=1412098535]
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = 23.0
+offset_top = 37.0
+offset_right = 63.0
+offset_bottom = 43.0
+grow_horizontal = 2
+grow_vertical = 2
+text = "HELP"
+label_settings = ExtResource("2_s0q5u")
+horizontal_alignment = 1
+
+[node name="HelpButton" type="Button" parent="HelpLabel" unique_id=600397236]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+flat = true
+
 [connection signal="pressed" from="PlayLabel/PlayButton" to="." method="_on_play_button_pressed"]
 [connection signal="pressed" from="SettingsLabel/SettingsButton" to="." method="_on_settings_button_pressed"]
+[connection signal="pressed" from="HelpLabel/HelpButton" to="." method="_on_help_button_pressed"]

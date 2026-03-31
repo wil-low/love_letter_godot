@@ -1,7 +1,7 @@
 extends Node2D
 
 signal resume_pressed
-signal statistics_pressed
+signal help_pressed
 signal exit_pressed
 
 func _on_resume_button_pressed() -> void:
@@ -9,10 +9,9 @@ func _on_resume_button_pressed() -> void:
 	resume_pressed.emit()
 
 
-func _on_statistics_button_pressed() -> void:
-	#hide()
-	#statistics_pressed.emit()
-	pass
+func _on_help_button_pressed() -> void:
+	hide()
+	help_pressed.emit()
 
 
 func _on_exit_button_pressed() -> void:
