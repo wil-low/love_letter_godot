@@ -403,6 +403,7 @@ func round_over() -> void:
 	var max_type := 0
 	for p in _players:
 		if p.is_active():
+			p.protected = false
 			Animator.reveal_hand(p, false)
 			max_type = max(max_type, p.hand.get_child(0).type)
 	var round_winners: Array[int]
