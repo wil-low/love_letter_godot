@@ -209,18 +209,6 @@ enum EvalScore {
 }
 
 
-func _greater_ratio(my_type: Deck.CardType, left_cards: Array[int]) -> float:
-	var lesser := 0
-	var greater := 0.0
-	for t in range(len(left_cards)):
-		if t > my_type:
-			greater += left_cards[t]
-		elif t < my_type:
-			lesser += left_cards[t]
-	#print("lesser=" + str(lesser) + ", greater=" + str(greater))
-	return 16.0 if lesser == 0 else greater / lesser
-
-
 func eval_moves(valid_moves: Array[Move], left_cards: Array[int]):
 	assert(hand.get_child_count() == 2, "Player " + str(idx) + ": wrong hand count")
 	for m in valid_moves:
@@ -249,17 +237,13 @@ func eval_moves(valid_moves: Array[Move], left_cards: Array[int]):
 					elif my_type == mem:
 						m._score = EvalScore.WEAK
 				else:
-					m._score = EvalScore.WEAK if my_type > Deck.CardType.Handmaid else EvalScore.BAD
-					#var odds := _greater_ratio(my_type, left_cards)
-					#m._score = int(EvalScore.WEAK * odds) if odds > 1 else EvalScore.BAD
+					m._score = EvalScore.MODERATE if my_type > Deck.CardType.Handmaid else EvalScore.BAD
 			Deck.CardType.Handmaid:
 				m._score = EvalScore.MODERATE
 			Deck.CardType.Prince:
 				if idx == m._target_player:  # myself
 					if my_type != Deck.CardType.Princess:
 						m._score = EvalScore.WEAK if my_type > Deck.CardType.Handmaid else EvalScore.MODERATE
-						#var odds := _greater_ratio(my_type, left_cards)
-						#m._score = EvalScore.WEAK if odds > 1 else EvalScore.MODERATE
 				else:
 					if mem != Deck.CardType.Unknown:
 						if mem == Deck.CardType.Princess:
