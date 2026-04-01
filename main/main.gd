@@ -4,7 +4,6 @@ extends Node2D
 signal menu_pressed
 
 @export var card_scene: PackedScene
-@export var random_seed: int = 42
 
 const max_games: int = 1000
 
@@ -55,14 +54,10 @@ var _target_type: int
 
 
 func _ready() -> void:
-	if Animator._speed == 0: # speedrun
-		RenderingServer.render_loop_enabled = false
-		Engine.print_to_stdout = false
 	_players = [$Player0, $Player1, $Player2, $Player3]
 
 
 func init_players() -> void:
-	seed(random_seed if random_seed != 0 else Time.get_ticks_usec())
 	_table.show()
 	_type_selector.hide()
 	_round_over_label.hide()

@@ -6,21 +6,43 @@ extends Node2D
 @onready var _help: Node2D = $Help
 @onready var _pause: Node2D = $Pause
 
+@export var random_seed: int = 42
+@export var speed_run: bool = false
 
 # Called when the node enters the scene tree for the first time.
 func _ready() -> void:
+	seed(random_seed if random_seed != 0 else Time.get_ticks_usec())
+
 	var platform := OS.get_name()
 	if platform == "Android" or platform == "iOS":
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
 		Engine.print_to_stdout = false
+
 	var levels: Array[Player.AI_Level] = [
 		Player.AI_Level.Human,
 		Player.AI_Level.Level_4,
 		Player.AI_Level.Level_4,
 		Player.AI_Level.Level_4
 		]
+
+	if speed_run:
+		levels = [
+			Player.AI_Level.Level_1,
+			Player.AI_Level.Level_2,
+			Player.AI_Level.Level_3,
+			Player.AI_Level.Level_4
+			]
+
 	_level_selector.set_levels(levels, 2)
 	_level_selector._on_back_button_pressed()
+
+	if speed_run:
+		for i in range(AudioServer.bus_count):
+			AudioServer.set_bus_mute(i, true)
+		Animator._speed = 0
+		RenderingServer.render_loop_enabled = false
+		Engine.print_to_stdout = false
+		_main.init_players()
 
 
 func _on_level_selector_levels_changed(levels: Array[Player.AI_Level], speed: int) -> void:
