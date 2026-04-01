@@ -6,7 +6,7 @@ extends Node2D
 @onready var _help: Node2D = $Help
 @onready var _pause: Node2D = $Pause
 
-@export var random_seed: int = 42
+@export var random_seed: int = 0
 @export var speed_run: bool = false
 
 # Called when the node enters the scene tree for the first time.
@@ -26,6 +26,7 @@ func _ready() -> void:
 		]
 
 	if speed_run:
+		seed(42)
 		levels = [
 			Player.AI_Level.Level_1,
 			Player.AI_Level.Level_2,
