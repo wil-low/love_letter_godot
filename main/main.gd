@@ -86,20 +86,6 @@ func init_players() -> void:
 	_new_game()
 
 
-func _input(event):
-	if event.is_action_pressed("debug_show_hands"):
-		var winners: Array[Node]
-		for p in _players:
-			var s = str(p.idx) + ":"
-			for ch in p.hand.get_children():
-				s += " " + Deck.CardType.keys()[ch.type]
-			print(s)
-			winners.append(p.hand)
-		Animator.flash(10, winners)
-	if event.is_action_pressed("debug_reset_game"):
-		_new_game()
-
-
 func _new_game() -> void:
 	interrupted = false
 	game_counter += 1
