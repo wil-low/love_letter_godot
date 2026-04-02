@@ -239,6 +239,7 @@ func _on_target_player_selected(idx: int) -> void:
 							_type_selector.set_selection(Deck.CardType.Unknown)
 							_type_selector.show()
 						Deck.CardType.Priest, Deck.CardType.Baron, Deck.CardType.King:
+							await Animator.delay(1)
 							resolve_effect()
 			Player.State.INPUT_ANY_P:
 				if !_players[idx].protected:
