@@ -322,6 +322,7 @@ func resolve_effect() -> void:
 				print("Handmaid: protected on")
 			Deck.CardType.Prince:
 				var type = tp.hand.get_child(0).type
+				await Animator.reveal_hand(tp, false)
 				await discard(tp.hand)
 				await deal_card(tp, true)
 				for pl in _players:
