@@ -30,15 +30,13 @@ offset_bottom = 48.0
 visible = false
 card_type = 0
 card_name = "Guard"
-card_description = "   Choose another player and name a
-card except Guard. If they have that card, they are out of the round."
+card_description = "   Choose another player and name a card except Guard. If they have that card, they are out of the round."
 
 [node name="Priest" parent="Pages" unique_id=528050856 instance=ExtResource("1_kcg8g")]
 visible = false
 card_type = 1
 card_name = "Priest"
-card_description = "   Choose another player and secretly
-look at their hand (without revealing it to anyone else)."
+card_description = "   Choose another player and secretly look at their hand (without revealing it to anyone else)."
 
 [node name="Baron" parent="Pages" unique_id=323951099 instance=ExtResource("1_kcg8g")]
 visible = false
