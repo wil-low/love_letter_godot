@@ -9,6 +9,8 @@ extends Node2D
 @export var random_seed: int = 0
 @export var speed_run: bool = false
 
+const OPTIONS_FILE := "user://options.cfg"
+
 # Called when the node enters the scene tree for the first time.
 func _ready() -> void:
 	seed(random_seed if random_seed != 0 else Time.get_ticks_usec())
@@ -33,9 +35,9 @@ func _ready() -> void:
 			Player.AI_Level.Level_3,
 			Player.AI_Level.Level_4
 			]
-
-	_level_selector.set_levels(levels, 2)
-	_level_selector._on_back_button_pressed()
+			
+	for i in range(4):
+		_main._players[i].ai_level = levels[i]
 
 	if speed_run:
 		for i in range(AudioServer.bus_count):
@@ -44,12 +46,43 @@ func _ready() -> void:
 		RenderingServer.render_loop_enabled = false
 		Engine.print_to_stdout = false
 		_main.init_players()
+	else:
+		load_config()
+		_level_selector.set_levels(_main._players, Animator._speed)
+
+
+func save_config() -> void:
+	var config = ConfigFile.new()
+	for i in range(4):
+		config.set_value("AI_Level", "P" + str(i), _main._players[i].ai_level)
+	config.set_value("Gameplay", "speed", Animator._speed)
+	config.save(OPTIONS_FILE)
+
+
+func load_config() -> bool:
+	var config = ConfigFile.new()
+	var err = config.load(OPTIONS_FILE)
+
+	# If the file didn't load, ignore it.
+	if err != OK:
+		return false
+
+	for i in range(4):
+		var ai_level = config.get_value("AI_Level", "P" + str(i))
+		if ai_level != null:
+			_main._players[i].ai_level = ai_level
+			
+	var speed = config.get_value("Gameplay", "speed")
+	if speed != null:
+		Animator._speed = speed
+	return true
 
 
 func _on_level_selector_levels_changed(levels: Array[Player.AI_Level], speed: int) -> void:
 	for i in range(len(_main._players)):
 		_main._players[i].ai_level = levels[i]
 	Animator._speed = speed
+	save_config()
 	_start.show()
 
 

@@ -7,9 +7,9 @@ signal levels_changed(levels: Array[Player.AI_Level], speed: int)
 @onready var _speed_level: Node2D = $SpeedLevel
 
 
-func set_levels(arr: Array[Player.AI_Level], speed: int) -> void:
+func set_levels(arr: Array[Player], speed: int) -> void:
 	for i in range(len(arr)):
-		_levels.get_child(i).ai_level = arr[i]
+		_levels.get_child(i).ai_level = arr[i].ai_level
 	_speed_level.level = speed
 
 
