@@ -341,8 +341,9 @@ func resolve_effect() -> void:
 				for pl in _players:
 					if pl.idx != p.idx and pl.idx != tp.idx:
 						# swap memories
+						var tmp = pl._memory[p.idx]
 						pl.update_memory(p.idx, pl._memory[tp.idx])
-						pl.update_memory(tp.idx, pl._memory[p.idx])
+						pl.update_memory(tp.idx, tmp)
 				print("King: trade hands")
 			Deck.CardType.Princess:
 				set_inactive(p)
