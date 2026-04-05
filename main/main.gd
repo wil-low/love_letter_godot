@@ -473,7 +473,7 @@ func find_valid_moves() -> Array[Move]:
 						if p.idx != cp.idx and p.is_active() and (!p.protected or _other_protected):
 							move = Move.new(cards[i], i, p.idx)
 							result.append(move)
-				Deck.CardType.Handmaid, Deck.CardType.Countess, Deck.CardType.Princess:
+				Deck.CardType.Handmaid, Deck.CardType.Countess:
 					move = Move.new(cards[i], i)
 					result.append(move)
 				Deck.CardType.Prince:
