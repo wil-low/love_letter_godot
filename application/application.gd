@@ -28,7 +28,6 @@ func _ready() -> void:
 		]
 
 	if speed_run:
-		seed(42)
 		levels = [
 			Player.AI_Level.Level_1,
 			Player.AI_Level.Level_2,
@@ -45,7 +44,7 @@ func _ready() -> void:
 		Animator._speed = 0
 		RenderingServer.render_loop_enabled = false
 		Engine.print_to_stdout = false
-		_main.init_players()
+		_main.init_players(42)
 	else:
 		load_config()
 		_level_selector.set_levels(_main._players, Animator._speed)
@@ -94,7 +93,7 @@ func _on_main_menu_pressed() -> void:
 
 func _on_start_play_pressed() -> void:
 	_main.show()
-	_main.init_players()
+	_main.init_players(0)
 
 
 func _on_start_settings_pressed() -> void:

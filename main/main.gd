@@ -6,6 +6,7 @@ signal menu_pressed
 @export var card_scene: PackedScene
 
 const max_games: int = 1000
+var _random_seed: int = 0
 
 var game_counter: int = 0
 var interrupted: bool
@@ -57,7 +58,8 @@ func _ready() -> void:
 	_players = [$Player0, $Player1, $Player2, $Player3]
 
 
-func init_players() -> void:
+func init_players(random_seed: int) -> void:
+	_random_seed = random_seed
 	_table.show()
 	_type_selector.hide()
 	_round_over_label.hide()
@@ -87,6 +89,8 @@ func init_players() -> void:
 
 
 func _new_game() -> void:
+	if _random_seed:
+		seed(_random_seed)
 	interrupted = false
 	game_counter += 1
 	if game_counter > max_games:
@@ -446,6 +450,8 @@ func _on_round_over_pressed() -> void:
 func _on_game_over_pressed() -> void:
 	await Animator.flash(0, [])
 	_game_over_label.hide()
+	if _random_seed:
+		_random_seed += 1
 	_new_game()
 
 
