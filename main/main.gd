@@ -273,7 +273,7 @@ func resolve_effect() -> void:
 	if interrupted:
 		return
 	var p = _players[_cur_player]
-	var tp = _players[_target_player]
+	var tp = null if _target_player == -1 else _players[_target_player]
 	p._state = Player.State.IDLE
 	print("resolve_effect for " + 
 		Deck.CardType.keys()[_played_card] +
@@ -282,7 +282,7 @@ func resolve_effect() -> void:
 
 	_player_selection.hide()
 
-	if !tp.protected:
+	if tp == null or !tp.protected:
 		match _played_card:
 			
 			Deck.CardType.Guard:
