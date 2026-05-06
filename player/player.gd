@@ -243,7 +243,7 @@ func eval_moves(valid_moves: Array[Move], left_cards: Array[int]):
 			Deck.CardType.Prince:
 				if idx == m._target_player:  # myself
 					if my_type != Deck.CardType.Princess:
-						m._score = EvalScore.WEAK if my_type > Deck.CardType.Handmaid else EvalScore.MODERATE
+						m._score = EvalScore.BAD if my_type > Deck.CardType.Handmaid else EvalScore.WEAK
 				else:
 					if mem != Deck.CardType.Unknown:
 						if mem == Deck.CardType.Princess:
@@ -251,7 +251,7 @@ func eval_moves(valid_moves: Array[Move], left_cards: Array[int]):
 						elif mem > Deck.CardType.Handmaid:
 							m._score = EvalScore.WEAK
 					else:
-						m._score = EvalScore.BAD
+						m._score = EvalScore.WEAK
 			Deck.CardType.King:
 				if my_type == mem:
 					m._score = EvalScore.WEAK
