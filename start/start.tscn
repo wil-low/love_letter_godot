@@ -2,11 +2,19 @@
 
 [ext_resource type="Script" uid="uid://cegfg78d2iqjs" path="res://start/start.gd" id="1_pgi65"]
 [ext_resource type="LabelSettings" uid="uid://bqe2prdrlv84l" path="res://tres/label_settings.tres" id="2_s0q5u"]
+[ext_resource type="Texture2D" uid="uid://gv06ya5vr4e4" path="res://start/face1.png" id="3_3ssna"]
+[ext_resource type="Texture2D" uid="uid://4kvl7cchqrcy" path="res://start/face2.png" id="4_wx30y"]
+[ext_resource type="Texture2D" uid="uid://b4reb6yb60lb7" path="res://start/face3.png" id="5_0wxl8"]
+[ext_resource type="Texture2D" uid="uid://dc6rqnhc31p3" path="res://start/face4.png" id="6_kpuwg"]
+[ext_resource type="Texture2D" uid="uid://ifpex4t3jf41" path="res://start/face5.png" id="7_2502t"]
+[ext_resource type="Texture2D" uid="uid://cis6hb2wb7atp" path="res://start/face7.png" id="8_po6dj"]
+[ext_resource type="Texture2D" uid="uid://3y6kuyolxsvb" path="res://start/face8.png" id="9_8id76"]
+[ext_resource type="Texture2D" uid="uid://kujae8qi0kw3" path="res://start/face9.png" id="10_ambmq"]
 
 [node name="Start" type="Node2D" unique_id=1602353910]
 script = ExtResource("1_pgi65")
 metadata/_edit_vertical_guides_ = [84.0, 42.0]
-metadata/_edit_horizontal_guides_ = [48.0]
+metadata/_edit_horizontal_guides_ = [48.0, 12.0, 24.0, 36.0]
 
 [node name="Title" type="Label" parent="." unique_id=165448473]
 offset_top = 4.0
@@ -90,6 +98,46 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 flat = true
+
+[node name="Face1" type="Sprite2D" parent="." unique_id=695771441]
+position = Vector2(1, 0)
+texture = ExtResource("3_3ssna")
+offset = Vector2(4.5, 5.5)
+
+[node name="Face2" type="Sprite2D" parent="." unique_id=1195804240]
+position = Vector2(1, 12)
+texture = ExtResource("4_wx30y")
+offset = Vector2(4.5, 5.5)
+
+[node name="Face3" type="Sprite2D" parent="." unique_id=2114115188]
+position = Vector2(1, 24)
+texture = ExtResource("5_0wxl8")
+offset = Vector2(4.5, 5.5)
+
+[node name="Face4" type="Sprite2D" parent="." unique_id=82000673]
+position = Vector2(1, 36)
+texture = ExtResource("6_kpuwg")
+offset = Vector2(4.5, 5.5)
+
+[node name="Face5" type="Sprite2D" parent="." unique_id=1401171549]
+position = Vector2(74, 0)
+texture = ExtResource("7_2502t")
+offset = Vector2(4.5, 5.5)
+
+[node name="Face6" type="Sprite2D" parent="." unique_id=1213144904]
+position = Vector2(74, 13)
+texture = ExtResource("8_po6dj")
+offset = Vector2(4.5, 5.5)
+
+[node name="Face7" type="Sprite2D" parent="." unique_id=2114598409]
+position = Vector2(74, 24)
+texture = ExtResource("9_8id76")
+offset = Vector2(4.5, 5.5)
+
+[node name="Face8" type="Sprite2D" parent="." unique_id=771853494]
+position = Vector2(74, 36)
+texture = ExtResource("10_ambmq")
+offset = Vector2(4.5, 5.5)
 
 [connection signal="pressed" from="PlayLabel/PlayButton" to="." method="_on_play_button_pressed"]
 [connection signal="pressed" from="SettingsLabel/SettingsButton" to="." method="_on_settings_button_pressed"]
