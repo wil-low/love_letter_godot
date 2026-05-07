@@ -125,7 +125,7 @@ texture = ExtResource("7_2502t")
 offset = Vector2(4.5, 5.5)
 
 [node name="Face6" type="Sprite2D" parent="." unique_id=1213144904]
-position = Vector2(74, 13)
+position = Vector2(74, 12)
 texture = ExtResource("8_po6dj")
 offset = Vector2(4.5, 5.5)
 
