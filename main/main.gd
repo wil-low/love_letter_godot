@@ -306,6 +306,12 @@ func resolve_effect() -> void:
 				else:
 					p.update_memory(tp.idx, their_type)
 					tp.update_memory(p.idx, my_type)
+					for pl in _players:
+						if pl.idx != p.idx and pl.idx != tp.idx:
+							if pl._memory[p.idx] != Deck.CardType.Unknown:
+								pl.update_memory(tp.idx, pl._memory[p.idx])
+							elif pl._memory[tp.idx] != Deck.CardType.Unknown:
+								pl.update_memory(p.idx, pl._memory[tp.idx])
 				print("Baron: compare cards")
 			Deck.CardType.Handmaid:
 				p.protected = true
