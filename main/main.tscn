@@ -6,8 +6,10 @@
 [ext_resource type="PackedScene" uid="uid://d0q3mfx7nmlf5" path="res://card/card.tscn" id="4_c651c"]
 [ext_resource type="Texture2D" uid="uid://bh8cexw1n4pj5" path="res://card/selection.png" id="6_grrlh"]
 [ext_resource type="PackedScene" uid="uid://b4uru0hgkb6b2" path="res://type_selector/type_selector.tscn" id="7_4dugh"]
+[ext_resource type="AudioStream" uid="uid://b5mguebh2kyfc" path="res://audio/RoundWon.ogg" id="11_73k8k"]
 [ext_resource type="AudioStream" uid="uid://bxtkduj623yg1" path="res://audio/card-slide-6.ogg" id="11_bsumw"]
 [ext_resource type="AudioStream" uid="uid://csabdybwq3xhg" path="res://audio/jingles-retro_14.ogg" id="12_73k8k"]
+[ext_resource type="AudioStream" uid="uid://k1oj1v08aj0s" path="res://audio/GameWon.ogg" id="13_5xyti"]
 [ext_resource type="AudioStream" uid="uid://qk6h0jhduswp" path="res://audio/jingles-retro_03.ogg" id="13_73k8k"]
 [ext_resource type="AudioStream" uid="uid://2vcog88ais1h" path="res://audio/jingles-retro_16.ogg" id="14_5xyti"]
 [ext_resource type="Texture2D" uid="uid://baf5mpfexuvjq" path="res://main/menu.png" id="15_5xyti"]
@@ -16,7 +18,6 @@
 [node name="Main" type="Node2D" unique_id=287543303]
 script = ExtResource("1_xwkvk")
 card_scene = ExtResource("4_c651c")
-random_seed = 0
 metadata/_edit_horizontal_guides_ = [24.0, 48.0]
 metadata/_edit_vertical_guides_ = [84.0]
 
@@ -148,9 +149,15 @@ volume_db = -10.0
 stream = ExtResource("13_73k8k")
 volume_db = -10.0
 
+[node name="RoundWonAudioPlayer" type="AudioStreamPlayer" parent="." unique_id=1523628593]
+stream = ExtResource("11_73k8k")
+
 [node name="GameOverAudioPlayer" type="AudioStreamPlayer" parent="." unique_id=421726183]
 stream = ExtResource("14_5xyti")
 volume_db = -10.0
+
+[node name="GameWonAudioPlayer" type="AudioStreamPlayer" parent="." unique_id=505401809]
+stream = ExtResource("13_5xyti")
 
 [node name="MenuButton" type="TextureButton" parent="." unique_id=1431577744]
 offset_left = 78.0

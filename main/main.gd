@@ -36,7 +36,9 @@ var _cur_player: int:
 @onready var _deal_audio_player: AudioStreamPlayer = $DealAudioPlayer
 @onready var _inactive_audio_player: AudioStreamPlayer = $InactiveAudioPlayer
 @onready var _round_over_audio_player: AudioStreamPlayer = $RoundOverAudioPlayer
+@onready var _round_won_audio_player: AudioStreamPlayer = $RoundWonAudioPlayer
 @onready var _game_over_audio_player: AudioStreamPlayer = $GameOverAudioPlayer
+@onready var _game_won_audio_player: AudioStreamPlayer = $GameWonAudioPlayer
 
 var _other_protected: bool
 
@@ -420,7 +422,10 @@ func round_over() -> void:
 				game_winners.append(p.idx)
 	if !game_winners.is_empty():
 		flash_winners(game_winners)
-		_game_over_audio_player.play()
+		if 0 in game_winners:
+			_game_won_audio_player.play()
+		else:
+			_game_over_audio_player.play()
 		var s := "Game " + str(game_counter) + " over! Winners: " + game_winners_str + ". Total scores: "
 		for p in _players:
 			s += str(p.total_score) + ", "
@@ -431,7 +436,10 @@ func round_over() -> void:
 			_on_game_over_pressed()
 	elif !round_winners.is_empty():
 		flash_winners(round_winners)
-		_round_over_audio_player.play()
+		if 0 in round_winners:
+			_round_won_audio_player.play()
+		else:
+			_round_over_audio_player.play()
 		print("Round over! Winners are " + round_winners_str)
 		_cur_player = round_winners[randi() % len(round_winners)]
 		_round_over_label.show()
