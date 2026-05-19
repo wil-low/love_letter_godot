@@ -47,14 +47,13 @@ func _ready() -> void:
 		_main.init_players(42)
 	else:
 		load_config()
-		_level_selector.set_levels(_main._players, Animator._speed)
 
 
 func save_config() -> void:
 	var config = ConfigFile.new()
 	for i in range(4):
 		config.set_value("AI_Level", "P" + str(i), _main._players[i].ai_level)
-	config.set_value("Gameplay", "speed", Animator._speed)
+	config.set_value("Gameplay", "speed", _level_selector._speed_level.level)
 	config.save(OPTIONS_FILE)
 
 
@@ -70,17 +69,16 @@ func load_config() -> bool:
 		var ai_level = config.get_value("AI_Level", "P" + str(i))
 		if ai_level != null:
 			_main._players[i].ai_level = ai_level
-			
-	var speed = config.get_value("Gameplay", "speed")
-	if speed != null:
-		Animator._speed = speed
+
+	var speed = clamp(config.get_value("Gameplay", "speed"), SpeedLevel._min_speed, SpeedLevel._max_speed)
+	_level_selector.set_levels(_main._players, speed)
 	return true
 
 
 func _on_level_selector_levels_changed(levels: Array[Player.AI_Level], speed: int) -> void:
 	for i in range(len(_main._players)):
 		_main._players[i].ai_level = levels[i]
-	Animator._speed = speed
+	Animator._speed = pow(2, speed)
 	save_config()
 	_start.show()
 

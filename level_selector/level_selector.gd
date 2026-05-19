@@ -11,6 +11,7 @@ func set_levels(arr: Array[Player], speed: int) -> void:
 	for i in range(len(arr)):
 		_levels.get_child(i).ai_level = arr[i].ai_level
 	_speed_level.level = speed
+	Animator._speed = pow(2, speed)
 
 
 func _on_back_button_pressed() -> void:

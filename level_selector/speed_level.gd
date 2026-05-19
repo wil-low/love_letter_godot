@@ -6,9 +6,9 @@ extends Node2D
 @onready var _right_button: DigitButton = $RightButton
 
 const _min_speed: int = 1
-const _max_speed: int = 8
+const _max_speed: int = 5
 
-var level: Player.AI_Level:
+var level: int:
 	get:
 		return level
 	set(value):
