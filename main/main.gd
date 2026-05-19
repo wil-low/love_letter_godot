@@ -120,6 +120,7 @@ func _new_round() -> void:
 	for p in _players:
 		p.protected = false
 		p.active = true
+		p._inactive.visible = false
 		p.hand.modulate.a = 1.0
 		for i in range(len(p._memory)):
 			p.update_memory(i)
@@ -265,10 +266,13 @@ func _on_move_chosen(move: Move) -> void:
 		_on_target_type_selected(move._target_type)
 
 
-func set_inactive(p: Player):
+func set_inactive(p: Player, reveal_hand: bool = true):
 	p.active = false
 	_inactive_audio_player.play()
+	if reveal_hand:
+		await Animator.reveal_hand(p, false)
 	discard(p.hand)
+	p._inactive.visible = true
 
 
 func resolve_effect() -> void:
@@ -289,7 +293,6 @@ func resolve_effect() -> void:
 			
 			Deck.CardType.Guard:
 				if tp.hand.get_child(0).type == _target_type:
-					await Animator.reveal_hand(tp)
 					set_inactive(tp)
 			Deck.CardType.Priest:
 				if p.is_human():
@@ -299,12 +302,14 @@ func resolve_effect() -> void:
 			Deck.CardType.Baron:
 				if p.is_human():
 					await Animator.reveal_hand(tp)
+				elif tp.is_human():
+					await Animator.reveal_hand(p)
 				var my_type = p.hand.get_child(0).type
 				var their_type = tp.hand.get_child(0).type
 				if my_type > their_type:
-					set_inactive(tp)
+					set_inactive(tp, !p.is_human())
 				elif my_type < their_type:
-					set_inactive(p)
+					set_inactive(p, !tp.is_human())
 				else:
 					p.update_memory(tp.idx, their_type)
 					tp.update_memory(p.idx, my_type)
@@ -327,7 +332,7 @@ func resolve_effect() -> void:
 					if pl.idx != _cur_player:
 						pl.update_memory(_cur_player)  # hand is unknown now
 				if type == Deck.CardType.Princess:
-					set_inactive(tp)
+					set_inactive(tp, false)
 				print("Prince: discard and redraw")
 			Deck.CardType.King:
 				var my_card: Card = p.hand.get_child(0)

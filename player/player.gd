@@ -43,12 +43,7 @@ var ai_level: AI_Level = AI_Level.Level_1:
 		_badge.visible = ai_level > AI_Level.Human
 		_score_digit.visible = ai_level > AI_Level.Disabled
 
-var active: bool = true:
-	get:
-		return active
-	set(value):
-		active = value
-		_inactive.visible = !active
+var active: bool = true
 
 var score: int = 0:
 	get:
