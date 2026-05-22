@@ -273,6 +273,7 @@ func set_inactive(p: Player, reveal_hand: bool = true):
 		await Animator.reveal_hand(p, false)
 	discard(p.hand)
 	p._inactive.visible = true
+	await Animator.delay(1)
 
 
 func resolve_effect() -> void:
@@ -293,7 +294,7 @@ func resolve_effect() -> void:
 			
 			Deck.CardType.Guard:
 				if tp.hand.get_child(0).type == _target_type:
-					set_inactive(tp)
+					await set_inactive(tp)
 			Deck.CardType.Priest:
 				if p.is_human():
 					await Animator.reveal_hand(tp)
@@ -307,9 +308,9 @@ func resolve_effect() -> void:
 				var my_type = p.hand.get_child(0).type
 				var their_type = tp.hand.get_child(0).type
 				if my_type > their_type:
-					set_inactive(tp, !p.is_human())
+					await set_inactive(tp, !p.is_human())
 				elif my_type < their_type:
-					set_inactive(p, !tp.is_human())
+					await set_inactive(p, !tp.is_human())
 				else:
 					p.update_memory(tp.idx, their_type)
 					tp.update_memory(p.idx, my_type)
@@ -327,12 +328,13 @@ func resolve_effect() -> void:
 				var type = tp.hand.get_child(0).type
 				await Animator.reveal_hand(tp, false)
 				await discard(tp.hand)
-				await deal_card(tp, true)
-				for pl in _players:
-					if pl.idx != _cur_player:
-						pl.update_memory(_cur_player)  # hand is unknown now
 				if type == Deck.CardType.Princess:
-					set_inactive(tp, false)
+					await set_inactive(tp, false)
+				else:
+					await deal_card(tp, true)
+					for pl in _players:
+						if pl.idx != _cur_player:
+							pl.update_memory(_cur_player)  # hand is unknown now
 				print("Prince: discard and redraw")
 			Deck.CardType.King:
 				var my_card: Card = p.hand.get_child(0)
@@ -363,7 +365,7 @@ func resolve_effect() -> void:
 						pl.update_memory(tp.idx, tmp)
 				print("King: trade hands")
 			Deck.CardType.Princess:
-				set_inactive(p)
+				await set_inactive(p)
 				print("Princess: discarded")
 	else:
 		print("Player " + str(tp.idx) + " protected, no effect")
@@ -380,9 +382,12 @@ func resolve_effect() -> void:
 	if active_count == 1:
 		round_over()
 	else:
-		_cur_player = (_cur_player + 1) % len(_players)
-		while !_players[_cur_player].is_active():
-			_cur_player = (_cur_player + 1) % len(_players)
+		var next_player := _cur_player
+		while true:
+			next_player = (next_player + 1) % len(_players)
+			if _players[next_player].is_active():
+				break
+		_cur_player = next_player
 		new_turn()
 
 
