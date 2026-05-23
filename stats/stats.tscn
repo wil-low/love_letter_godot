@@ -18,43 +18,43 @@ frame = 14
 frame = 15
 
 [node name="L_H" type="Label" parent="." unique_id=485666700]
-offset_left = 11.0
+offset_left = 16.0
 offset_top = 2.0
-offset_right = 46.0
+offset_right = 76.0
 offset_bottom = 8.0
-text = "H: 99999 / 99999"
+text = "99999  H  99999"
 label_settings = ExtResource("3_wnqt8")
 
 [node name="L_1" type="Label" parent="." unique_id=1932742793]
-offset_left = 11.0
+offset_left = 16.0
 offset_top = 12.0
-offset_right = 46.0
+offset_right = 76.0
 offset_bottom = 18.0
-text = "1: 99999 / 99999"
+text = "99999  1  99999"
 label_settings = ExtResource("3_wnqt8")
 
 [node name="L_2" type="Label" parent="." unique_id=39176064]
-offset_left = 11.0
+offset_left = 16.0
 offset_top = 22.0
-offset_right = 46.0
+offset_right = 76.0
 offset_bottom = 28.0
-text = "2: 99999 / 99999"
+text = "99999  2  99999"
 label_settings = ExtResource("3_wnqt8")
 
 [node name="L_3" type="Label" parent="." unique_id=1768172023]
-offset_left = 11.0
+offset_left = 16.0
 offset_top = 32.0
-offset_right = 46.0
+offset_right = 76.0
 offset_bottom = 38.0
-text = "3: 99999 / 99999"
+text = "99999  3  99999"
 label_settings = ExtResource("3_wnqt8")
 
 [node name="L_4" type="Label" parent="." unique_id=1156716618]
-offset_left = 11.0
+offset_left = 16.0
 offset_top = 42.0
-offset_right = 46.0
+offset_right = 76.0
 offset_bottom = 48.0
-text = "4: 99999 / 99999"
+text = "99999  4  99999"
 label_settings = ExtResource("3_wnqt8")
 
 [connection signal="pressed" from="BackButton" to="." method="_on_back_button_pressed"]
