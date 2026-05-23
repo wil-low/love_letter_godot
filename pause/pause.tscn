@@ -5,6 +5,8 @@
 
 [node name="Pause" type="Node2D" unique_id=1945187376]
 script = ExtResource("1_qhaht")
+metadata/_edit_vertical_guides_ = [84.0, 42.0]
+metadata/_edit_horizontal_guides_ = [48.0]
 
 [node name="ResumeLabel" type="Label" parent="." unique_id=527095475]
 anchors_preset = 8
@@ -31,15 +33,42 @@ grow_horizontal = 2
 grow_vertical = 2
 flat = true
 
+[node name="StatsLabel" type="Label" parent="." unique_id=45225058]
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = 19.0
+offset_top = 21.0
+offset_right = 43.0
+offset_bottom = 27.0
+grow_horizontal = 2
+grow_vertical = 2
+text = "STATS"
+label_settings = ExtResource("5_m0fkg")
+horizontal_alignment = 1
+
+[node name="StatsButton" type="Button" parent="StatsLabel" unique_id=677014410]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -1.0
+offset_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+flat = true
+
 [node name="HelpLabel" type="Label" parent="." unique_id=1866401660]
 anchors_preset = 8
 anchor_left = 0.5
 anchor_top = 0.5
 anchor_right = 0.5
 anchor_bottom = 0.5
-offset_left = 23.0
+offset_left = 44.0
 offset_top = 21.0
-offset_right = 63.0
+offset_right = 68.0
 offset_bottom = 27.0
 grow_horizontal = 2
 grow_vertical = 2
@@ -82,5 +111,6 @@ grow_vertical = 2
 flat = true
 
 [connection signal="pressed" from="ResumeLabel/ResumeButton" to="." method="_on_resume_button_pressed"]
+[connection signal="pressed" from="StatsLabel/StatsButton" to="." method="_on_stats_button_pressed"]
 [connection signal="pressed" from="HelpLabel/HelpButton" to="." method="_on_help_button_pressed"]
 [connection signal="pressed" from="ExitLabel/ExitButton" to="." method="_on_exit_button_pressed"]

@@ -2,6 +2,9 @@ class_name Main
 extends Node2D
 
 signal menu_pressed
+signal round_finished(level: Player.AI_Level)
+signal round_won(level: Player.AI_Level)
+signal save_stats
 
 @export var card_scene: PackedScene
 
@@ -54,7 +57,6 @@ var _target_player: int:
 			_player_selection.position = _players[_target_player].position
 		
 var _target_type: int
-
 
 func _ready() -> void:
 	_players = [$Player0, $Player1, $Player2, $Player3]
@@ -424,6 +426,7 @@ func round_over() -> void:
 	var game_winners : Array[int]
 	var game_winners_str := ""
 	for p in _players:
+		round_finished.emit(p.ai_level)
 		if p.is_active() and p.hand.get_child(0).type == max_type:
 			p.score += 1
 			p.total_score += 1
@@ -431,11 +434,13 @@ func round_over() -> void:
 				round_winners_str += ", "
 			round_winners_str += str(p.idx)
 			round_winners.append(p.idx)
+			round_won.emit(p.ai_level)
 			if p.score >= _max_score:
 				if !game_winners_str.is_empty():
 					game_winners_str += ", "
 				game_winners_str += str(p.idx)
 				game_winners.append(p.idx)
+	save_stats.emit()
 	if !game_winners.is_empty():
 		flash_winners(game_winners)
 		if 0 in game_winners:

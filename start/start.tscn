@@ -74,15 +74,42 @@ grow_horizontal = 2
 grow_vertical = 2
 flat = true
 
+[node name="StatsLabel" type="Label" parent="." unique_id=906619070]
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = 19.0
+offset_top = 37.0
+offset_right = 43.0
+offset_bottom = 43.0
+grow_horizontal = 2
+grow_vertical = 2
+text = "STATS"
+label_settings = ExtResource("2_s0q5u")
+horizontal_alignment = 1
+
+[node name="StatsButton" type="Button" parent="StatsLabel" unique_id=1897316701]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -1.0
+offset_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+flat = true
+
 [node name="HelpLabel" type="Label" parent="." unique_id=1412098535]
 anchors_preset = 8
 anchor_left = 0.5
 anchor_top = 0.5
 anchor_right = 0.5
 anchor_bottom = 0.5
-offset_left = 23.0
+offset_left = 44.0
 offset_top = 37.0
-offset_right = 63.0
+offset_right = 68.0
 offset_bottom = 43.0
 grow_horizontal = 2
 grow_vertical = 2
@@ -141,4 +168,5 @@ offset = Vector2(4.5, 5.5)
 
 [connection signal="pressed" from="PlayLabel/PlayButton" to="." method="_on_play_button_pressed"]
 [connection signal="pressed" from="SettingsLabel/SettingsButton" to="." method="_on_settings_button_pressed"]
+[connection signal="pressed" from="StatsLabel/StatsButton" to="." method="_on_stats_button_pressed"]
 [connection signal="pressed" from="HelpLabel/HelpButton" to="." method="_on_help_button_pressed"]

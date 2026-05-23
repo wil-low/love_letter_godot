@@ -3,6 +3,7 @@ extends Node2D
 @onready var _start: Start = $Start
 @onready var _main: Main = $Main
 @onready var _level_selector: LevelSelector = $LevelSelector
+@onready var _stats: Stats = $Stats
 @onready var _help: Node2D = $Help
 @onready var _pause: Node2D = $Pause
 
@@ -54,6 +55,7 @@ func save_config() -> void:
 	for i in range(4):
 		config.set_value("AI_Level", "P" + str(i), _main._players[i].ai_level)
 	config.set_value("Gameplay", "speed", _level_selector._speed_level.level)
+	config.set_value("Gameplay", "totals_and_wins", _stats._totals_and_wins)
 	config.save(OPTIONS_FILE)
 
 
@@ -72,6 +74,9 @@ func load_config() -> bool:
 
 	var speed = clamp(config.get_value("Gameplay", "speed"), SpeedLevel._min_speed, SpeedLevel._max_speed)
 	_level_selector.set_levels(_main._players, speed)
+	_stats._totals_and_wins = config.get_value("Gameplay", "totals_and_wins", [])
+	if _stats._totals_and_wins == []:
+		_stats._on_reset_button_pressed()
 	return true
 
 
@@ -109,6 +114,22 @@ func _on_pause_exit_pressed() -> void:
 	_start.show()
 
 
+func _on_start_stats_pressed() -> void:
+	_stats.invoker = _start
+	_stats.update_labels()
+	_stats.show()
+
+
+func _on_stats_back_pressed() -> void:
+	_stats.invoker.show()
+
+
+func _on_pause_stats_pressed() -> void:
+	_stats.invoker = _pause
+	_stats.update_labels()
+	_stats.show()
+
+
 func _on_start_help_pressed() -> void:
 	_help.invoker = _start
 	_help.show()
@@ -121,3 +142,11 @@ func _on_help_back_pressed() -> void:
 func _on_pause_help_pressed() -> void:
 	_help.invoker = _pause
 	_help.show()
+
+
+func _on_round_won(level: Player.AI_Level) -> void:
+	_stats._totals_and_wins[2 * level] = clampi(_stats._totals_and_wins[2 * level] + 1, 0, 99999)
+
+
+func _on_round_finished(level: Player.AI_Level) -> void:
+	_stats._totals_and_wins[2 * level + 1] = clampi(_stats._totals_and_wins[2 * level + 1] + 1, 0, 99999)

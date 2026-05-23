@@ -16,7 +16,8 @@ enum FrameType {
 	Frame_Colon,
 	Frame_Left,
 	Frame_Right,
-	Frame_Back
+	Frame_Back,
+	Frame_Reset
 }
 
 @export var frame: FrameType = FrameType.Frame_0

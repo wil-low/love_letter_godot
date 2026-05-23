@@ -11,3 +11,4 @@ script = ExtResource("1_276a2")
 
 [node name="Sprite" parent="." unique_id=1239470012 instance=ExtResource("1_vts8j")]
 position = Vector2(3, 2)
+hframes = 16
