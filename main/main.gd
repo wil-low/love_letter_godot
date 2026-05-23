@@ -115,6 +115,8 @@ func _new_game() -> void:
 	
 	
 func _new_round() -> void:
+	_target_player = -1
+	_target_type = Deck.CardType.Unknown
 	_select_other_player.hide()
 	_select_any_player.hide()
 	for p in _players:
