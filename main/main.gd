@@ -219,7 +219,7 @@ func _on_card_played(card: Card) -> void:
 		_select_any_player.visible = p._state == Player.State.INPUT_ANY_P
 	if p._state == Player.State.IDLE:
 		await Animator.delay(1)
-		resolve_effect()
+		await resolve_effect()
 
 
 func _on_target_player_selected(idx: int) -> void:
@@ -240,12 +240,12 @@ func _on_target_player_selected(idx: int) -> void:
 							_type_selector.show()
 						Deck.CardType.Priest, Deck.CardType.Baron, Deck.CardType.King:
 							await Animator.delay(1)
-							resolve_effect()
+							await resolve_effect()
 			Player.State.INPUT_ANY_P:
 				if !_players[idx].protected:
 					_target_player = idx
 					_select_any_player.hide()
-					resolve_effect()
+					await resolve_effect()
 
 
 func _on_target_type_selected(type: Deck.CardType) -> void:
@@ -256,7 +256,7 @@ func _on_target_type_selected(type: Deck.CardType) -> void:
 	_table.show()
 	_type_selector.hide()
 	_target_type = type
-	resolve_effect()
+	await resolve_effect()
 
 
 func _on_move_chosen(move: Move) -> void:
@@ -264,13 +264,13 @@ func _on_move_chosen(move: Move) -> void:
 		return
 	await Animator.delay(1)
 	print("My " + str(move))
-	_on_card_played(move._played_card)
+	await _on_card_played(move._played_card)
 	if move._target_player != -1:
 		await Animator.delay(1)
-		_on_target_player_selected(move._target_player)
+		await _on_target_player_selected(move._target_player)
 	if move._target_type != Deck.CardType.Unknown:
 		await Animator.delay(1)
-		_on_target_type_selected(move._target_type)
+		await _on_target_type_selected(move._target_type)
 
 
 func set_inactive(p: Player, reveal_hand: bool = true):
