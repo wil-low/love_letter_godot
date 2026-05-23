@@ -45,6 +45,8 @@ func _ready() -> void:
 		Animator._speed = 0
 		RenderingServer.render_loop_enabled = false
 		Engine.print_to_stdout = false
+		_main.round_finished.disconnect(_on_round_finished)
+		_main.round_won.disconnect(_on_round_won)
 		_main.init_players(42)
 	else:
 		load_config()
