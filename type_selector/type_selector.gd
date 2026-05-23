@@ -23,12 +23,12 @@ func set_selection(type: Deck.CardType) -> void:
 		if c is Card:
 			if type == Deck.CardType.Unknown:
 				if _use_modulate:
-					c.modulate = Color(1, 1, 1, 1)
+					c.modulate.a = 1
 				else:
 					_type_selection.hide()
 			else:
 				if _use_modulate:
-					c.modulate = Color(1.0, 1.0, 1.0, 1.0 if c.type == type else 0.25)
+					c.modulate.a = 1.0 if c.type == type else 0.25
 				elif c.type == type:
 					_type_selection.position = c.position
 					_type_selection.show()

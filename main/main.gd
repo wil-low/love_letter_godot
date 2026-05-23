@@ -179,6 +179,9 @@ func new_turn():
 			for m in valid_moves:
 				print("\t" + str(m))
 			p._state = Player.State.SELECT_CARD
+			var countess_idx := p.countess_restricted()
+			if countess_idx != -1:
+				p.hand.get_child(1 - countess_idx).modulate.a = 0.25
 		else:
 			var valid_moves = find_valid_moves()
 			p.ai_move(valid_moves, _deck._left)
@@ -279,9 +282,10 @@ func set_inactive(p: Player, reveal_hand: bool = true):
 
 
 func resolve_effect() -> void:
+	var p := _players[_cur_player]
+	p.hand.get_child(0).modulate.a = 1
 	if interrupted:
 		return
-	var p = _players[_cur_player]
 	var tp = null if _target_player == -1 else _players[_target_player]
 	p._state = Player.State.IDLE
 	print("resolve_effect for " + 
