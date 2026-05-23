@@ -47,6 +47,7 @@ func _ready() -> void:
 		Engine.print_to_stdout = false
 		_main.round_finished.disconnect(_on_round_finished)
 		_main.round_won.disconnect(_on_round_won)
+		_main.save_stats.disconnect(save_config)
 		_main.init_players(42)
 	else:
 		load_config()
