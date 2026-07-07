@@ -99,7 +99,7 @@ func _on_main_menu_pressed() -> void:
 
 func _on_start_play_pressed() -> void:
 	_main.show()
-	_main.init_players(0)
+	_main.init_players(random_seed if random_seed != 0 else Time.get_ticks_usec())
 
 
 func _on_start_settings_pressed() -> void:
