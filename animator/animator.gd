@@ -70,6 +70,8 @@ func move_card(card: Card, to_global: Vector2, duration: float = 0.5) -> Signal:
 
 
 func flash(loops: int, nodes: Array[Node]) -> Signal:
+	if _speed == 0:
+		return _immediate()
 	if _winner_tween != null and _winner_tween.is_running():
 		_winner_tween.kill()
 	if loops > 0 and !nodes.is_empty(): 
