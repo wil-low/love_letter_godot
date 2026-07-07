@@ -135,6 +135,7 @@ func _on_card_input_event(_viewport: Node, event: InputEvent, _shape_idx: int, c
 				var countess_idx = countess_restricted()
 				var card_idx = card.get_index()
 				if countess_idx == -1 or countess_idx == card_idx:
+					_state = State.IDLE
 					#hand.remove_child(card)
 					if card_idx == 0:
 						Animator.move_card(hand.get_child(1), global_position)
