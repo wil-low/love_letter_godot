@@ -45,7 +45,7 @@ position = Vector2(50, -31)
 position = Vector2(21, 5)
 
 [node name="Deck" parent="Table" unique_id=535832791 instance=ExtResource("2_pjrb6")]
-position = Vector2(0, -2)
+position = Vector2(-1, -4)
 
 [node name="Marker0" type="Marker2D" parent="Table" unique_id=1314393868]
 position = Vector2(16, 10)

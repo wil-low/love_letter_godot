@@ -38,7 +38,7 @@ const card_names := [
 
 @onready var _main: Sprite2D = $Main
 @onready var _widow: Sprite2D = $Widow
-@onready var _card_counter: Sprite2D = $CardCounter
+@onready var _card_counter: Label = $CardCounter
 
 var _cards: Array[CardType]
 var _widow_cards: Array[CardType]
@@ -75,6 +75,6 @@ func pop(allow_widow: bool) -> Dictionary:
 func update_piles() -> void:
 	_main.visible = !_cards.is_empty()
 	_widow.visible = !_widow_cards.is_empty()
-	#_card_counter.visible = len(_cards) > 0 and len(_cards) < 5
-	#if _card_counter.visible:
-	#	_card_counter.frame = len(_cards)
+	_card_counter.visible = len(_cards) > 0 and len(_cards) < 10
+	if _card_counter.visible:
+		_card_counter.text = str(len(_cards))
