@@ -9,6 +9,8 @@ extends Node2D
 
 @export var random_seed: int = 0
 @export var speed_run: bool = false
+@export var print_memory: bool = false
+@export var print_valid_moves: bool = false
 
 const OPTIONS_FILE := "user://options.cfg"
 

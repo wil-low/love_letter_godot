@@ -158,10 +158,11 @@ func deal_card(p: Player, allow_widow: bool = false) -> void:
 
 func new_turn():
 	print("\nnew_turn for Player " + str(_cur_player) + ", level " + str(_players[_cur_player].ai_level))
-	for p in _players:
-		p.print_memory()
-	for i in range(len(_deck._left)):
-		print("Left " + Deck.card_names[i] + ": " + str(_deck._left[i]))
+	if get_parent().print_memory:
+		for p in _players:
+			p.print_memory()
+		for i in range(len(_deck._left)):
+			print("Left " + Deck.card_names[i] + ": " + str(_deck._left[i]))
 	var p = _players[_cur_player]
 	p.protected = false
 	_other_protected = true
@@ -178,8 +179,9 @@ func new_turn():
 		if p.is_human():
 			var valid_moves = find_valid_moves()
 			p.eval_moves(valid_moves, _deck._left)
-			for m in valid_moves:
-				print("\t" + str(m))
+			if get_parent().print_valid_moves:
+				for m in valid_moves:
+					print("\t" + str(m))
 			p._state = Player.State.SELECT_CARD
 			var countess_idx := p.countess_restricted()
 			if countess_idx != -1:
@@ -263,7 +265,8 @@ func _on_move_chosen(move: Move) -> void:
 	if interrupted:
 		return
 	await Animator.delay(1)
-	print("My " + str(move))
+	if get_parent().print_valid_moves:
+		print("My " + str(move))
 	await _on_card_played(move._played_card)
 	if move._target_player != -1:
 		await Animator.delay(1)

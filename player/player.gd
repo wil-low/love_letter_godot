@@ -148,14 +148,16 @@ func _on_player_input_event(_viewport: Node, event: InputEvent, _shape_idx: int)
 
 
 func ai_move(valid_moves: Array[Move], left_cards: Array[int]) -> void:
-	print("\nPlayer " + str(idx) + " - ai_move: " + str(len(valid_moves)))
+	if get_parent().get_parent().print_valid_moves:
+		print("\nPlayer " + str(idx) + " - ai_move: " + str(len(valid_moves)))
 	var my_move = select_move(valid_moves, left_cards)
 	#hand.remove_child(my_move._played_card)
 	move_chosen.emit(my_move)
 
 
 func select_move(valid_moves: Array[Move], left_cards: Array[int]) -> Move:
-	if ai_level != AI_Level.Level_4:
+	var print_valid_moves: bool = get_parent().get_parent().print_valid_moves
+	if ai_level != AI_Level.Level_4 and print_valid_moves:
 		for m in valid_moves:
 			print("\t" + str(m))
 	match ai_level:
@@ -180,8 +182,9 @@ func select_move(valid_moves: Array[Move], left_cards: Array[int]) -> Move:
 			eval_moves(valid_moves, left_cards)
 			var sum := 0
 			for m in valid_moves:
-				print("\t" + str(m))
 				sum += m._score
+				if print_valid_moves:
+					print("\t" + str(m))
 			if sum == 0:
 				sum = 1
 			var rmove := randi() % sum
