@@ -38,11 +38,11 @@ func _ready() -> void:
 			Player.AI_Level.Level_4
 			]
 			
-	for i in range(4):
+	for i in 4:
 		_main._players[i].ai_level = levels[i]
 
 	if speed_run:
-		for i in range(AudioServer.bus_count):
+		for i in AudioServer.bus_count:
 			AudioServer.set_bus_mute(i, true)
 		Animator._speed = 0
 		RenderingServer.render_loop_enabled = false
@@ -57,7 +57,7 @@ func _ready() -> void:
 
 func save_config() -> void:
 	var config = ConfigFile.new()
-	for i in range(4):
+	for i in 4:
 		config.set_value("AI_Level", "P" + str(i), _main._players[i].ai_level)
 	config.set_value("Gameplay", "speed", _level_selector._speed_level.level)
 	config.set_value("Gameplay", "totals_and_wins", _stats._totals_and_wins)
@@ -72,7 +72,7 @@ func load_config() -> bool:
 	if err != OK:
 		return false
 
-	for i in range(4):
+	for i in 4:
 		var ai_level = config.get_value("AI_Level", "P" + str(i))
 		if ai_level != null:
 			_main._players[i].ai_level = ai_level
@@ -86,7 +86,7 @@ func load_config() -> bool:
 
 
 func _on_level_selector_levels_changed(levels: Array[Player.AI_Level], speed: int) -> void:
-	for i in range(len(_main._players)):
+	for i in _main._players.size():
 		_main._players[i].ai_level = levels[i]
 	Animator._speed = pow(2, speed)
 	save_config()

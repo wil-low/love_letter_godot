@@ -50,7 +50,7 @@ func prepare(player_count: int) -> void:
 	_widow_cards = []
 	update_piles()
 	_left = []
-	for i in range(card_count.size()):
+	for i in card_count.size():
 		_left.append(card_count[i])
 		for j in range(card_count[i]):
 			_cards.append(i)
@@ -58,7 +58,7 @@ func prepare(player_count: int) -> void:
 	#while len(_cards) > 6:
 	#	_cards.pop_front()
 	var widow_count = 1 if player_count != 2 else 3
-	for i in range(widow_count):
+	for i in widow_count:
 		_widow_cards.append(_cards.pop_front())
 	update_piles()
 

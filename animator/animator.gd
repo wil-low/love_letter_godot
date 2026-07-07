@@ -76,7 +76,7 @@ func flash(loops: int, nodes: Array[Node]) -> Signal:
 		_winner_tween.kill()
 	if loops > 0 and !nodes.is_empty(): 
 		var alpha: float = 0.0
-		for i in range(loops * 2):
+		for i in loops * 2:
 			_winner_tween = create_tween().set_trans(Tween.TRANS_QUAD).set_parallel()
 			for n in nodes:
 				_winner_tween.tween_property(n, "modulate:a", alpha, _d(1))

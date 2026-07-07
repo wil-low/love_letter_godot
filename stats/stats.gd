@@ -21,5 +21,5 @@ func _on_reset_button_pressed() -> void:
 
 
 func update_labels() -> void:
-	for i in range(len(_levels)):
+	for i in _levels.size():
 		_levels[i].text = "%5d  %s  %-5d" % [_totals_and_wins[2 * i], LABELS[i], _totals_and_wins[2 * i + 1]]

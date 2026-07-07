@@ -126,7 +126,7 @@ func _new_round() -> void:
 		p.active = true
 		p._inactive.visible = false
 		p.hand.modulate.a = 1.0
-		for i in range(len(p._memory)):
+		for i in p._memory.size():
 			p.update_memory(i)
 	discard(_table)
 	for p in _players:
@@ -161,7 +161,7 @@ func new_turn():
 	if get_parent().print_memory:
 		for p in _players:
 			p.print_memory()
-		for i in range(len(_deck._left)):
+		for i in _deck._left.size():
 			print("Left " + Deck.card_names[i] + ": " + str(_deck._left[i]))
 	var p = _players[_cur_player]
 	p.protected = false
@@ -503,7 +503,7 @@ func find_valid_moves() -> Array[Move]:
 		move = Move.new(cards[countess_idx], countess_idx)
 		result.append(move)
 	else:
-		for i in range(len(cards)):
+		for i in cards.size():
 			var type = cards[i].type
 			match type:
 				Deck.CardType.Guard:

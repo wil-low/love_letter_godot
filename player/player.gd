@@ -105,7 +105,7 @@ func clear_hand() -> void:
 func print_memory() -> void:
 	var s := "Player " + str(idx) + " memory:  "
 	if is_active():
-		for i in range(len(_memory)):
+		for i in _memory.size():
 			if idx == i:
 				s+= "   " + str(i) + ":         "
 			else:

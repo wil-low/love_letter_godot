@@ -37,5 +37,5 @@ func _on_right_button_pressed() -> void:
 func update_pages() -> void:
 	_left_button.visible = _active_page > 0
 	_right_button.visible = _active_page < _pages.get_child_count() - 1
-	for i in range(_pages.get_child_count()):
+	for i in _pages.get_child_count():
 		_pages.get_child(i).visible = i == _active_page
