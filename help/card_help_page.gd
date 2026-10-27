@@ -11,6 +11,12 @@ extends Node2D
 		if Engine.is_editor_hint():
 			_card.frame = card_type
 
+@export var show_card: bool = true:
+	set(value):
+		show_card = value
+		if Engine.is_editor_hint():
+			_card.visible = show_card
+
 @export var card_name: String:
 	set(value):
 		card_name = value
@@ -26,5 +32,6 @@ extends Node2D
 
 func _ready() -> void:
 	_card.frame = card_type
+	_card.visible = show_card
 	_name.text = card_name
 	_description.text = card_description

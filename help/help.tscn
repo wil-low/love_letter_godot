@@ -26,6 +26,65 @@ offset_bottom = 48.0
 
 [node name="Pages" type="Node2D" parent="." unique_id=187508409]
 
+[node name="About" parent="Pages" unique_id=1000000001 instance=ExtResource("1_kcg8g")]
+visible = false
+show_card = false
+card_name = "About"
+card_description = "Deduction card game.
+16 cards, 2-4 players.
+One card in hand each."
+
+[node name="Deck" parent="Pages" unique_id=1000000002 instance=ExtResource("1_kcg8g")]
+visible = false
+show_card = false
+card_name = "Deck"
+card_description = "Guard x5
+Priest, Baron, Handmaid, Prince x2
+King, Countess, Princess x1 each"
+
+[node name="Setup" parent="Pages" unique_id=1000000003 instance=ExtResource("1_kcg8g")]
+visible = false
+show_card = false
+card_name = "Setup"
+card_description = "1 card is set aside unseen (3 for 2 players).
+Only Prince draws from it."
+
+[node name="Turn" parent="Pages" unique_id=1000000004 instance=ExtResource("1_kcg8g")]
+visible = false
+show_card = false
+card_name = "Turn"
+card_description = "Draw a card, play one of the two you hold, resolve its effect."
+
+[node name="Deduction" parent="Pages" unique_id=1000000005 instance=ExtResource("1_kcg8g")]
+visible = false
+show_card = false
+card_name = "Deduction"
+card_description = "Played cards are face up. Remember what others have seen and what is left."
+
+[node name="Elimination" parent="Pages" unique_id=1000000006 instance=ExtResource("1_kcg8g")]
+visible = false
+show_card = false
+card_name = "Elimination"
+card_description = "Card effects knock players out of the round. Out players reveal their hand."
+
+[node name="Round End" parent="Pages" unique_id=1000000007 instance=ExtResource("1_kcg8g")]
+visible = false
+show_card = false
+card_name = "Round End"
+card_description = "The round ends when only one player is left or the deck is empty."
+
+[node name="Scoring" parent="Pages" unique_id=1000000008 instance=ExtResource("1_kcg8g")]
+visible = false
+show_card = false
+card_name = "Scoring"
+card_description = "Highest card among players still in the round wins the point. Ties share."
+
+[node name="Game End" parent="Pages" unique_id=1000000009 instance=ExtResource("1_kcg8g")]
+visible = false
+show_card = false
+card_name = "Game End"
+card_description = "First to win 6 (2 players), 5 (3), or 4 (4) rounds wins the game."
+
 [node name="Guard" parent="Pages" unique_id=287543303 instance=ExtResource("1_kcg8g")]
 visible = false
 card_type = 0
@@ -69,6 +128,7 @@ card_name = "Countess"
 card_description = "   This card has no effect. You must play Countess if you have King or Prince in your hand."
 
 [node name="Princess" parent="Pages" unique_id=240639461 instance=ExtResource("1_kcg8g")]
+visible = false
 card_type = 7
 card_name = "Princess"
 card_description = "   If you either play or discard the Princess for any reason, you are immediately out of the round."
