@@ -56,13 +56,15 @@ func _test_a() -> void:
 	add_child(_players_box)
 
 	# The state left by the King swap in Test B: our own hand is [Princess, Guard],
-	# our memory of the rival points at a Guard - which is TRUE.
-	await scenario("memory of rival = Guard", Deck.CardType.Guard)
+	# our memory of the rival points at a Guard - which is TRUE and not guessable,
+	# so the card-count heuristic must take over (Princess is in our own hand)
+	await scenario("memory of rival = Guard", Deck.CardType.Guard, false)
 	# The "stale memory" hypothesis: the rival is believed to hold the Princess.
-	await scenario("memory of rival = Princess", Deck.CardType.Princess)
+	# The Guard check does NOT cure this one - a known Princess still scores 50 * 7 = 350.
+	await scenario("memory of rival = Princess", Deck.CardType.Princess, true)
 
 
-func scenario(title: String, mem: Deck.CardType) -> void:  # coroutine (awaits frames)
+func scenario(title: String, mem: Deck.CardType, expect_princess: bool) -> void:  # coroutine (awaits frames)
 	print("\n--- " + title + " ---")
 	var p0 := make_player(0, Player.AI_Level.Level_4)
 	var p1 := make_player(1, Player.AI_Level.Level_1)
@@ -87,11 +89,10 @@ func scenario(title: String, mem: Deck.CardType) -> void:  # coroutine (awaits f
 		print("  " + str(m))
 	var chosen: Move = p0.select_move(moves, left)
 	print("AI plays: " + str(chosen))
-	check(
-		chosen._played_card.type == Deck.CardType.Guard
-		and chosen._target_player == 1
-		and chosen._target_type == Deck.CardType.Princess,
-		"level 4 plays Guard and declares Princess - the only Princess in the deck is in its own hand")
+	var declares_princess: bool = chosen._target_type == Deck.CardType.Princess
+	check(declares_princess == expect_princess,
+		"AI " + ("declares Princess (memory says Princess, score 350)" if expect_princess
+			else "does NOT declare Princess - the count heuristic drops it to 0"))
 
 	p0.clear_hand()
 	p1.clear_hand()
@@ -188,17 +189,23 @@ func _test_b() -> void:
 	var sum := 0
 	for m in moves:
 		sum += m._score
-	print("sum of all move scores = " + str(sum))
-	check(sum == 0, "every legal move scores 0 (GOOD * Deck.CardType.Guard == 0)")
+	print("sum of all move scores = " + str(sum) + ", _left = " + str(main._deck._left))
+	check(sum > 0, "card-count heuristic is used again (a Guard memory no longer blocks it)")
 	check(moves[-1]._target_type == Deck.CardType.Princess,
-		"the last generated move is the Princess guess (Princess is the last enum value)")
+		"the last generated move is still the Princess guess (Princess is the last enum value)")
+	var princess_score := 0
+	for m in moves:
+		if m._target_type == Deck.CardType.Princess:
+			princess_score = m._score
+	check(princess_score == 0,
+		"the Princess guess scores 0 - left_cards[Princess] minus the copy in hand")
 
 	var chosen: Move = p0.select_move(moves, main._deck._left)
 	print("AI plays: " + str(chosen))
 	check(chosen._played_card.type == Deck.CardType.Guard
 		and chosen._target_player == 1
-		and chosen._target_type == Deck.CardType.Princess,
-		"level 4 plays Guard on P1 and declares Princess - impossible, P0 holds the Princess")
+		and chosen._target_type != Deck.CardType.Princess,
+		"level 4 plays Guard on P1 without declaring the Princess it holds itself")
 
 	# --- let the AI play it for real and watch the (failed) resolution ---
 	# P0 started as Human, so Main never connected its move_chosen handler.
@@ -218,9 +225,9 @@ func _test_b() -> void:
 		+ "], P1 real card was [" + Deck.card_names[p1_card_before] + "], P1 still in play: "
 		+ str(p1.active))
 	check(p1.active
-		and _ai_chosen._target_type == Deck.CardType.Princess
+		and _ai_chosen._target_type != Deck.CardType.Princess
 		and p1_card_before == Deck.CardType.Guard,
-		"the guess misses, the rival survives, P0 keeps the Princess")
+		"the rival is not accused of holding the Princess and survives")
 
 
 # ----------------------------------------------------------------------------------------

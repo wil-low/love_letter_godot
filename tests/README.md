@@ -12,7 +12,18 @@ Files
 - `fake_deck.gd` - `extends Deck`, deals a scripted card order; installed at runtime with
   `node.set_script(...)`, so no production file is touched
 
-Result: **all checks pass** - the behaviour is reproducible, and it is *not* a stale memory.
+Result: **all checks pass** with the fix applied - the behaviour is reproducible, and it was
+*not* a stale memory.
+
+The fix applied (`player.gd`, Guard branch of `eval_moves`):
+
+    -                if mem != Deck.CardType.Unknown:
+    +                # Guard is not a guessable type (find_valid_moves guesses Priest..Princess),
+    +                # so a Guard memory can never be matched - fall through to the card-count heuristic
+    +                if mem != Deck.CardType.Unknown and mem != Deck.CardType.Guard:
+
+The assertions below describe the post-fix expectations; the buggy behaviour is documented
+by the printed score tables ("the last generated move is still the Princess guess").
 
 Test B - the exact sequence reported
 ------------------------------------
@@ -45,6 +56,11 @@ Why the AI then announces "Princess"
    `Priest .. Princess`, so the **last** generated move is the Princess guess.
 
 => zero-score fallback + move ordering = "declare Princess", deterministically.
+
+With the Guard check in place, the same turn scores `Princess = 0`
+(`left_cards[Princess]` minus the copy in hand) and `sum = 40`, so the weighted random
+picks one of Priest / Baron / Handmaid / Prince / Countess - the Princess declaration is
+gone. Measured in Test B: `AI plays: Guard, tgt 1, Prince`, rival survives.
 
 Test A isolates the decision (no deck, no animations):
 - memory of rival = Guard -> all 7 guesses score 0 -> the last one (Princess) is picked;

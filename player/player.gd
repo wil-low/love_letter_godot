@@ -223,7 +223,9 @@ func eval_moves(valid_moves: Array[Move], left_cards: Array[int]):
 		m._score = EvalScore.LOSE
 		match m._played_card.type:
 			Deck.CardType.Guard:
-				if mem != Deck.CardType.Unknown:
+				# Guard is not a guessable type (find_valid_moves guesses Priest..Princess),
+				# so a Guard memory can never be matched - fall through to the card-count heuristic
+				if mem != Deck.CardType.Unknown and mem != Deck.CardType.Guard:
 					if mem == m._target_type:
 						m._score = EvalScore.GOOD * m._target_type
 				else:
