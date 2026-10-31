@@ -19,7 +19,7 @@ var ai_level: Player.AI_Level:
 			else:
 				_level.text = str(value)
 		_left_button.visible = value > (Player.AI_Level.Human if player_num == 0 else Player.AI_Level.Disabled)
-		_right_button.visible = value < Player.AI_Level.Level_4
+		_right_button.visible = value < Player.AI_Level.Level_5
 
 
 func _ready():
@@ -41,5 +41,5 @@ func _on_left_button_pressed() -> void:
 func _on_right_button_pressed() -> void:
 	if ai_level == Player.AI_Level.Disabled:
 		ai_level = (Player.AI_Level.Human if player_num == 0 else Player.AI_Level.Level_1)
-	elif ai_level < Player.AI_Level.Level_4:
+	elif ai_level < Player.AI_Level.Level_5:
 		ai_level += 1

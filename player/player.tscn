@@ -39,7 +39,7 @@ label_settings = ExtResource("4_g6k8r")
 position = Vector2(-4, 15)
 texture = ExtResource("5_qjkh3")
 offset = Vector2(1.5, 1)
-hframes = 4
+hframes = 5
 
 [node name="Area2D" type="Area2D" parent="." unique_id=54516060]
 

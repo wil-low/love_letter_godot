@@ -80,7 +80,8 @@ func load_config() -> bool:
 	var speed = clamp(config.get_value("Gameplay", "speed"), SpeedLevel._min_speed, SpeedLevel._max_speed)
 	_level_selector.set_levels(_main._players, speed)
 	_stats._totals_and_wins = config.get_value("Gameplay", "totals_and_wins", [])
-	if _stats._totals_and_wins == []:
+	# drop stats saved for a previous set of AI levels
+	if _stats._totals_and_wins.size() != 2 * Player.AI_Level.size():
 		_stats._on_reset_button_pressed()
 	return true
 

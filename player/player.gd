@@ -11,7 +11,8 @@ enum AI_Level {
 	Level_1,
 	Level_2,
 	Level_3,
-	Level_4
+	Level_4,
+	Level_5
 }
 
 enum State {
@@ -157,10 +158,16 @@ func ai_move(valid_moves: Array[Move], left_cards: Array[int]) -> void:
 
 func select_move(valid_moves: Array[Move], left_cards: Array[int]) -> Move:
 	var print_valid_moves: bool = get_parent().get_parent().print_valid_moves
-	if ai_level != AI_Level.Level_4 and print_valid_moves:
+	var strategy: int = ai_level
+	if strategy == AI_Level.Level_5:
+		# Level_5 has no strategy of its own - it picks Level_1 - Level_4 at random every turn
+		strategy = AI_Level.Level_1 + randi() % (AI_Level.Level_4 - AI_Level.Level_1 + 1)
+		if print_valid_moves:
+			print("\tLevel_5 picks strategy " + str(strategy))
+	if strategy != AI_Level.Level_4 and print_valid_moves:
 		for m in valid_moves:
 			print("\t" + str(m))
-	match ai_level:
+	match strategy:
 		AI_Level.Level_1:
 			# first valid move
 			return valid_moves[0]
