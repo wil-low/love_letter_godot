@@ -205,6 +205,13 @@ func _on_card_played(card: Card) -> void:
 	card.reparent(_table)
 	card.position = _table.to_local(card.global_position)
 	_played_card = card.type
+	# A belief about the playing player names the card he was holding before he drew, and an
+	# observer sees only the played card, never which of his two cards it was. A play of the
+	# believed type therefore makes the belief's referent ambiguous - and mostly kills it: it
+	# stays true only when the player held both copies of that type and played the one he has
+	# just drawn (1 561 of 16 369 such plays, ~9.5%, see tests/prince_memory_sim.py). Clearing
+	# on the played type is the sound inference; keeping the belief would mean knowing which
+	# slot the card came from, which no seat can see.
 	for p in _players:
 		if p.idx != _cur_player and p._memory[_cur_player] == _played_card:
 			p.update_memory(_cur_player)  # played card is not in hand anymore
@@ -278,6 +285,12 @@ func _on_move_chosen(move: Move) -> void:
 
 func set_inactive(p: Player, reveal_hand: bool = true):
 	p.active = false
+	# The seat is out of the round: beliefs about its card are worthless (no move can
+	# target it any more), and its own beliefs will never guide a move again.
+	for pl in _players:
+		pl.update_memory(p.idx)
+	for j in 4:
+		p._memory[j] = Deck.CardType.Unknown
 	_inactive_audio_player.play()
 	if reveal_hand:
 		await Animator.reveal_hand(p, false)
@@ -343,9 +356,12 @@ func resolve_effect() -> void:
 					await set_inactive(tp, false)
 				else:
 					await deal_card(tp, true)
+					# The target's card left the game, so every belief about him is dead.
+					# The Prince player's own hand card never changed, so beliefs about him
+					# stay valid; when he Prince-plays himself (tp == p) his own card did
+					# leave, and this loop covers that case too.
 					for pl in _players:
-						if pl.idx != _cur_player:
-							pl.update_memory(_cur_player)  # hand is unknown now
+						pl.update_memory(tp.idx)  # hand is unknown now
 				print("Prince: discard and redraw")
 			Deck.CardType.King:
 				var my_card: Card = p.hand.get_child(0)

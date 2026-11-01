@@ -47,8 +47,9 @@ zero-score fallback - which is the Princess declaration reported by players. Ver
 `Test B`: the same turn now scores `sum = 40` with `Princess = 0` and the AI picks
 Baron/Handmaid/Prince.
 
-The four issues below are what remains (section 5 is kept for completeness - it turned out
-to be the model working as designed).
+The four issues below are what remains - section 4 is now fixed (the fix and its tests are
+recorded there), sections 1, 2 and 3 are still open, and section 5 is kept for completeness -
+it turned out to be the model working as designed.
 
 
 1. A stale belief about the Princess is played greedily (severity H)
@@ -215,73 +216,122 @@ case either (`main.gd:505-527`), so the AI is never offered that move; the human
 human can play it.
 
 
-4. Prince clears the wrong memory slot; eliminations clear nothing (severity M, H for level 4)
+4. The Prince cleared the belief about its own player, not about the rival whose hand
+    changed (severity H for level 4) - FIXED
 ---------------------------------------------------------------------------------------------
 
-Code (`main.gd:338-348`):
+The rule the memory model implies, and which the King branch already implements correctly
+(`main.gd:369-376` swaps the two traders' beliefs and the third parties' slots):
+
+> `_memory[i][j] = T` means "player i believes **player j's hand card** is T".
+> A belief must be cleared (or moved) exactly when **that card** leaves j's hand.
+
+Two places in `main.gd` broke it:
+
+1. **Prince cleared the wrong slot** (`main.gd:346-348`). The hand that changes is the
+   target's; the loop cleared beliefs about the Prince player. Exactly right for a
+   self-targeted Prince - which is why the bug survived, the code was written for that case
+   - and inverted for the common one.
+2. **Elimination cleared nothing** (`set_inactive`, `main.gd:279-286`).
+
+**The third one is not a bug, and a "fix" for it is cheating.** `_on_card_played`
+(`main.gd:208-210`) clears every belief about the playing player whose type matches the
+played card. The tempting reading of the rule above is "beliefs name the card at index 0, so
+a player who plays the card he has just drawn has not invalidated them". A seat cannot know
+that: a player holds two cards face-down and turns one face-up, so the observer sees the
+**card**, never the **slot** it came from. If seat 0 believes "seat 1 holds a Handmaid" and
+seat 1 plays a Handmaid, seat 0 cannot tell whether the known card left the hand. The
+inference is probabilistic, and it favours clearing:
+
+- measured over 20 000 four-player games (`tests/prince_memory_sim.py`): 16 369 plays
+  matched a belief and triggered the clear; in **14 808 (90.5%)** the played card *was* the
+  card the belief named, so the clear was required; in **1 561 (9.5%)** the player held both
+  copies and the belief was still true.
+- in the deterministic position of test D the draw pile at seat 1's draw holds 11 cards with
+  exactly one Handmaid in them, so "the play was the duplicate" is a 1-in-11 shot.
+
+Keeping the belief in the 90% case is worse than losing it in the 9% case: a false belief is
+what the level 4 memory branch trusts blindly, at `GOOD * rank` (issue 1). So the shipped
+rule stays as it is. Selecting the played card by index inside `_on_card_played` and clearing
+only then would give every seat information the physical game hides - it was tried, measured,
+and reverted.
+
+How much the two real halves are worth. `tests/repro_prince_memory.tscn` measures the
+positions inside the engine; `tests/prince_memory_sim.py` replays the same rules (scoring
+included) over 20 000 four-player games:
+
+|                                                        | shipped | draft fix below | applied fix |
+|---|---|---|---|
+| Guard plays that are certain misses                      | 257     | 0             | 0           |
+| false Baron beliefs / AI self-eliminations from them     | 97 / 25 | 0 / 0         | 0 / 0       |
+| Guard hit rate                                           | 23.91%  | 23.98%        | 24.37%      |
+| seat 0 round win rate                                    | 25.46%  | 25.49%        | 25.50%      |
+| true belief about the Prince player kept (test B)        | no      | no            | yes         |
+
+- **The Prince target is the real bug.** Test A: seat 0 learns "seat 1 holds a Handmaid"
+  from a Baron tie, seat 2 then Prince-eliminates that Handmaid, and the last Handmaid in
+  the game ends up in seat 0's own hand. The memory branch never consults `_left`, so it
+  pays `GOOD * HANDMAID = 150` for a call that is provably impossible, against 0..5 for
+  every alternative; level 4's weighted pick plays the guaranteed miss in **63%** of 400
+  samples. With the slot cleared the same call scores 0 (the card-count branch: one left,
+  the copy in my hand) and is played in 0% of samples.
+- **The elimination half is housekeeping, not strength.** `find_valid_moves` filters targets
+  on `is_active()`, so a belief about a dead seat is never scored: test C recomputes the
+  score table with the slot cleared and every score is identical. What they do cost is
+  indirect: the Baron-tie propagation loop (`main.gd:330-333`) clones a dead seat's belief
+  onto a live player, and section 1's "don't guess a type pinned in a known hand" guardrail
+  fires on cards that are out of the round (147 of 396 zeroings in the simulation). 8 149
+  such slots existed at decision time over the simulated rounds.
+- **Why the draft fix is not enough:** it adds the clear of the target's slot (right) and
+  keeps the destructive clear of the Prince player's own slot (wrong). The Prince destroys
+  ~9.2 true beliefs per 100 rounds for every ~9.5 stale ones it legitimately removes; with a
+  16-card deck and ~8 plays per round, that is a large share of everything the AI learns.
+  Test B is the deterministic version: seat 0's Priest reveals that seat 2 holds a Handmaid,
+  seat 2 then Princes seat 3 and keeps the Handmaid - the draft clears the stale belief about
+  seat 3 and destroys the true one about seat 2 in the same breath.
+
+Fix applied (two hunks):
 
 ```gdscript
-Deck.CardType.Prince:
-    var type = tp.hand.get_child(0).type
-    await discard(tp.hand)
-    if type == Deck.CardType.Princess:
-        await set_inactive(tp, false)
-    else:
-        await deal_card(tp, true)
-        for pl in _players:
-            if pl.idx != _cur_player:
-                pl.update_memory(_cur_player)  # hand is unknown now
+# Prince, main.gd: the hand that changed is the target's
+     await deal_card(tp, true)
+     for pl in _players:
+-        if pl.idx != _cur_player:
+-            pl.update_memory(_cur_player)  # hand is unknown now
++        pl.update_memory(tp.idx)           # tp's new hand is unknown to everybody
 ```
 
-The hand that changed is the **target's** (`tp` discarded its card and drew a new one),
-but the loop clears beliefs about the **Prince player** (`_cur_player`). Two effects:
-
-1. every belief about `tp` - including the AI's own freshly-revealed one - survives and
-   points at a card that has left the game. This is a genuine stale memory: `_memory[*][tp]`
-   becomes false, and (via issue 1) it is then played greedily.
-2. beliefs about the Prince player are erased for everybody, even though that player's
-   remaining card never changed. Valid information is destroyed every time a Prince is
-   played on somebody else - the AI forgets what it learned with its own Priest.
-
-For self-targeted Prince (`tp.idx == _cur_player`) the line is exactly right, which is why
-the bug survived: the code was written for the self case.
-
-Second half of the issue: `set_inactive` (`main.gd:279-286`) discards the eliminated
-player's hand and never touches memories. Beliefs about dead players stay forever (they are
-inert for targeting, because `find_valid_moves` filters on `is_active()`, but they are read
-by the Baron-tie propagation loop, `main.gd:330-333`, and they survive until the round
-ends).
-
-Fix:
+A self-targeted Prince collapses to the same single clear, since `tp.idx == _cur_player`.
 
 ```gdscript
-    else:
-        await deal_card(tp, true)
-        for pl in _players:
-            pl.update_memory(tp.idx)           # tp's new hand is unknown to everybody
-            if pl.idx != _cur_player:
-                pl.update_memory(_cur_player)  # the Prince player discarded his hand too
+# set_inactive: a seat out of the round has no hand to believe in, and its own beliefs
+# will never guide a move again
+ for pl in _players:
+     pl.update_memory(p.idx)
++for j in 4:
++    p._memory[j] = Deck.CardType.Unknown
 ```
 
-and in `set_inactive`:
-
-```gdscript
-for pl in _players:
-    pl.update_memory(p.idx)                    # a eliminated player has no hand to believe in
-```
-
-(The self-Prince case collapses to a single clear, since `tp.idx == _cur_player`.)
+Both clears are public information: the Prince discards the target's card in the open, and an
+eliminated player's hand is revealed and discarded. Nothing here tells a seat anything it
+could not read off the table.
 
 Reachability note for the "stale Princess" story: the Princess leaves a live player's hand
-only through the King trade, and the King branch rewrites memories correctly
-(`p.update_memory(tp.idx, my_card.type)`, `tp.update_memory(p.idx, their_card.type)`, third
-parties swap, `main.gd:369-376`). Removing the Princess by Prince, by playing it, or by
-losing a Baron/Guard duel eliminates its owner. So a Princess belief attached to a *live*
-rival is normally true; it becomes false through the propagation path
-(`main.gd:330-333`, a Baron tie copies a belief from one player to another, cloning any
-staleness in the source slot) - which requires the staleness created by this issue. That is
-why fixing 4 is what makes issue 1 reachable in real play.
+only through the King trade, and the King branch rewrites memories correctly. Removing the
+Princess by Prince, by playing it, or by losing a Baron/Guard duel eliminates its owner. So
+a Princess belief attached to a *live* rival is normally true, and it travels through the
+propagation loop (`main.gd:330-333`, a Baron tie clones a belief from one player's slot into
+another's). With this fix the two sources of staleness that loop used to amplify are gone:
+the Prince no longer leaves a belief pointing at a card that left the game, and a seat that
+left the round has no belief left to clone. Section 1's deck-accounting guardrail stays
+needed - a belief can still be true for one player and the guess can still be impossible
+when the only copy is pinned in the guesser's own hand.
 
+Verification: `tests/repro_prince_memory.tscn` (A-D assert the behaviour in the engine,
+including test D's posterior for the played-card clear, E replays the two Prince decisions
+under the shipped, draft and applied policies), `tests/smoke_games.tscn` (300 AI-driven
+rounds, 137 eliminations, no script error), and the pre-existing
+`tests/repro_guard_princess.tscn`, which still passes with these changes.
 
 5. `_left` counts widow cards and cards in hands - by design (severity L, was M)
 --------------------------------------------------------------------------------
@@ -404,12 +454,14 @@ Summary
 | 1 | Stale Princess belief scored 350, deck accounting ignored | H | `player.gd:226-235` | Guaranteed-failed "Princess" call, Princess stuck in hand |
 | 2 | `valid_moves[-1]` tie-break | H | `player.gd:195-203` | Every all-zero-score turn becomes a Princess declaration |
 | 3 | `GOOD * m._target_type` (0) | H | `player.gd:230,244,258` | Winning Baron and Princess-killing Prince never played |
-| 4 | Prince clears the Prince player's slot; eliminations clear nothing | M | `main.gd:346-348`, `279-286` | Rival believed to hold a discarded card; Priest knowledge lost |
+| 4 | Memories did not follow the hand card (Prince cleared the Prince player's slot, eliminations cleared nothing, plays cleared on type) | H for level 4 | `main.gd:346-348`, `279-286`, `208-210` | Guaranteed-failed Guard call paid 150 and played 63% of the time; Priest knowledge destroyed. **Fixed**, `tests/repro_prince_memory.tscn` |
 | 5 | `_left` counts widow + hand cards = correct pool; only pinned copies are missing | L | `deck.gd:48-63`, `player.gd:232-237` | Guaranteed-failed Guard guesses score 5 instead of 0 (fix folded into 1) |
 
 Sections 1 and 2 are the two halves of the reported "level 4 plays Guard and says
 Princess"; section 0 (the Guard-memory check) removed its most frequent trigger, sections 1
-and 2 remove the remaining triggers, sections 3 and 4 are the score/accounting work that
-makes level 4's play match the scoring table it already prints, and section 5 turned out to
-be the counting model working as designed (`_left` is the exact posterior pool for a Guard
-guess) - downgraded to L, with the widow deliberately kept hidden from the AI.
+and 2 remove the remaining triggers, section 3 is the score/accounting work that makes
+level 4's play match the scoring table it already prints, section 4 is fixed (beliefs are
+cleared and moved with the hand card they name, and the tests in `tests/README.md` pin that
+down), and section 5 turned out to be the counting model working as designed (`_left` is the
+exact posterior pool for a Guard guess) - downgraded to L, with the widow deliberately kept
+hidden from the AI.

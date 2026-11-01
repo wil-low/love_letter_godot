@@ -99,3 +99,93 @@ Conclusions recorded in section 5:
 - `pinned_sub` (subtract the copies the AI has pinned with a Priest) is the legitimate gap,
   and it is the guardrail used by the section 1 fix: in the last third of a round the
   current code spends ~40% of its Guard guesses on a type it knows is in a known hand.
+
+## tests/repro_prince_memory.tscn — ai_memory_open_issues.md issue 4 (regression suite)
+
+The rule the fix in `main.gd` implements:
+
+> **a memory slot `[i][j]` names player `j`'s *hand card*, so a belief must be cleared (or
+> moved) exactly when that card leaves `j`'s hand - using only what is on the table**
+
+Test D is the boundary of that rule: a play is visible as a *card*, not as a *slot*, so a
+type-matching play clears the belief about the playing player even when the player kept the
+believed copy (90.5% of such plays really do kill the belief). Keying the clear on the played
+card's index would preserve the remaining 9.5% by giving every seat the contents of a
+player's hand.
+
+Tests **A-D** assert the fixed behaviour in the production engine; **E** measures what the
+two older rules cost. Four seats are driven by hand (levels flipped to Human after
+`init_players`) with a scripted deck, so every assertion is deterministic. Nothing is
+patched - the suite runs the production scripts, and the two older rules are re-applied by
+hand (from a pre-Prince snapshot) only in test E.
+
+- **A** seat 0 learns "seat 1 holds a Handmaid" from a Baron tie, seat 2 then plays a
+  Prince on seat 1 (the Handmaid leaves the game, seat 1 draws a fresh card).
+  `main.gd:346-348` used to keep that belief, and at seat 0's level 4 decision the deck has
+  one Handmaid left and it is in seat 0's own hand, so the call is provably impossible.
+  Now: the Prince clears the belief about its target, the memory branch pays nothing, the
+  call scores 0 via the card-count branch, and sampling `select_move()` plays it **0%** of
+  400 samples (before the fix: `GOOD * HANDMAID = 150`, 63% of picks, against 0..5 for
+  every alternative).
+- **B** seat 0 reveals seat 2's card (a Handmaid) with its own Priest; seat 2 then uses a
+  Prince on seat 3, keeping the Handmaid. Seat 2's hand card never changed, so the belief
+  about him is preserved, while seat 1's belief about seat 3 (the target, whose card did
+  leave) is cleared.
+- **C** seat 2 kills seat 1 with a Guard. `set_inactive` now clears beliefs about the
+  eliminated seat everywhere (and the eliminated seat's own array), so nothing is left that
+  `main.gd:330-333` (Baron-tie propagation) could clone onto a live player. The score table
+  is shown to be identical with and without those slots - `eval_moves` filters targets by
+  `is_active()`, so the zombie slots never carried a score.
+- **D** seat 1's hand card is a Handmaid and seat 0 believes exactly that; seat 1 then draws
+  the second Handmaid and plays it. The engine drops seat 0's true belief - and the test
+  shows that is the sound inference, because a seat sees the **card** that was played, never
+  the **slot** it came from: the draw pile at seat 1's draw has 11 cards with exactly one
+  Handmaid, so "he played the duplicate and still holds the card you believed in" is a 1-in-11
+  shot. Measured over 20 000 games, 90.5% of type-matching plays *are* the card the belief
+  named. A King play and a Guard play that match no belief clear nothing, and seat 1's next
+  play - the Handmaid that is his hand card - finds the slot already empty.
+  (An earlier version of the fix keyed the clear on `card.get_index()`, which preserves the
+  9% case by letting every seat see which slot a card came from. Tried, measured, reverted:
+  that information is not on the table.)
+- **E** replays the same two decisions under each policy:
+
+  | policy | impossible call (A) | "seat 2 holds a Handmaid" (B) |
+  |---|---|---|
+  | shipped | 150, played in 63% of picks | destroyed |
+  | doc_fix (the issue 4 draft) | 0, never played | destroyed |
+  | what `main.gd` does now | 0, never played | preserved |
+
+```
+godot --headless --path . tests/repro_prince_memory.tscn
+echo $?   # 0 = all checks passed, 1 = a check failed
+```
+
+## tests/smoke_games.tscn — full games with every seat on the AI
+
+Plays whole games in the engine with all four seats on the AI (levels 4/4/3/2, animations
+at speed 0), and asserts that the loop keeps producing rounds and eliminations - the
+bookkeeping added by the issue 4 fix touches `set_inactive`, the Prince branch and every
+card play, so this is the "nothing broke" check. Eliminations are counted by watching seats
+flip from active to inactive (`main.gd` calls `Player.set_inactive` directly; the
+`defence_failed` / `self_eliminated` signals belong to the human input path).
+
+    rounds played: 300, games: 10, eliminations: 137, no script error
+
+```
+godot --headless --path . tests/smoke_games.tscn
+echo $?   # 0 = the games kept flowing, 1 = they stalled / no elimination
+```
+
+## tests/prince_memory_sim.py — headless model used for the statistics
+
+A Python model of the same rules (deal, play, resolve, memory bookkeeping, `eval_moves`
+scoring and level 4's weighted `select_move`) that runs the shipped / draft / applied memory
+policies over thousands of games and reports Guard hit rate, plays that are certain misses,
+false Baron beliefs, AI self-eliminations, zombie belief slots, valid beliefs destroyed by a
+Prince, plays whose type matched a belief and whether the played card was the card the
+belief named (90.5% / 9.5%), and round win rates. It is the tool behind the aggregate numbers
+in section 4 of
+`ai_memory_open_issues.md`; the Godot suites above are the deterministic assertions.
+
+    python3 tests/prince_memory_sim.py 20000   # 4-player games
+    python3 tests/prince_memory_sim.py 2000 3  # 3-player games
