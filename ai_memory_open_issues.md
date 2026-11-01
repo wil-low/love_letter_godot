@@ -48,7 +48,9 @@ zero-score fallback - which is the Princess declaration reported by players. Ver
 Baron/Handmaid/Prince.
 
 The four issues below are what remains - section 4 is now fixed (the fix and its tests are
-recorded there), sections 1, 2 and 3 are still open, and section 5 is kept for completeness -
+recorded there), sections 1 and 2 are still open, section 3 turned out to rest on a false
+premise (`Deck.CardType.Unknown` is 8, not 0, so the score is 400, not 0) and is downgraded
+to L, and section 5 is kept for completeness -
 it turned out to be the model working as designed.
 
 
@@ -72,8 +74,9 @@ Deck.CardType.Guard:
 ```
 
 The memory branch never consults the deck. If `_memory[rival] == Princess` while the AI
-itself holds the Princess, the guess is impossible, yet it scores 350 - the highest number
-in the scoring table - so the weighted random in `select_move` picks it with probability
+itself holds the Princess, the guess is impossible, yet it scores 350 - the top score the
+Guard branch can produce, second only to the accidental `GOOD * Unknown == 400` of the
+Baron/Prince branches (section 3) - so the weighted random in `select_move` picks it with probability
 `350 / sum`, which is 1.0 when every other move scores 0. Measured by `Test A`, scenario
 "memory of rival = Princess":
 
@@ -164,6 +167,12 @@ live for every state that scores all moves 0 - e.g. a hand of `[Princess, Guard]
 round where Priest, Baron, Handmaid, Prince, King and Countess copies are all in discard
 (`left_cards` = 0 for every guessable type), which the count branch scores 0.
 
+Measured frequency (30 000 four-player rounds, `tests/prince_memory_sim.py` rules, current
+`main.gd`): all-zero-score decisions are 1 215 of 277 443 decisions (0.44%) - most turns
+buy a positive score somewhere - and the last generated move is a Guard (the Princess
+declaration) in 83 of them, a Prince in 667, a Baron in 75. The mechanism is systematic, the
+frequency is not: see section 3's knock-on list.
+
 Fix: make the tie-break uniform instead of positional, and give the probe plays a score of
 their own (a Guard played as a probe is not worthless - it is cheap pressure and it keeps
 the hand):
@@ -178,43 +187,97 @@ k implies `sum(0..k-1) <= rmove`, so a 0-score move cannot push the accumulation
 `rmove`. Only the fallback can play them.
 
 
-3. `EvalScore.GOOD * m._target_type` zeroes the best moves of the game (severity H)
+3. `EvalScore.GOOD * m._target_type`: the premise was wrong, the value is 400, not 0
+   (severity L, was H) - NOT AN ISSUE
 ------------------------------------------------------------------------------------
 
-`m._target_type` is the *guessed* card of a Guard move; for every other card,
-`find_valid_moves` builds the move without a type (`Move.new(cards[i], i, p.idx)`,
-`main.gd:516-527`), so `_target_type` is `Deck.CardType.Unknown == 0`. Three branches
-multiply by it:
+The old text of this section assumed `_target_type` is `Deck.CardType.Unknown == 0`.
+`Unknown` is **8**: `deck.gd:3-11` numbers the enum Guard = 0, Priest = 1 ... Princess = 7,
+Unknown = 8 (section 5, item 3 of this doc already states it). `find_valid_moves` builds
+Baron / Prince / King moves without a target type (`Move.new(cards[i], i, p.idx)`,
+`main.gd:516-527`), so the three multiplications evaluate to:
 
-| line | branch | intended value | actual value |
+| line | branch | expression | value |
 |---|---|---|---|
-| `player.gd:230` | Guard, correct guess | GOOD x rank of the kill | `GOOD * Guard == 0` for a Guard target (now unreachable, see section 0) |
-| `player.gd:244` | Baron, `my_type > mem` (we win, rival eliminated) | GOOD x rank | `GOOD * 0 = 0` = LOSE |
-| `player.gd:258` | Prince on a known Princess holder | GOOD x rank, the best kill in the game | `GOOD * 0 = 0` = LOSE |
+| `player.gd:230` | Guard, correct guess | GOOD x rank of the *guess* (`find_valid_moves` guesses Priest..Princess = 1..7) | 50 .. 350 |
+| `player.gd:244` | Baron, `my_type > mem` (we win, rival eliminated) | GOOD x `Unknown` | **400** |
+| `player.gd:258` | Prince on a known Princess holder | GOOD x `Unknown` | **400** |
 
-So a level 4 AI can never score a guaranteed Baron win above LOSE, and can never score the
-Princess-kill Prince above LOSE. Since moves scoring 0 are unreachable for the weighted
-loop (see section 2), these moves are effectively *never played* by level 4/5: the AI
-prefers a Handmaid (20) over eliminating a rival with a Baron it knows it wins, and it will
-not burn a known Princess out of a rival's hand.
+400 is the *largest* number in the scoring table - above the best Guard guess (50 x 7 = 350)
+and above every fixed score - so those two branches do not suppress the best kills of the
+game, they pay them the top score, and level 4 plays them greedily. Measured in the engine
+(`tests/repro_score_multiplier.tscn`, documented in `tests/README.md`; run `godot --headless --path .
+tests/repro_score_multiplier.tscn`, exit 0):
 
-Fix: multiply by the rank of the *known* card (the card that is being eliminated), with a
-rank factor that never zeroes:
+| position | old claim | measured |
+|---|---|---|
+| `[Baron, King]`, memory of rival = Priest (the Baron **wins**: King > Priest) | 0 = LOSE, never played | Baron 400 vs King 5 -> played **390/400** samples |
+| `[Baron, Guard]`, memory of rival = Priest (the Baron **loses**) | - | score 0, played **0/400** - the branch is coherent |
+| `[Prince, Handmaid]`, memory of rival = Princess | 0, never played | Prince 400 vs Handmaid 20 -> played **387/400** samples |
+| what the multiplier encodes | GOOD x rank of the killed card | Baron win vs a believed Priest / Prince / Countess = **400 / 400 / 400**: the multiplier is the constant `Unknown`, not a rank |
 
-```gdscript
-m._score = EvalScore.GOOD * (1 + mem)     # Guard on Guard = 50, King = 300, Princess = 400
-```
+Whole games: instrumented subclass of `tests/prince_memory_sim.py` (same rules, three
+scoring variants, paired seeds, current `main.gd` memory bookkeeping, 30 000 four-player
+rounds per cell; the instrumentation script is not in the repo, the numbers below are the
+record). `shipped` is `eval_moves` as it stands, `rank-scaled` is the drafted
+`GOOD * (1 + mem)`:
 
-`mem` is defined and known in all three branches (`player.gd:222`). This keeps the author's
-"higher cards are worth more" intent, restores Guard-on-Guard, Baron wins and Prince kills,
-and makes the AI's elimination decisions match the printed score tables.
+| metric | shipped | rank-scaled |
+|---|---|---|
+| decisions | 277 443 | 277 479 |
+| decisions with a **known Baron win** on offer | 1 890 | 1 904 |
+| ... scored 0 (= LOSE) by the table | **0** | 0 |
+| ... **actually played** | **1 776 (94%)** | 1 570 (82%) |
+| known Princess-kill Prince: on offer / played | 1 381 / **1 072 (78%)** | 1 398 / 1 082 |
+| seat 0 round win rate, seeds 1234 / 777 / 4242 | 25.74 / 25.68 / 25.64 | 25.70 / 25.65 / 25.65 |
+
+The "0 = LOSE, therefore never played" chain of the old section 2 argument applies to
+exactly one value of `_target_type`: a Guard *target* (`Guard == 0`), i.e. the section 0
+bug, already fixed. Nothing else in `eval_moves` multiplies by a zero, and the known-win
+moves are played with the weighted-random probability their 400 buys them (400 / (400 + the
+~16 average score of the competing plays) - hence 94%, not 100%).
+
+Verdict: the symptom the old section 3 describes does not exist. Design decision recorded
+here: **keep the 400**. The rank-scaled multiplier takes strictly fewer guaranteed kills
+(94% -> 82%) at a win-rate difference that flips sign between seeds - Monte-Carlo noise
+(sd ~ 0.25pp at 30 000 rounds) - so it is a rebalance, not a repair.
+
+What is left is real, and all of it is latent (severity L):
+
+1. **An enum ordinal sits inside a scoring expression.** `GOOD * m._target_type` is a
+   number that happens to come out right. Reorder `CardType`, insert a type before
+   `Unknown`, change `Unknown`, and every Baron/Prince kill score rescales silently. It is
+   the same bug class section 0 fixed - multiply by an ordinal - the Guard case zeroed, the
+   Baron/Prince case inflates. Cheap hardening: name the constant
+   (`EvalScore.KILL = 400`) and keep `GOOD * rank` only where a rank is genuinely
+   available (the Guard branch).
+2. **The "higher cards are worth more" intent is not implemented for Baron/Prince kills**:
+   every known kill scores 400, so a Princess-burning Prince and a Baron win on a believed
+   Guard are valued identically. The rank-scaled candidate is measured above; like section
+   5 item 2 this is a scoring-table calibration question, not a memory/accounting bug.
+3. **The 400 is paid for false beliefs as well as true ones** - the Baron branch trusts
+   `_memory[target]` blindly, and section 4's table records the price: 97 false Baron
+   beliefs and 25 AI self-eliminations from them per 20 000 four-player rounds (shipped
+   scoring). A rank-scaled multiplier does not cure it (`GOOD * (1 + Guard) = 50` still
+   beats the ~16 of the competing plays); issue 1's deck accounting is the guardrail.
+
+Knock-ons inside this doc:
+
+- section 1's "350 - the highest number in the scoring table": 400 is higher. Section 1's
+  `GOOD * (1 + mem)` reproduces 400 for the unique card, which is why the fixed scoring
+  tables in section 4 read continuously with the shipped ones;
+- section 2's "every state that scores all moves 0": with 400s in the table those states
+  are rare - measured 1 215 of 277 443 four-player decisions (0.44%), and the last
+  generated move is a Guard (the Princess declaration) in 83 of them (~0.03% of decisions),
+  a Prince in 667, a Baron in 75;
+- section 5 item 3 (`CardType` has 9 values with `Unknown == 8`) is the fact this section
+  was written against.
 
 Related, same table: `EvalScore` has no branch for a played Princess (`eval_moves`
 initialises `_score = LOSE` at `player.gd:223` and the `match` has no Princess case), which
 is correct by accident - playing the Princess is suicide. `find_valid_moves` has no Princess
 case either (`main.gd:505-527`), so the AI is never offered that move; the human is, and a
 human can play it.
-
 
 4. The Prince cleared the belief about its own player, not about the rival whose hand
     changed (severity H for level 4) - FIXED
@@ -452,15 +515,17 @@ Summary
 | # | Issue | Severity | Where | Symptom in play |
 |---|---|---|---|---|
 | 1 | Stale Princess belief scored 350, deck accounting ignored | H | `player.gd:226-235` | Guaranteed-failed "Princess" call, Princess stuck in hand |
-| 2 | `valid_moves[-1]` tie-break | H | `player.gd:195-203` | Every all-zero-score turn becomes a Princess declaration |
-| 3 | `GOOD * m._target_type` (0) | H | `player.gd:230,244,258` | Winning Baron and Princess-killing Prince never played |
+| 2 | `valid_moves[-1]` tie-break | H | `player.gd:195-203` | All-zero-score turns (0.44% of 4p decisions) play the last generated move - the Princess declaration when a Guard is last in hand |
+| 3 | `GOOD * m._target_type` is `GOOD * Unknown == 400`, **not** 0: known Baron wins and Princess-killing Princes are played, not suppressed | L (was H) | `player.gd:230,244,258` | none in play - latent: enum ordinal inside the score formula, no rank scaling for kills, 400 pays false beliefs too. **Not an issue**, `tests/repro_score_multiplier.tscn` |
 | 4 | Memories did not follow the hand card (Prince cleared the Prince player's slot, eliminations cleared nothing, plays cleared on type) | H for level 4 | `main.gd:346-348`, `279-286`, `208-210` | Guaranteed-failed Guard call paid 150 and played 63% of the time; Priest knowledge destroyed. **Fixed**, `tests/repro_prince_memory.tscn` |
 | 5 | `_left` counts widow + hand cards = correct pool; only pinned copies are missing | L | `deck.gd:48-63`, `player.gd:232-237` | Guaranteed-failed Guard guesses score 5 instead of 0 (fix folded into 1) |
 
 Sections 1 and 2 are the two halves of the reported "level 4 plays Guard and says
 Princess"; section 0 (the Guard-memory check) removed its most frequent trigger, sections 1
-and 2 remove the remaining triggers, section 3 is the score/accounting work that makes
-level 4's play match the scoring table it already prints, section 4 is fixed (beliefs are
+and 2 remove the remaining triggers, section 3 is closed as not an issue (the 0 it claimed is
+`GOOD * Unknown == 400`; the known Baron wins are played in 94% of the opportunities and the
+Princess kills in 78%, measured in `tests/repro_score_multiplier.tscn`), leaving a latent
+enum-ordinal note, section 4 is fixed (beliefs are
 cleared and moved with the hand card they name, and the tests in `tests/README.md` pin that
 down), and section 5 turned out to be the counting model working as designed (`_left` is the
 exact posterior pool for a Guard guess) - downgraded to L, with the widow deliberately kept
