@@ -47,7 +47,8 @@ zero-score fallback - which is the Princess declaration reported by players. Ver
 `Test B`: the same turn now scores `sum = 40` with `Princess = 0` and the AI picks
 Baron/Handmaid/Prince.
 
-The four issues below are what remains.
+The four issues below are what remains (section 5 is kept for completeness - it turned out
+to be the model working as designed).
 
 
 1. A stale belief about the Princess is played greedily (severity H)
@@ -106,6 +107,31 @@ else:
 
 With this, the impossible move is unrepresentable, and stale beliefs can never be played -
 independently of how they were created.
+
+Extension (this is the legitimate half of section 5 - cards the AI itself has pinned with a
+Priest are copies that cannot be anywhere else):
+
+```gdscript
+# copies pinned in OTHER players' hands; the target's own belief is deliberately
+# excluded, because `mem == m._target_type` means the guess is a certain hit
+var pinned := 0
+for j in _memory.size():
+    if j != m._target_player and _memory[j] == m._target_type:
+        pinned += 1
+left = max(0, left - pinned)   # clamp: Baron-tie propagation can pin one copy twice
+```
+
+This needs no new data - `_memory` is the deciding player's own array, so `eval_moves`
+can see every belief it is entitled to use (`_memory[idx]` is never written, so it does not
+self-pin). The clamp is what keeps the Baron-tie cloning of section 4 from turning a
+unique-copy type negative. With it in place, `left == 0` means "no copy of this type can be
+in any unknown hand", which is the exact condition issue 1 needs.
+
+Ordering note: a memory slot is a claim about a *live* hand, so this extension depends on
+section 4's `set_inactive` clear. A belief left behind by an eliminated player steals a
+copy from the count and makes the guardrail fire too eagerly - the failure direction is
+safe (a legal guess scores 0, an illegal one never scores above 0), but it silences good
+guesses, so land 4 before this.
 
 
 2. `return valid_moves[-1]` turns "everything scores 0" into a Princess declaration
@@ -257,46 +283,118 @@ staleness in the source slot) - which requires the staleness created by this iss
 why fixing 4 is what makes issue 1 reachable in real play.
 
 
-5. `left_cards` counts cards that cannot be drawn (severity M)
---------------------------------------------------------------
+5. `_left` counts widow cards and cards in hands - by design (severity L, was M)
+--------------------------------------------------------------------------------
 
-`Deck.prepare` (`deck.gd:48-63`) resets `_left` to the full deck composition, then moves
-`widow_count` cards into `_widow_cards` (1 card for 3-4 players, 3 cards for a 2-player
-game). Only `Main.discard()` decrements `_left` (`main.gd:405-416`). Consequences for the
-level 4 heuristic `EvalScore.BAD * left_cards[t]`:
+Verdict: not a bug. `Deck` maintains one invariant - `Deck.prepare` (`deck.gd:48-63`)
+initialises it and `Main.discard()` (`main.gd:405-416`) is the only writer:
 
-- the widow cards are counted as available forever, so every probability is inflated. With
-  2 players, 3 of the 16 cards are permanently out of reach and the AI's ranking is skewed
-  by them - in a 2-player game the Princess is in the widow roughly 3 times more often than
-  the raw count suggests;
-- `_left` also counts cards currently sitting in other players' hands, including cards the
-  AI itself has *pinned* with a Priest. The only subtraction is the AI's own two cards
-  (`player.gd:231-234`). A belief that "player 2 holds the King" is used by the Baron and
-  King branches, but is not subtracted from the Guard guess counts, so the AI over-values
-  types it knows are already elsewhere;
-- the Prince player's own card and the target's new card are in hand/deck, and neither is
-  accounted for.
+```
+_left[t] = copies of type t that are not in the discard
+         = draw pile + widow + every player's hand
+```
 
-Fix, in order of cost:
+pile -> hand moves (a deal, a Prince redraw) leave `_left` alone; only cards that have
+left the game decrement it. That is precisely the quantity a Guard guess needs, because a
+Guard guess is about a *hand*, not about the draw pile.
 
-1. in `Deck.prepare`, decrement `_left` for each widow card:
-   ```gdscript
-   for i in widow_count:
-       var w = _cards.pop_front()
-       _widow_cards.append(w)
-       _left[w] -= 1
-   ```
-2. normalise the Guard estimate by the number of unknown hands, and subtract the cards
-   pinned in known hands (a `probability = free_copies / unknown_hands` helper, as drafted
-   in `tests/README.md` discussion). This also subsumes issue 1's guardrail: `free_copies`
-   reaching 0 makes the guess score 0.
-3. keep `_left` as the single source of truth: decrement on widow setup and never let
-   `_left` count cards that are in hands.
+**The count is exact, not an estimate.** Conditioned on what a player legitimately knows
+(own hand + discard piles), the target's single card is a uniformly random card of the
+unknown pool `U = sum(_left)`, so
 
-Note: `_left` has 8 entries (`card_count.size()`), while `CardType` has 9 values with
-`Unknown == 8`. Nothing indexes `_left[Unknown]`, so this is currently harmless, but any
-loop over `CardType` would run off the end.
+```
+P(target holds t) = _left[t] / U
+```
 
+`EvalScore.BAD * left_cards[t]` (`player.gd:232-237`) is therefore an affine transform of
+the true posterior: correct ranking, correct scale, and the widow sits in the denominator,
+where it belongs. The AI's own two cards are subtracted (`player.gd:233-236`), which is
+the only subtraction the count is entitled to make. This is the point `level4.md:32`
+attributes to the AI ("Guard probability is crude: ... not accounting for cards already
+revealed") - it is not crude, and that line should be reworded to name the one real gap:
+cards pinned in *other* players' known hands (item 1 below).
+
+Measured on 200k random deals, 4 players, no memory (argmax over the count vs the type the
+target actually holds) - `tests/left_cards_sim.py`, run `python3 tests/left_cards_sim.py`.
+The theoretical ceiling for *any* estimator with this information is
+`(5 - 2*5/16) / 14 = 0.3125` - in a fresh round the argmax is always Guard:
+
+| estimator | hit rate | comment |
+|---|---|---|
+| **current `_left`** | **0.3132** | at the information-theoretic optimum (0.3125, within Monte-Carlo noise) |
+| `_left` minus the actual widow cards (proposed fix 1) | 0.3135 | +/- 0.1% noise, and only by using `_widow_cards`, which the Deck node knows and the player at the table does not |
+
+**Fix 1 (decrement `_left` for widow cards) is rejected.** Removing the widow does not
+"correct a bias", it re-conditions from *the target's card is in the unknown pool* (right)
+to *the target's card is in the hands* (noisy), and the only thing that buys is hidden
+information. The advantage it buys grows as the round runs down - 2 players, widow = 3
+cards, no memory, 200k deals:
+
+| discards | current `_left` hit rate | with fix 1 |
+|---|---|---|
+| 4 | 0.317 | 0.344 |
+| 8 | 0.361 | 0.444 |
+| 10 | 0.401 | **1.000** |
+
+At 10 discards in a 2-player game, `16 - 10 - 3 - 2 = 1`, so the last unaccounted card *is*
+the rival's hand: fix 1 turns the final Guard guess of every 2-player round from 40% into a
+certain hit, at exactly the moment a human is watching most closely. Design decision
+recorded here: **the widow stays hidden from the AI**; level 4 plays with table-legal
+information only.
+
+The three bullets of the original section that describe non-defects:
+
+- "cards in other players' hands are counted" is the conditioning that makes the estimator
+  exact - not a flaw;
+- "the Prince player's own card and the target's new card are not accounted for" - they
+  are: pile -> hand deliberately does not change `_left` (a hand card is still unknown), and
+  the Prince player's remaining card is unknown to everybody. The AI's own card is
+  subtracted. Nothing to fix.
+- "cannot be drawn" is also literally false: `deal_card(tp, true)` in the Prince branch
+  (`main.gd:345`, `deck.gd:66-71`) pops from `_widow_cards` when the draw pile is empty.
+
+What is left of this issue - three things, all small:
+
+1. **Cards pinned in known hands are not subtracted** - the one real gap, and the legitimate
+   half of the old fix 2. With a belief "player 2 holds the King", the correct posterior for
+   a guess on a *different* player is `(N_t - pinned_t) / (U - pinned_count)`; the missing
+   `- pinned_t` lets a guaranteed-failed guess score `BAD * 1 = 5` instead of 0, and the
+   pinned copy inflates the count of its own type. Measured (4 players, one Priest reveal,
+   guess on an unknown player; share of Guard guesses aimed at the type the AI *knows* is in
+   the revealed hand, and the resulting hit rate):
+
+   | discards | current `_left`: picks the pinned type | with the subtraction | hit rate `_left` -> subtracted |
+   |---|---|---|---|
+   | 0 | 31.2% | 29.8% | 0.3132 -> 0.3130 |
+   | 4 | 31.7% | 19.9% | 0.3163 -> 0.3228 |
+   | 6 | 33.1% | 16.6% | 0.3310 -> 0.3452 |
+   | 8 | 36.2% | 14.4% | 0.3601 -> 0.3781 |
+   | 10 | 40.1% | 12.4% | 0.4024 -> 0.4450 |
+
+   In a fresh round the effect is noise; it grows with the discard count, and in the last
+   third of a round the level 4 AI spends ~40% of its Guard guesses on a card it has
+   personally revealed into somebody else's hand. This is **issue 1's guardrail** (see the
+   extension under section 1) - the `unknown_hands` denominator of the drafted
+   `probability = free_copies / unknown_hands` helper is identical for every Guard guess in
+   a turn, i.e. a constant multiplier that changes nothing inside a turn. Do it as part of
+   1, not as deck surgery.
+2. **Guard probe scores are inflated relative to the fixed scores of the other cards.**
+   `sum(_left) = 14` at the start of every round, of which 11 (2 players) / 13 (3-4
+   players) are outside the widow, so 2-player Guard probes carry ~27% more weight against
+   Priest/Handmaid (20), WEAK (10) and Countess (5) than the "copies in hands" reading
+   implies; in 3-4 players it is ~8%. Real, but it is a scoring-table calibration question
+   (`level4.md:35`, "score multipliers are arbitrary"), not a memory/accounting bug - a
+   probe is not worthless and its price is a design choice.
+3. `_left` has 8 entries (`card_count.size()`), `CardType` has 9 values with
+   `Unknown == 8`. Nothing indexes `_left[Unknown]` today - the Guard branch is the only
+   consumer of `left_cards`, and it is reached only with a guessable type - so this is
+   harmless now, but any `for t in CardType` loop, and any helper that indexes
+   `left_cards[m._target_type]` for a non-Guard move (`_target_type == Unknown`), runs off
+   the end.
+
+Cosmetic: the debug print `Left ...` (`main.gd:164-165`) means "cards of this type still in
+play (pile + widow + hands)", not "cards I can draw". Worth renaming to `In play` so the
+next reader does not assume the count is a draw-pile counter.
 
 Summary
 -------
@@ -307,9 +405,11 @@ Summary
 | 2 | `valid_moves[-1]` tie-break | H | `player.gd:195-203` | Every all-zero-score turn becomes a Princess declaration |
 | 3 | `GOOD * m._target_type` (0) | H | `player.gd:230,244,258` | Winning Baron and Princess-killing Prince never played |
 | 4 | Prince clears the Prince player's slot; eliminations clear nothing | M | `main.gd:346-348`, `279-286` | Rival believed to hold a discarded card; Priest knowledge lost |
-| 5 | `_left` counts widow cards and cards in hands | M | `deck.gd:48-63` | Guard guesses biased toward types that cannot be there |
+| 5 | `_left` counts widow + hand cards = correct pool; only pinned copies are missing | L | `deck.gd:48-63`, `player.gd:232-237` | Guaranteed-failed Guard guesses score 5 instead of 0 (fix folded into 1) |
 
 Sections 1 and 2 are the two halves of the reported "level 4 plays Guard and says
 Princess"; section 0 (the Guard-memory check) removed its most frequent trigger, sections 1
-and 2 remove the remaining triggers, and sections 3-5 are the score/accounting work that
-makes level 4's play match the scoring table it already prints.
+and 2 remove the remaining triggers, sections 3 and 4 are the score/accounting work that
+makes level 4's play match the scoring table it already prints, and section 5 turned out to
+be the counting model working as designed (`_left` is the exact posterior pool for a Guard
+guess) - downgraded to L, with the widow deliberately kept hidden from the AI.

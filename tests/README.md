@@ -71,3 +71,31 @@ Test A isolates the decision (no deck, no animations):
 
 Outcome of the reproduced turn: P0 plays Guard, declares Princess, the rival (Guard)
 survives, and P0 keeps its Princess - a wasted, guaranteed-failed guess.
+
+Measurement: the Guard card-count heuristic (`tests/left_cards_sim.py`)
+------------------------------------------------------------------------
+
+Supports section 5 of `ai_memory_open_issues.md`. Pure Python, no Godot: it replicates the
+deck of `deck/deck.gd` (counts `[5,2,2,2,2,1,1,1]`, widow 1 card for 3-4 players / 3 for a
+2-player game), draws random legal states for a given discard count, and compares the
+Guard guess that `EvalScore.BAD * left_cards[t]` (`player.gd:232-237`) produces against
+alternative estimators:
+
+    python3 tests/left_cards_sim.py            # 200k deals per row
+    python3 tests/left_cards_sim.py 50000      # faster, noisier
+
+Columns: `hit` = the guess matches the target's real card; `zero` = the guessed type is in
+no hand at all (a certain miss); `avg` = mean score of the chosen move (`5 * left`).
+
+Conclusions recorded in section 5:
+
+- `raw` (the shipped heuristic) sits at the exact Bayes posterior in a fresh round: measured
+  0.3132 against the theoretical ceiling `(5 - 2*5/16)/14 = 0.3125`, because
+  `P(target holds t) = _left[t] / sum(_left)` - the widow belongs in the denominator;
+- `widow_sub` (the rejected "decrement `_left` for widow cards" fix) only differs by using
+  `_widow_cards`, i.e. hidden information: +0.1% in a fresh round, +4pp at 10 discards in a
+  3-4 player game, and 0.401 -> **1.000** for the last guess of a 2-player round at 10
+  discards (one card is left unaccounted for, so the rival's hand is solved);
+- `pinned_sub` (subtract the copies the AI has pinned with a Priest) is the legitimate gap,
+  and it is the guardrail used by the section 1 fix: in the last third of a round the
+  current code spends ~40% of its Guard guesses on a type it knows is in a known hand.
