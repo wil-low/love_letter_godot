@@ -189,3 +189,33 @@ in section 4 of
 
     python3 tests/prince_memory_sim.py 20000   # 4-player games
     python3 tests/prince_memory_sim.py 2000 3  # 3-player games
+
+## tests/repro_score_multiplier.tscn — ai_memory_open_issues.md issue 3 (the claim is false)
+
+Issue 3 was written from the premise "`_target_type` is `Deck.CardType.Unknown == 0`", so
+`EvalScore.GOOD * m._target_type` zeroes a guaranteed Baron win (`player.gd:244`) and the
+Princess-burning Prince (`player.gd:258`), and level 4 "never plays" them. `Deck.CardType`
+starts at `Guard = 0` and `Unknown` is the 9th value: **`Unknown == 8`**, so both branches
+evaluate to `GOOD * 8 = 400` - the largest number in the scoring table, above the best Guard
+guess (`50 * Princess = 350`). The moves are played greedily.
+
+Four seats are not needed here: the suite builds two real `Player` nodes, fills the hands
+with real `Card` nodes, sets a memory slot, and runs the production `Player.eval_moves()` /
+`Player.select_move()` on a move list generated the way `Main.find_valid_moves()` does it.
+
+| test | position | issue 3 predicts | measured |
+|---|---|---|---|
+| A | `[Baron, King]`, memory of rival = Priest (the Baron wins: King > Priest) | 0 = LOSE, never played | Baron 400 vs King 5 -> played 390/400 samples |
+| B | `[Baron, Guard]`, memory of rival = Priest (the Baron loses) | - | score 0, played 0/400 - the branch is coherent, `my_type` is the leftover card |
+| C | `[Prince, Handmaid]`, memory of rival = Princess | 0 = LOSE, never played | Prince 400 vs Handmaid 20, self-Prince 10 -> played 387/400 samples |
+| D | "GOOD x rank of the killed card" | rank scaling | Baron win vs a believed Priest / Prince / Countess = 400 / 400 / 400 - the multiplier is the constant `Unknown`, not a rank; the Guard branch does scale (350 for a Princess call) |
+
+    godot --headless --path . tests/repro_score_multiplier.tscn
+    echo $?   # 0 = all checks passed, 1 = a check failed
+
+What the suite records for section 3 (severity L, not H): the ordinal `Unknown` sits inside a
+scoring expression, so reordering `CardType` rescales every Baron/Prince kill score silently;
+kills are not differentiated by rank (a Princess burn = a Baron win on a believed Guard); and
+the 400 is paid for false beliefs too. The rank-scaled alternative `GOOD * (1 + mem)` is a
+rebalance, not a repair - measured over 30 000 four-player rounds it takes fewer guaranteed
+Baron wins (94% -> 82%) at a win-rate difference inside Monte-Carlo noise.
