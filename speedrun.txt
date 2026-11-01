@@ -1,0 +1,96 @@
+		levels = [
+			Player.AI_Level.Level_1,
+			Player.AI_Level.Level_2,
+			Player.AI_Level.Level_3,
+			Player.AI_Level.Level_4
+			]
+
+1. Legacy: seed = 42 in ready()
+W 0:02:54:282   main.gd:417 @ round_over(): Game 1000 over! Winners: 1. Total scores: 1329, 1805, 2196, 2895, 
+
+2. seed = 42 in ready() and increases by 1 after each game, so each game starts with deterministic card order. _random_seed var added to Main.
+W 0:03:51:672   main.gd:421 @ round_over(): Game 1000 over! Winners: 3. Total scores: 1438, 1856, 2367, 2841, 
+
+3. avg_score.diff
+W 0:03:05:569   main.gd:426 @ round_over(): Game 1000 over! Winners: 3. Total scores: 1547, 1880, 2371, 2694, 
+
+4. Handmaid bugfix
+W 0:02:35:507   main.gd:421 @ round_over(): Game 1000 over! Winners: 3. Total scores: 1428, 1882, 2378, 2825, 
+
+5. Prince eval change
+W 0:02:29:360   main.gd:426 @ round_over(): Game 1000 over! Winners: 3. Total scores: 1376, 1818, 2284, 2834, 
+
+6. Princess discard fix
+W 0:04:15:295   main.gd:453 @ round_over(): Game 1000 over! Winners: 3. Total scores: 1350, 1831, 2209, 2923, 
+
+
+
+
+Here's my comprehensive analysis of the speed run mode and what can be optimized:
+
+## Current Speed Run Mode (in `application.gd`)
+
+When `speed_run: true`, the app does:
+1. Sets AI levels to Level_1–Level_4 (simpler AI)
+2. Mutes all audio
+3. Sets `Animator._speed = 0` (instant delays via `create_timer(0)`)
+4. Sets `RenderingServer.render_loop_enabled = false`
+5. Disconnects the `round_finished`, `round_won`, and `save_stats` signals (to skip stats saving)
+
+## Problems Found — What Slows It Down
+
+### 1. **~60 print statements not suppressed** (biggest waste)
+There are **~60 `print()` / `push_warning()` calls** throughout `main.gd` and `player.gd` that still execute. These are formatted string concatenations doing CPU work every turn:
+- `"new_turn for Player ..."` (line 160)
+- `p.print_memory()` (line 162) — iterates and prints memory for all 4 players
+- `"Left Guard: ..."` (line 164) — prints all 8 card type counts every turn
+- `"My {move}"` (line 266)
+- `"resolve_effect for ..."` (line 293)
+- AI move debugging prints at lines 151, 160, 183
+
+### 2. **`flash_winners(500)` loop still runs** 
+`flash_winners` at line 476 does `for i in range(500 * 2)` = 1000 iterations, creating and awaiting 1000 tweens even when `_speed = 0`. Each iteration creates a new `Tween` object. This is wasteful CPU work.
+
+### 3. **`reveal_hand` still creates full tween chains**
+When `_speed = 0`, `reveal_hand()` creates flip tweens (scale + position animations) and then `await`s `delay(1)`. With `_speed = 0`, `delay(1)` becomes `create_timer(0).timeout` (instant), but the flip tween itself still does geometry calculations. More importantly, if Godot doesn't fire `finished` for a zero-duration tween, this could hang.
+
+### 4. **`move_card` for discards still creates tweens**
+`discard()` at line 411 calls `Animator.move_card(ch, _discard_marker.global_position, 0.25)` which creates a tween for each discarded card. With `_speed = 0` it should be instant, but the tween engine overhead is still there.
+
+### 5. **`set_inactive` still calls `reveal_hand`**
+Line 319/376: `set_inactive(p, !p.is_human())` — when `reveal_hand=true` for AI players, it reveals then immediately hides the hand with animations.
+
+### 6. **`_d()` function with `_speed = 0` is fragile**
+In `animator.gd` line 21: `return base / _speed if _speed > 0 else 0.0` — when `_speed = 0`, `delay()` returns a 0-second timer (fine), but `move_card`/`flip` return `tw.finished` from a tween with 0 duration. Whether Godot fires `finished` for a 0-duration tween mid-frame is undefined behavior.
+
+### 7. **`save_config` disconnect may not prevent all I/O**
+The `save_stats` signal is disconnected, but `round_finished` and `round_won` are also disconnected — the `_on_round_won` and `_on_round_finished` handlers just do array indexing and `clampi`, which is lightweight. This optimization is fine.
+
+## Recommended Optimizations
+
+### High Impact:
+1. **Guard print statements behind `_speed == 0`** — wrap all ~60 prints with `if Animator._speed > 0:`
+2. **Skip `flash_winners` entirely** in speed run — replace the 1000-iteration loop with an instant `return`
+3. **Make `reveal_hand` instant** when `_speed == 0` — just toggle the card's faceup state without tweening
+4. **Make `move_card` instant** when `_speed == 0` — just set the target position directly
+5. **Remove `print_memory()`** — this iterates all players and all memory entries every turn
+
+### Low Impact:
+6. **Consider removing `RenderingServer.render_loop_enabled = false`** — this disables the game loop rendering but may cause issues with tween completion. Better to keep the loop running with `_speed = 0`.
+7. **Replace tween-based `flash` with a simple loop** when `_speed == 0` — no need to create 1000 Tween objects
+
+Would you like me to implement these optimizations?
+
+
+
+W 0:03:09:401   main.gd:101 @ _new_game(): Max games count reached, stop
+
+after flash_winners
+
+W 0:03:03:205   main.gd:101 @ _new_game(): Max games count reached, stop
+
+print_memory
+W 0:02:58:328   main.gd:101 @ _new_game(): Max games count reached, stop
+
+print_valid_moves
+W 0:02:48:219   main.gd:101 @ _new_game(): Max games count reached, stop
