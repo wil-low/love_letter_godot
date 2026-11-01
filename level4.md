@@ -119,9 +119,11 @@ score table when `print_valid_moves` is on — it does not constrain the human's
   alone (`> Handmaid ? 20 : 5`); the likelihood of the rival holding a higher card, given
   what is in discard, is not considered.
 - **Memory depth is single-author**: `_memory` records only what this seat itself revealed
-  (Priest) or deduced (Baron tie, King trade); a Priest reveal made by another seat is public
-  information that no seat records (`ai_memory_open_issues.md` §6), so the model sees the table
-  through the hand of one player.
+  (Priest) or deduced (Baron tie, King trade). That is the rule, not a limitation: the Priest card
+  says the peek is secret, so a reveal made by another seat is information this seat is *not*
+  entitled to (`ai_memory_open_issues.md` §6.1), and a Baron tie is public through its outcome, not
+  through the compared cards (§6.2). The one public channel no seat records is the Guard answer
+  (§6.3, open), so the model sees the table through the hand of one player - deliberately.
 - **Protection is only implicit**: `find_valid_moves` filters protected targets (and self on
   Prince), so the AI never *sees* an illegal move — it does not weigh "keep the Handmaid for
   later".

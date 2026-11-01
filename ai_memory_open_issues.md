@@ -9,7 +9,10 @@ fix of section 4; re-verified line by line).
 Reproduction harness: `tests/repro_guard_princess.tscn`
 (`godot --headless --path . tests/repro_guard_princess.tscn`), documented in `tests/README.md`.
 Aggregate measurements come from `tests/prince_memory_sim.py` (and `tests/issue2_tiebreak_sim.py`
-for the tie-break probe), decision-time state checks from `tests/repro_belief_truth.tscn`.
+for the tie-break probe), decision-time state checks from `tests/repro_belief_truth.tscn`. The
+section 6 measurements (Priest broadcast policies `fix_plus_bc` / `bc_vs_human`, scoring policy
+`denied`) come from instrumented copies of `tests/prince_memory_sim.py` that are not in the repo,
+as in section 3; the numbers below are the record.
 
 Legend: severity H = plays a move a human would call irrational, M = loses information /
 misses opportunities, L = latent, only reachable in specific states.
@@ -59,7 +62,8 @@ tie-break arbitrates moves the scoring table has already judged worthless; 62% o
 nothing to arbitrate, and the deterministic pick is the best of the three; 3: it rested on a false
 premise - `Deck.CardType.Unknown` is 8, not 0, so the score is 400, not 0, and is downgraded to L),
 section 5 turned out to be the model working as designed, and section 6 is new and open: the
-observation model, found while proving the invariant that closes section 1.
+disclosure model - who the rules entitle to see which reveal - found while proving the invariant
+that closes section 1.
 
 
 1. The Guard memory branch has no deck-accounting guardrail (severity L, was H)
@@ -100,7 +104,13 @@ reading of the code is correct. What is not correct is the premise that such a b
 Why the belief cannot exist
 ---------------------------
 
-`_memory` is a seat's own array, and every writer is public information and sound:
+`_memory` is a seat's own array, and every writer is **sound** (it writes a card somebody has
+read) *and* **entitled** (it writes it into a row whose owner is a party the rules grant that
+view to). The second condition is the one section 6 is about; the entitlement argument per writer
+is spelled out there (Priest: only the author is a party; Baron third parties: the tie is
+deducible from the public outcome, not from the secret comparison; King third parties: the trade is
+a public event). Read as "public information" the sentence below is loose in exactly those two
+rows - it is the looseness that produced the first draft of section 6:
 
 | writer | line | why the slot it writes is true |
 |---|---|---|
@@ -684,55 +694,171 @@ Cosmetic: the debug print `Left ...` (`main.gd:164-165`) means "cards of this ty
 play (pile + widow + hands)", not "cards I can draw". Worth renaming to `In play` so the
 next reader does not assume the count is a draw-pile counter.
 
-6. Reveals are shown in one direction only, and no seat records a reveal it did not author
-   (severity M) - OPEN
+6. The disclosure model: who the rules entitle to see what, and the one legal channel nobody
+   records (severity M, open item: 3 only; 1 and 2 are not issues, 4 is cosmetic)
 ---------------------------------------------------------------------------------------------
 
-Found while proving the invariant that closes section 1. The invariant is "a belief is a read of a
-real card", and the writers of `_memory` are sound - which exposes the other half of the model:
-**the reads that never happen**.
+Found while proving the invariant that closes section 1. That invariant is about a belief being
+**true**; it says nothing about who is **entitled** to it. Section 6 is the entitlement question,
+and the answer is the card text, not the screen. Design decision recorded here: **the game plays
+the official disclosure convention** - the 16-card deck of `deck.gd:card_count` is the Classic
+variant of the Z-Man rulebook, and the rule lines quoted below are the governing text. The
+first draft of this section argued from "a reveal that is on the screen is table-legal for every
+seat", and both of its halves came out backwards.
 
-1. **A Priest reveal teaches exactly one seat: the Priest player** (`main.gd:325`).
-   `p.update_memory(tp.idx, tp.hand.get_child(0).type)` writes the Priest player's own row, so
-   - when a **human** plays a Priest, the card is shown to the whole table
-     (`Animator.reveal_hand(tp)`, `main.gd:323-324`) and every AI seat watches it and records
-     nothing;
-   - when an **AI** plays a Priest, the reveal is not animated at all - the guard is
-     `if p.is_human()`. The human is the one player the rules grant the view, and he does not get
-     it: `main.gd:326` prints "Priest: reveal hand" and shows nothing.
+The rules split the table into disclosure classes, and every branch of `resolve_effect` lands in
+exactly one of them:
 
-   Measured: 25 107 Priest reveals per 20 000 four-player rounds (`tests/prince_memory_sim.py`),
-   1.26 per round, each one a certain belief about a hand card, each one recorded by exactly one
-   seat - its author. A human's reveals teach the AI nothing; an AI's reveals teach the human
-   nothing. The current model runs on 15 966 live beliefs per 20 000 rounds, and every one of
-   them is first-hand.
+| event | who is entitled | the rule text |
+|---|---|---|
+| a hand card | its owner | a player may keep his hand secret |
+| a played or discarded card | everybody | played and discarded cards stay faceup, visible to all |
+| a knock-out | everybody | an out player discards his hand faceup |
+| Guard: the named card, and the target's answer | everybody | the card is *named* (spoken), and the answer must be truthful |
+| Priest: the card looked at | **the Priest player only** | "Choose another player and **secretly** look at their hand (**without revealing it to anyone else**)" |
+| Baron: the two compared cards | **the two contestants only** | "You and that player **secretly compare** your hands" |
+| Baron: the **outcome** - who is out, "nobody" included | everybody | the elimination is on the table; "If there is a tie, neither player is out" |
+| King: the trade; each party's new card | everybody; each party | trade hands |
+| Prince: the discarded hand | everybody | the target discards his hand faceup and redraws |
 
-   This is an information-budget question, not a strength question, and section 5 already answered
-   it for the widow: *"level 4 plays with table-legal information only"*. A reveal that is on the
-   screen is table-legal for every seat. Landing it makes level 4 strictly stronger than it is
-   today, and it is what makes section 5 item 1 meaningful: pinned copies only exist as beliefs,
-   and today a seat pins a copy only in the hands it personally looked at.
+Two facts fall out of that table and they are the two the first draft had inverted: **a Priest peek
+is private** (there is nothing owed to the table), and **a Baron tie is public even though the
+compared cards are private** (nobody leaving the round *is* the tie). Everything below is derived
+from the table.
 
-   The two halves are separable:
-   - **the human-side half is a bug fix**: the reveal must run whenever anybody at the table is
-     entitled to see it - the rule gives the card to the player who played the Priest, and in this
-     game the human seat is that player whenever he played it, and never when an AI did. So the
-     guard should be "some seat is human", not "the author is human". The Baron branch has the
-     same shape (`main.gd:327-331`): a tie between two AI seats reveals nothing, and a tie is
-     public - the human is not told the two cards were equal, which is the premise of a deduction
-     his own array is given (item 2 below). The Prince branch is the counter-example to copy:
-     `main.gd:353` reveals the target's hand unconditionally, because the card is being discarded
-     in the open.
-   - **the AI-side half is a policy change**: broadcast the reveal to every seat's row
-     (`for pl in _players: pl.update_memory(tp.idx, revealed_type)`), and take the reveals that
-     were actually shown - which is what the first half guarantees. It preserves the invariant of
-     section 1 (a belief is a read of a real card) while widening who is allowed to read.
+1. **A Priest reveal teaches exactly one seat: its author - and that is the rule.**
+   **NOT AN ISSUE (severity: none; the drafted broadcast is REJECTED)**
 
-2. **Knock-on for the human's own array.** `main.gd:341-346` propagates beliefs into every seat's
-   row, the human's included. When both Baron contestants are AI seats, the tie animation is
-   skipped, so the human's memory is rewritten with a deduction whose premise he was never shown:
-   the array is more informed than the player holding it. Same code, opposite direction from item
-   1 - the fix for both is the reveal guard.
+   `main.gd:325` writes the Priest player's own row and `main.gd:323` animates only for a human
+   author. Volume (`tests/prince_memory_sim.py`): 25 107 Priest reveals per 20 000 four-player
+   rounds, 1.26 per round, each one a certain belief about a hand card, each recorded by exactly
+   one seat; the model runs on 15 966 live beliefs per 20 000 rounds, every one first-hand.
+
+   - *"the human is the one player the rules grant the view, and he does not get it"* - true only
+     when the human **is** the Priest player, which is exactly the branch that reveals
+     (`if p.is_human(): Animator.reveal_hand(tp)`). When an AI authors the peek, the rules give
+     the view to that AI and to nobody else; showing it on the screen would hand the human - i.e.
+     an opponent of that AI - information the card reserves to the Priest. `main.gd:326`'s
+     `print("Priest: reveal hand")` is what made the branch read as a missing reveal; it is a
+     private read, and the log should say so.
+   - *"a reveal that is on the screen is table-legal for every seat"* - the screen is not the
+     criterion. `main.gd:75` (`Human is allowed for Player 0 only`) means one human seat on one
+     device, so "on screen" = "in the human's hands": a *player*, not the table. Section 5 set the
+     criterion - *"level 4 plays with table-legal information only"* - and rejected the widow for
+     exactly this reason; a Priest peek is the same class of information as the widow, and a much
+     bigger stake: 1.26 certain facts about live hands per round.
+   - the broadcast (`for pl in _players: pl.update_memory(tp.idx, revealed_type)`) is therefore
+     not "widening who is allowed to read", it is **collusion between the AI seats against the
+     human**. Measured (instrumented copy of `tests/prince_memory_sim.py`, policies
+     `fix_plus` = section 4's applied memory rules, `fix_plus_bc` = every seat records every
+     Priest reveal, `bc_vs_human` = the AI seats share reveals while seat 0, standing in for the
+     human, keeps today's legal view; shipped scoring; 20 000 rounds per cell, paired seeds 1234;
+     the instrumentation script is not in the repo, the numbers are the record):
+
+   | players | Guard hit rate % | seat 0 round win rate % |
+   |---|---|---|
+   | 2p: `fix_plus` / broadcast | 22.80 / 22.80 | 50.62 / 50.62 (nothing to share: in a 2-seat game the only other seat *is* the target, who owns the card) |
+   | 3p: `fix_plus` / bc_all / bc_vs_human | 25.16 / 27.86 / **26.92** | 33.77 / 33.53 / **32.82** |
+   | 4p: `fix_plus` / bc_all / bc_vs_human | 24.37 / 29.38 / **28.35** | 25.50 / 25.35 / **24.65** |
+
+   +4pp Guard hit rate and -0.85pp (4p) / -0.95pp (3p) of the human's round win rate: 3-4x the
+   Monte-Carlo sd of 0.25pp. Section 5 refused a change that bought 0.1% of noise; this one buys a
+   standing handicap for the human player.
+   - the sentence this section used as the motive for the broadcast - *"pinned copies only exist as
+     beliefs, and today a seat pins a copy only in the hands it personally looked at"* - does not
+     need the broadcast to be useful. Section 5 item 1's subtraction is about the copies *the seat
+     itself* pinned, and author-only Priest reads supply exactly those. Section 5 item 1 stands
+     unchanged under the official convention.
+
+   **No change**: `main.gd:323-325` stays as it is, single-author memory stays the model of record
+   (`level4.md`, "memory depth is single-author"), and the one cosmetic item is the log wording.
+
+2. **The Baron tie propagation is a legal deduction from the public outcome - NOT AN ISSUE**
+
+   The first draft's premise here ("a tie is public" for the cards, and "the human is given a
+   deduction whose premise he was never shown") is half false in both directions: the compared
+   cards are secret, and the tie is public. The propagation loop (`main.gd:341-346`) copies a
+   belief `pl` *already holds* about `p` into `pl`'s slot for `tp` (`if`/`elif`, one direction per
+   seat, and it never invents a type), and the premise it needs is not "I saw both cards", it is
+   "the two hands are equal". A Baron duel has three outcomes and all three are on the table:
+   `p` is out, `tp` is out, or **nobody** is out - and "nobody is out" *is* the tie. So any seat,
+   the human included, can derive `p == tp` from the outcome without seeing a card, and a true
+   belief about one of them is then a true belief about the other. That is the section 1 invariant
+   argument, and it survives the secret-comparison reading.
+
+   The display supports the derivation: the played card goes faceup on the table (`main.gd:199`),
+   the chosen target is marked for the whole effect resolution (the `_target_player` setter,
+   `main.gd:52-58`, puts `_player_selection` on the target and `resolve_effect` hides it again at
+   `:314`), and a knock-out has its own audio and animation. What is *not* said out loud is the
+   word "tie" - `main.gd:347` prints it, the screen does not. Measured volume: 836 Baron ties and
+   129 third-party propagations per 20 000 four-player rounds (`fix_plus`, shipped scoring), so
+   the human's array is rewritten this way about once per 155 rounds. **Item 2 closes here as a UX
+   call-out nit** (a "Tie" label at `:347`), not an information-flow bug, and the reveal guard
+   (`main.gd:328-331`, cards shown only to a human party, nothing shown in an AI-vs-AI duel) is
+   correct for a secret comparison. The whole Baron branch - `> / < / ==` resolution, the lower card
+   out, tie = neither out, the contestants' two writes at `:339-340` - matches the card text.
+
+3. **The public Guard answer is the one channel no seat records (OPEN, severity M)**
+
+   "Name a character other than Guard" is spoken at the table and the target must answer
+   truthfully, so **every failed Guard guess publicly proves `target's card != the named type`**.
+   That is table-legal information under section 5's criterion, and `main.gd:319-321` discards it:
+   `_memory` cannot hold it - every value of `CardType` names a card (or `Unknown`, section 5 item
+   3), so the model has no representation of a negative belief and no seat can use the answer.
+   It is the real "reads that never happen", and the target marker + the elimination animation
+   make it visible to the human seat as well.
+
+   Volume and effect (instrumented copy of `tests/prince_memory_sim.py`, scoring `denied` = a
+   Guard guess aimed at a publicly-denied (seat, type) pair scores `LOSE`, memory policy
+   `fix_plus`; a denial is invalidated with section 4's discipline - cleared by a Prince on that
+   seat, cleared by its elimination, and it **travels with the card** through a King trade, because
+   "A's card is not a Guard" follows A's card into B's hand):
+
+   | players | Guard plays | aimed at a publicly-denied pair (certain miss) | ... of them still played when those score `LOSE` | Guard hit rate % | seat 0 win rate % |
+   |---|---|---|---|---|---|
+   | 2p | 37 866 | 1 633 (4.3%) | 22 | 22.80 -> 22.85 | 50.62 -> 50.34 |
+   | 3p | 61 269 | 3 158 (5.2%) | 37 | 25.16 -> 25.43 | 33.77 -> 33.59 |
+   | 4p | 72 099 | **3 380** (5.2%) | 18 | 24.37 -> **24.75** | 25.50 -> 25.39 |
+
+   ~0.17 provably-doomed guesses per four-player round, all of them the kind section 1's legend
+   calls "a move a human would call irrational", removed at a Guard hit rate +0.38pp and a seat 0
+   win rate inside noise - and, unlike item 1, the channel is symmetric: it handicaps the AI seats
+   and the human equally, because both hear the answer.
+
+   The 18/37/22 that survive zeroing are section 2, not staleness: zeroing a move does not remove
+   it from `valid_moves`, and an all-zero list hands the pick to `valid_moves[-1]`. Zeroing
+   guaranteed misses *grows* that tail, exactly as section 2's "what survives the closure" records
+   for the drafted issue 1+3 table - which is why this item, if landed, lands together with a
+   tie-break note and not on its own.
+
+   Implementation notes for whoever lands it: (a) it needs the negative-belief schema - a per-seat
+   bitset of "not these types" is the natural shape, and it must be wiped with the rest of the
+   memory at `main.gd:129-130`; (b) the consumer is the Guard **count** branch (`player.gd:232-237`)
+   - the memory branch is untouched and keeps its section 1 guarantee; (c) it is the negative twin
+   of section 5 item 1 (copies pinned in known hands), and the two are the same bookkeeping: both
+   say "this copy is accounted for", one in a hand, one as an excluded pair; (d) a denial is about
+   a *seat*, and a seat holds exactly one card, so a seat's denial set is the complement of its
+   hand card - worth stating in the comment, because it is what makes the King-trade rule
+   (denials travel with the card) non-obvious.
+
+4. **Three call sites hide a public reveal (severity L, cosmetic, human-facing only)**
+
+   An out player discards his hand faceup, visible to everybody, so the eliminated card is public
+   information and the human is entitled to see it. `set_inactive`'s `reveal_hand: bool = true`
+   (`main.gd:286`) means *flash and hide* (`Animator.reveal_hand(p, hide_afterwards)`), so:
+
+   | call | line | hide_afterwards | rule |
+   |---|---|---|---|
+   | Guard kill | `:321` (default) | `true` - hidden | public: show it |
+   | Baron kill | `:335`, `:337` (`!party.is_human()`) | `true` when no human is a party - hidden | public: show it |
+   | self-played Princess | `:395` (default) | `true` - hidden | public: show it |
+   | Prince forces the Princess out | `:356` (`false`) | shown and left faceup | **the correct pattern** |
+
+   The one-line shape is `reveal_hand = false` at the first three (reveal, and leave it faceup
+   through `discard()`, `main.gd:421-433`). No AI strength content: the AI already counts the
+   discard via `_left`. Related, same family and equally cosmetic: `round_over` (`main.gd:441`)
+   reveals every survivor's hand even when one player is left, where the rules require a reveal
+   only when the deck ran out - harmless, since all memory is wiped at `main.gd:129-130`.
 
 
 Summary
@@ -745,7 +871,7 @@ Summary
 | 3 | `GOOD * m._target_type` is `GOOD * Unknown == 400`, **not** 0: known Baron wins and Princess-killing Princes are played, not suppressed | L (was H) | `player.gd:230,244,258` | none in play - latent: enum ordinal inside the score formula, no rank scaling for kills, 400 pays false beliefs too. **Not an issue**, `tests/repro_score_multiplier.tscn` |
 | 4 | Memories did not follow the hand card (Prince cleared the Prince player's slot, eliminations cleared nothing, plays cleared on type) | H for level 4 | `main.gd:363-364`, `286-296`, `215-217` | Guaranteed-failed Guard call paid 150 and played 63% of the time; Priest knowledge destroyed. **Fixed**, `tests/repro_prince_memory.tscn` |
 | 5 | `_left` counts widow + hand cards = correct pool; only pinned copies are missing | L | `deck.gd:48-63`, `player.gd:232-237` | Guaranteed-failed Guard guesses score 5 instead of 0: 193 per 20 000 4p rounds; the subtraction measures -0.19pp Guard hit rate at a win rate inside noise. Open calibration item (section 1's extension folded here) |
-| 6 | Reveals are shown in one direction, and no seat records a reveal it did not author | **M, open** | `main.gd:322-325`, `327-331` | 25 107 Priest reveals per 20 000 4p rounds teach exactly one seat each (their author); an AI's Priest reveal is never shown, so the human loses the view the rules give him; a tie between two AI seats is invisible to the human, whose own `_memory` is rewritten by it |
+| 6 | Disclosure model: who is entitled to what. Priest is private by rule, Baron compares in secret and its **outcome** is public, the Guard answer is public and recorded by nobody | **M, open (item 3)**; 1 and 2 not issues, 4 cosmetic | `main.gd:319-321`, `322-325`, `327-346`, `286-296` | 25 107 Priest reveals per 20 000 4p rounds teach exactly one seat each - their author, which is what the card says; the drafted broadcast measures +4pp AI Guard hit rate and **-0.85pp (4p) / -0.95pp (3p) of the human's round win rate**, so it is rejected as AI collusion. The Baron tie propagation (129 third-party writes per 20 000 4p rounds) is a legal deduction from "nobody left the round", so the human's array is justified by what is on the table. The open gap: 3 380 of 72 099 Guard plays per 20 000 4p rounds (5.2%) aim at a (seat, type) pair the whole table has publicly heard denied; zeroing them measures Guard hit 24.37 -> 24.75 at a seat 0 win rate inside noise |
 
 Sections 1 and 2 are the two halves of the reported "level 4 plays Guard and says
 Princess". Section 0 (the Guard-memory check) removed its frequent trigger, and the trigger that
@@ -765,5 +891,14 @@ note. Section 4 is fixed (beliefs are cleared and moved with the hand card they 
 `tests/repro_prince_memory.tscn`). Section 5 turned out to be the counting model working as
 designed (`_left` is the exact posterior pool for a Guard guess) - downgraded to L, with the widow
 deliberately kept hidden from the AI, and with the pinned-copy accounting as its one open
-calibration item. Section 6 is the open one, found while proving section 1's invariant: the
-information that never reaches the seats that are entitled to it.
+calibration item. Section 6 is the open one, found while proving section 1's invariant - and
+rewritten after the rule texts were read: its premise ("a reveal on the screen is table-legal for
+every seat") is false for the two reveals it was built on, since the Priest peek is secret by card
+text and the Baron comparison is secret between its two contestants. Under the official
+disclosure convention the model's writers all check out - Priest writes its author's row only,
+Baron's third-party tie propagation deduces from the public "nobody is out" outcome, the King
+third-party swap deduces from the public trade - the drafted Priest broadcast is rejected as
+collusion (measured: -0.85pp of the human's round win rate at 4 players), and the one legal
+channel the model really drops is the public Guard answer: 3 380 provably-doomed guesses per 20 000
+four-player rounds, and the negative beliefs that would prevent them are the schema change item 3
+of that section spells out.
