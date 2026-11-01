@@ -190,6 +190,43 @@ in section 4 of
     python3 tests/prince_memory_sim.py 20000   # 4-player games
     python3 tests/prince_memory_sim.py 2000 3  # 3-player games
 
+## tests/issue2_tiebreak_sim.py — ai_memory_open_issues.md issue 2 (the tie-break is not an issue)
+
+Same rules, scoring and memory bookkeeping as `prince_memory_sim.py`; the only thing changed is
+the branch of `select_move()` taken when **every** move scores 0:
+
+```
+last     -> shipped:  return valid_moves[-1]
+uniform -> drafted:   return valid_moves[randi() % len(valid_moves)]
+first   -> control:   return valid_moves[0]
+```
+
+    python3 tests/issue2_tiebreak_sim.py                  # 10 000 4p rounds x 3 paired seeds
+    python3 tests/issue2_tiebreak_sim.py 3000 4 fixed13   # section 1+3 scoring (knock-on)
+
+Three counters matter. `fell_through_loop` counts times the weighted prefix-sum loop ran out on
+a *nonzero* sum: **0 in 277 576 decisions**, because `EvalScore.LOSE = 0` is the floor of the
+table and no `eval_moves` branch goes negative - so `sum == 0 -> sum = 1` is the only guard
+against `randi() % 0`, `valid_moves[-1]` is reachable only from an all-zero list, and the loop
+is a *dominance* order (any positive score beats every 0 score), not a weighted sampler over
+the list. `len1` counts zero-score turns with a single legal move: **747 of 1 212 (62%)** - no
+tie to break, all three policies are one policy. `all_moves_are_guard_probes`: 82 (6.8%).
+
+| | `[-1]` (shipped) | uniform | `[0]` (control) |
+|---|---|---|---|
+| zero-score decisions | 1 212 (0.437%) | 1 218 | 1 223 |
+| last generated move | Prince 648, Priest 409, Guard 82, Baron 73 | 650 / 411 / 84 / 73 | 650 / 412 / 88 / 73 |
+| Guard hit rate | 23.98% | 23.96% | 23.96% |
+| "Princess" declared while holding the Princess | 74 | 11 | 0 |
+| seat 0 win rate (mean of 3 seeds) | 25.84 | 25.67 | 25.55 |
+
+Recorded in section 2 (severity L, not H): the symptom is real and deterministic, it is 0.03%
+of decisions, it lives in states where `find_valid_moves` offers nothing but certain-miss Guard
+probes (there is no Princess case, so a Princess in hand is never a move), and the tie-breaks
+that remove it measure the same win rate. With `fixed13` the same probe measures the knock-on on
+issue 1: 1 254 zero-score decisions (+42) and 92 last-is-Guard turns. The load-bearing property
+is that the score table is non-negative - an assert, not a fix.
+
 ## tests/repro_score_multiplier.tscn — ai_memory_open_issues.md issue 3 (the claim is false)
 
 Issue 3 was written from the premise "`_target_type` is `Deck.CardType.Unknown == 0`", so

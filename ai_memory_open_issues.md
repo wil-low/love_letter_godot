@@ -48,9 +48,11 @@ zero-score fallback - which is the Princess declaration reported by players. Ver
 Baron/Handmaid/Prince.
 
 The four issues below are what remains - section 4 is now fixed (the fix and its tests are
-recorded there), sections 1 and 2 are still open, section 3 turned out to rest on a false
-premise (`Deck.CardType.Unknown` is 8, not 0, so the score is 400, not 0) and is downgraded
-to L, and section 5 is kept for completeness -
+recorded there), section 1 is still open, section 2 is closed as not an issue (the tie-break
+arbitrates moves the scoring table has already judged worthless; 62% of the time there is
+nothing to arbitrate, and the deterministic pick is the best of the three), section 3 turned
+out to rest on a false premise (`Deck.CardType.Unknown` is 8, not 0, so the score is 400, not 0)
+and is downgraded to L, and section 5 is kept for completeness -
 it turned out to be the model working as designed.
 
 
@@ -138,10 +140,19 @@ safe (a legal guess scores 0, an illegal one never scores above 0), but it silen
 guesses, so land 4 before this.
 
 
-2. `return valid_moves[-1]` turns "everything scores 0" into a Princess declaration
------------------------------------------------------------------------------------
+2. `return valid_moves[-1]`: a positional tie-break in states where every move scores 0
+   (severity L, was H) - NOT AN ISSUE
+----------------------------------------------------------------------------------------
 
-Code (`player.gd:195-203`):
+**Verdict: the mechanism is exactly as the old section describes; the severity is not.** The
+tie-break is arbitrary, the moves it arbitrates between are moves the scoring table has already
+judged worthless, 62% of the time there is nothing to arbitrate, and measured over 30 000
+four-player rounds the three candidate tie-breaks are one win rate. Design decision recorded
+here: **keep `valid_moves[-1]`** - a deterministic tie-break keeps the repro tests
+deterministic and the seeds paired, at no measured cost, and it is the best-performing of the
+three.
+
+Code (`player.gd:195-203`, unchanged):
 
 ```gdscript
 if sum == 0:
@@ -155,37 +166,101 @@ for m in valid_moves:
 return valid_moves[-1]
 ```
 
-When `sum == 0`, `rmove` is forced to 0, the accumulation loop can never satisfy
-`sum > rmove`, and the function falls through to the last element of the move list. The
-list order is not random: `find_valid_moves` iterates the hand in child order and, for a
-Guard, the guessable types in enum order `Priest..Princess` (`main.gd:512`). The last
-generated move of a hand containing a Guard is therefore the **Princess guess**.
+and the generation order that gives it meaning (`main.gd:512-543`): the hand in child order
+(the hand is never sorted, so a Guard is "last in hand" about as often as any other card),
+inside a card, targets in player order, and for a Guard the guesses in enum order
+`Priest .. Princess`.
 
-So "no move looks good" is systematically resolved as "announce Princess". This is the
-fallback that produced the reported behaviour before the section 0 fix, and it is still
-live for every state that scores all moves 0 - e.g. a hand of `[Princess, Guard]` late in a
-round where Priest, Baron, Handmaid, Prince, King and Countess copies are all in discard
-(`left_cards` = 0 for every guessable type), which the count branch scores 0.
+When the fallback is reached - and only there
+--------------------------------------------
 
-Measured frequency (30 000 four-player rounds, `tests/prince_memory_sim.py` rules, current
-`main.gd`): all-zero-score decisions are 1 215 of 277 443 decisions (0.44%) - most turns
-buy a positive score somewhere - and the last generated move is a Guard (the Princess
-declaration) in 83 of them, a Prince in 667, a Baron in 75. The mechanism is systematic, the
-frequency is not: see section 3's knock-on list.
+`EvalScore.LOSE = 0` (`player.gd:209-215`) is the floor of the whole table and no branch of
+`eval_moves` writes a negative number, so `sum == 0` means "every move scores 0" and nothing
+else: `if sum == 0: sum = 1` is the guard that keeps `randi() % sum` from dividing by zero, and
+`return valid_moves[-1]` is unreachable from any other path. Measured over 277 576 four-player
+decisions (`tests/issue2_tiebreak_sim.py`): the prefix-sum loop fell through on a non-zero sum
+**0 times**. Two things worth recording about that:
 
-Fix: make the tie-break uniform instead of positional, and give the probe plays a score of
-their own (a Guard played as a probe is not worthless - it is cheap pressure and it keeps
-the hand):
+- a 0-score move can never be returned by the weighted loop - reaching move k implies
+  `sum(0..k-1) <= rmove`, so a 0-score move cannot push the accumulation above `rmove`. The
+  loop is therefore not a weighted sampler over the move list, it is a **dominance order**: any
+  positive-score move beats every 0-score move. That is the intended semantics - it deserves a
+  comment - and it is the only reason the fallback matters at all;
+- the non-negativity of the table is load-bearing. Put a penalty into `EvalScore`
+  (`LOSE = -10`, a risk term) and both `randi() % sum` and the prefix-sum loop change meaning:
+  the fallback becomes reachable from a non-zero sum, and negative-score moves can be skipped
+  entirely by the accumulation. `assert m._score >= 0` at the end of `eval_moves` pins the
+  invariant down.
 
-```gdscript
-if sum == 0:
-    return valid_moves[randi() % len(valid_moves)]
-```
+How often it fires and what it picks
+------------------------------------
 
-Note that a 0-score move can never be returned by the weighted loop itself: reaching move
-k implies `sum(0..k-1) <= rmove`, so a 0-score move cannot push the accumulation above
-`rmove`. Only the fallback can play them.
+`tests/issue2_tiebreak_sim.py` - 30 000 four-player rounds (10 000 x 3 paired seeds), the
+rules/scoring/memory of `tests/prince_memory_sim.py`, the shipped memory policy, three
+tie-breaks measured in one run (Monte-Carlo sd on the win rate: 0.25pp):
 
+|                                       | `valid_moves[-1]` (shipped) | uniform (the drafted fix) | `valid_moves[0]` (control) |
+|---|---|---|---|
+| decisions                             | 277 576 | 277 577 | 277 597 |
+| zero-score decisions (fallback fires) | **1 212 (0.437%)** | 1 218 (0.439%) | 1 223 (0.441%) |
+| ... the list had exactly **1** legal move | **747 (61.6%)** | 751 (61.7%) | 752 (61.5%) |
+| ... every legal move is a Guard probe | 82 (6.8%) | 84 (6.9%) | 88 (7.2%) |
+| the last generated move               | Prince 648, Priest 409, **Guard 82**, Baron 73 | 650 / 411 / 84 / 73 | 650 / 412 / 88 / 73 |
+| the first generated move              | Prince 648, Priest 383, **Baron 97**, Guard 84 | 650 / 385 / 97 / 86 | 650 / 386 / 97 / 90 |
+| Guard plays / hit rate                | 108 129 / 23.98% | 108 134 / 23.96% | 108 127 / 23.96% |
+| "Princess" declared while holding the Princess | **74** | 11 | **0** |
+| seat 0 round win rate, seeds 1234 / 777 / 4242 | 25.99 / 25.92 / 25.60 | 25.84 / 25.76 / 25.42 | 25.73 / 25.63 / 25.28 |
+| ... mean                              | **25.84** | 25.67 | 25.55 |
+
+The `first` column is a control, not a proposal. In an all-zero list every move scores 0, so
+the three policies only swap one worthless move for another - and *which* one is worth 0.3pp:
+the first generated move is a Baron 97 times, and a zero-score Baron is a **known loss** (the
+memory branch pays nothing when `my_type < mem`), so the control plays 97 known-losing Barons
+per 30 000 rounds and finishes last - 0.29pp x 30 000 = 87 rounds, which is the arithmetic of
+those eliminations. The last generated move is a Prince 53% of the time, which is the most
+valuable thing on offer in those turns. That is the whole story of the severity: the tie-break
+is choosing between 0-score moves, and it happens to choose well.
+
+Four numbers decide the severity:
+
+1. **62% of the time there is no tie to break.** 747 of 1 212 zero-score decisions offer a
+   single legal move; `[-1]`, `[0]` and `randi() % len` are one policy there. This is also
+   where the "the tie-break could make the AI burn its own Princess" worry dies: a hand of
+   `[Prince, Princess]` with every rival protected has `valid_moves == [Prince on self]` - any
+   tie-break plays it, because it is the only move.
+2. **The Princess declaration is 0.03% of decisions** - 82 of 277 576, one per 366 rounds. The
+   old title ("turns everything-scores-0 into a Princess declaration") describes 6.8% of the
+   0.44% slice; the majority of the picks are a Prince (53%), then a Priest (34%).
+3. **In the motivating state there is nothing to choose.** The section's example is
+   `[Princess, Guard]` late in a round with every other guessable copy in the discard, i.e.
+   `left_cards[t] == 0` for every `t` - which is *why* the scores are 0. `find_valid_moves`
+   has no Princess case (`main.gd:505-527`) and `eval_moves` has none either, so the Princess
+   in hand is not a move at all: the whole list is Guard probes, every one of them a certain
+   miss, and the pick is a coin flip between guaranteed misses that costs the AI a Guard - a
+   card it is discarding this turn under all three tie-breaks - while the Princess stays in
+   hand. The Guard-Princess call is also the count-heuristic argmax (section 5: `_left` is the
+   exact posterior, and the Princess is the unique copy), i.e. a *sane* probe in general; it is
+   only a certain miss in the one case that matters, when the AI itself holds the Princess -
+   which is issue 1's guardrail's job, not the tie-break's.
+4. **The shipped pick is the best of the three, not the worst** (25.84 / 25.67 / 25.55, one
+   number within noise, ordered by how valuable the move it lands on is: Prince 53% > Priest
+   34% > Guard 7% > Baron 6%). Uniform is not a repair, it is a re-randomisation of a choice
+   the scoring table has already declared irrelevant - and it gives up the Prince-heavy tail
+   that makes `[-1]` the best of the three.
+
+What survives the closure
+-------------------------
+
+- The mechanism is real and it is the one that produced the reported behaviour: zero-score
+  fallback + generation order = deterministic Princess declaration. `tests/repro_guard_princess.tscn`
+  Test A still pins it down ("all 7 guesses score 0 -> the last one, Princess, is picked"), and
+  the section 0 fix removed its frequent trigger.
+- Knock-on with issue 1, measured: issue 1 zeroes guaranteed-miss Guard guesses, which moves
+  turns from "one positive score" to "all zero". With `scoring = fixed13` (the issue 1+3 table,
+  same seeds) the probe measures **1 254** zero-score decisions (0.451%, +42) and **92**
+  last-is-Guard turns (from 82). Issue 1 does feed the fallback - by 0.015pp of decisions - so
+  it does not need a tie-break change next to it.
+- What the snippet genuinely deserves is a comment and an assert (above), not a fix.
 
 3. `EvalScore.GOOD * m._target_type`: the premise was wrong, the value is 400, not 0
    (severity L, was H) - NOT AN ISSUE
@@ -267,9 +342,12 @@ Knock-ons inside this doc:
   `GOOD * (1 + mem)` reproduces 400 for the unique card, which is why the fixed scoring
   tables in section 4 read continuously with the shipped ones;
 - section 2's "every state that scores all moves 0": with 400s in the table those states
-  are rare - measured 1 215 of 277 443 four-player decisions (0.44%), and the last
-  generated move is a Guard (the Princess declaration) in 83 of them (~0.03% of decisions),
-  a Prince in 667, a Baron in 75;
+  are rare - measured 1 212 of 277 576 four-player decisions (0.437%), and the last
+  generated move is a Guard (the Princess declaration) in 82 of them (~0.03% of decisions),
+  a Prince in 648, a Priest in 409, a Baron in 73 (`tests/issue2_tiebreak_sim.py`). The 400s
+  are why a nonzero sum is the normal case; the loop falling through on a nonzero sum was
+  measured 0 times, because `LOSE = 0` is the floor - the fallback is reachable exactly from an
+  all-zero list;
 - section 5 item 3 (`CardType` has 9 values with `Unknown == 8`) is the fact this section
   was written against.
 
@@ -515,18 +593,21 @@ Summary
 | # | Issue | Severity | Where | Symptom in play |
 |---|---|---|---|---|
 | 1 | Stale Princess belief scored 350, deck accounting ignored | H | `player.gd:226-235` | Guaranteed-failed "Princess" call, Princess stuck in hand |
-| 2 | `valid_moves[-1]` tie-break | H | `player.gd:195-203` | All-zero-score turns (0.44% of 4p decisions) play the last generated move - the Princess declaration when a Guard is last in hand |
+| 2 | `valid_moves[-1]` is a positional tie-break for zero-score turns | L (was H) | `player.gd:195-203` | 0.437% of 4p decisions are all-zero-score; 62% of them have one legal move (no tie), 6.8% are pure Guard-probe turns, and 82 per 30 000 rounds end in a Princess declaration - in states where every legal move is a certain miss. Uniform/first tie-breaks measure the same win rate (25.84 / 25.67 / 25.55, sd 0.25pp). **Not an issue**, `tests/issue2_tiebreak_sim.py` |
 | 3 | `GOOD * m._target_type` is `GOOD * Unknown == 400`, **not** 0: known Baron wins and Princess-killing Princes are played, not suppressed | L (was H) | `player.gd:230,244,258` | none in play - latent: enum ordinal inside the score formula, no rank scaling for kills, 400 pays false beliefs too. **Not an issue**, `tests/repro_score_multiplier.tscn` |
 | 4 | Memories did not follow the hand card (Prince cleared the Prince player's slot, eliminations cleared nothing, plays cleared on type) | H for level 4 | `main.gd:346-348`, `279-286`, `208-210` | Guaranteed-failed Guard call paid 150 and played 63% of the time; Priest knowledge destroyed. **Fixed**, `tests/repro_prince_memory.tscn` |
 | 5 | `_left` counts widow + hand cards = correct pool; only pinned copies are missing | L | `deck.gd:48-63`, `player.gd:232-237` | Guaranteed-failed Guard guesses score 5 instead of 0 (fix folded into 1) |
 
 Sections 1 and 2 are the two halves of the reported "level 4 plays Guard and says
-Princess"; section 0 (the Guard-memory check) removed its most frequent trigger, sections 1
-and 2 remove the remaining triggers, section 3 is closed as not an issue (the 0 it claimed is
+Princess"; section 0 (the Guard-memory check) removed its most frequent trigger, section 1
+removes the remaining trigger, section 2 is closed as not an issue (the tie-break it describes
+picks between moves the table has already judged worthless - 62% of zero-score turns have a
+single legal move, the pathological Princess declaration is 0.03% of decisions, and the three
+tie-breaks are one win rate: 25.84 / 25.67 / 25.55 for last / uniform / first, sd 0.25pp, so
+the deterministic pick stays), section 3 is closed as not an issue (the 0 it claimed is
 `GOOD * Unknown == 400`; the known Baron wins are played in 94% of the opportunities and the
 Princess kills in 78%, measured in `tests/repro_score_multiplier.tscn`), leaving a latent
-enum-ordinal note, section 4 is fixed (beliefs are
-cleared and moved with the hand card they name, and the tests in `tests/README.md` pin that
-down), and section 5 turned out to be the counting model working as designed (`_left` is the
-exact posterior pool for a Guard guess) - downgraded to L, with the widow deliberately kept
-hidden from the AI.
+enum-ordinal note, section 4 is fixed (beliefs are cleared and moved with the hand card they
+name, and the tests in `tests/README.md` pin that down), and section 5 turned out to be the
+counting model working as designed (`_left` is the exact posterior pool for a Guard guess) -
+downgraded to L, with the widow deliberately kept hidden from the AI.
