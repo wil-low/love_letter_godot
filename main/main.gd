@@ -143,7 +143,7 @@ func deal_card(p: Player, allow_widow: bool = false) -> void:
 	var result := _deck.pop(allow_widow)
 	var card_type = result["type"]
 	var src = result["src"]
-	var is_faceup = p.is_human()
+	var is_faceup = p.idx == 0
 	var c = card_scene.instantiate()
 	_animation_layer.add_child(c)
 	c.type = card_type
@@ -366,8 +366,9 @@ func resolve_effect() -> void:
 			Deck.CardType.King:
 				var my_card: Card = p.hand.get_child(0)
 				var their_card: Card = tp.hand.get_child(0)
-				my_card.faceup = tp.is_human()
-				their_card.faceup = p.is_human()
+				# Seat 0 keeps its cards face up, whoever plays it.
+				my_card.faceup = tp.idx == 0
+				their_card.faceup = p.idx == 0
 				var g := my_card.global_position
 				my_card.reparent(_animation_layer)
 				my_card.global_position = g

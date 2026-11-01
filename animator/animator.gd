@@ -58,7 +58,8 @@ func reveal_hand(p: Player, hide_afterwards: bool = true) -> Signal:
 		var card: Card = p.hand.get_child(0)
 		await flip(card, true)
 		await delay(1)
-		if hide_afterwards:
+		# Seat 0 keeps its hand face up, whoever plays it.
+		if hide_afterwards and p.idx != 0:
 			await flip(card, false)
 	return _immediate()
 

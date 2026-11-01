@@ -78,7 +78,7 @@ func _ready() -> void:
 
 
 func drawn_card_position() -> Vector2:
-	if is_human():
+	if idx == 0:
 		return Vector2(global_position.x + hand.get_child_count() * 13, global_position.y)
 	return global_position
 
