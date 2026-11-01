@@ -23,20 +23,23 @@ matter:
 - If **all** moves score 0, `sum` is forced to 1, `rmove` becomes 0, the loop never
   satisfies `sum > rmove`, and the function falls through to `valid_moves[-1]` — the
   *last generated* move, which for a hand containing a Guard is the **Princess guess**
-  (`find_valid_moves` emits guesses in enum order `Priest..Princess`, `main.gd:512`).
+  (`find_valid_moves` emits guesses in enum order `Priest..Princess`, `main.gd:528-530`).
   See `ai_memory_open_issues.md` §2.
 
 ### Score constants
 
 `LOSE=0, BAD=5, WEAK=10, MODERATE=20, GOOD=50`; `CardType` is ordered `Guard=0 … Princess=7`
-(`deck.gd:4-14`), so `GOOD * type` tops out at **50×7 = 350**.
+with `Unknown=8` (`deck.gd:4-14`), so `GOOD * type` tops out at **50×8 = 400**, on
+`Unknown`; for a named card it tops out at **50×7 = 350**.
 
 `my_type` = the card **kept** in hand (`1 - played_card_idx`), `mem` = `_memory[target]`.
 
 `m._target_type` is the *guessed* card, and it is only ever set for Guard moves
-(`main.gd:512`); for Baron/Prince/King moves it stays `Unknown == 0`, so every
-`GOOD * m._target_type` outside the Guard branch evaluates to **0 == LOSE**
-(`ai_memory_open_issues.md` §3). The table below shows *intended* and *effective* values.
+(`main.gd:528-530`); for Baron/Prince/King moves it stays `Unknown == 8`, so every
+`GOOD * m._target_type` outside the Guard branch evaluates to **400**, the top score of the
+table (`ai_memory_open_issues.md` §3 - the reading "`Unknown == 0`, so 0 == LOSE" is wrong and
+the claim built on it, "guaranteed kills score 0", is measured false: these kills are played in
+94% / 78% of the opportunities). The table below shows *intended* and *effective* values.
 
 ### Scoring by played card
 
@@ -47,7 +50,7 @@ matter:
 | | belief `Unknown` **or** `Guard` → card-count probe: `left_cards[guess]` minus the copies of `guess` in my own hand (`:233-236`) | `BAD × left` | 0 … 10 (only Priest/Baron/Handmaid/Prince have 2 copies) |
 | **Priest** | target unknown | `MODERATE` | 20 |
 | | target known | `LOSE` | 0 |
-| **Baron** | known and my card beats theirs | `GOOD × type` | **0** (intended 100-350) |
+| **Baron** | known and my card beats theirs | `GOOD × type` | **400** (the multiplier reads `Unknown`, not the rival's card) |
 | | known and tie | `WEAK` | 10 |
 | | known and my card loses | `LOSE` | 0 |
 | | unknown, my card > Handmaid | `MODERATE` | 20 |
@@ -56,7 +59,7 @@ matter:
 | **Prince** (self) | kept card is the Princess | `LOSE` | 0 |
 | | kept card > Handmaid | `BAD` | 5 |
 | | kept card ≤ Handmaid | `WEAK` | 10 |
-| **Prince** (other) | known Princess holder | `GOOD × type` | **0** (intended 350) |
+| **Prince** (other) | known Princess holder | `GOOD × type` | **400** (the multiplier reads `Unknown`) |
 | | known card > Handmaid | `WEAK` | 10 |
 | | known card ≤ Handmaid | `LOSE` | 0 |
 | | unknown | `WEAK` | 10 |
@@ -65,12 +68,15 @@ matter:
 | | known and my card is higher | `BAD` | 5 |
 | | unknown | `BAD` | 5 |
 | **Countess** | always | `BAD` | 5 (forced when Countess + Prince/King is in hand, `countess_restricted` `:121-129`; in that case `find_valid_moves` offers only the Countess) |
-| **Princess** | no branch — never scored | `LOSE` | 0 (and never offered as a move, `main.gd:505-527`) |
+| **Princess** | no branch — never scored | `LOSE` | 0 (and never offered as a move, `main.gd:512-543`) |
 
-Net effect: **every guaranteed kill scores 0**, so Level 4 rarely plays them — a Handmaid
-(20) out-competes a Baron it knows it wins, and a known Princess in a rival's hand is never
-burned with a Prince. The only high scores the AI can actually reach are correct Guard
-guesses; everything else lives in the 5-20 band.
+Net effect: the two guaranteed kills (a Baron the AI knows it wins, a Prince on a known
+Princess) score **400 - the top of the table**, so they are played, not suppressed: measured in
+94% of the opportunities and 78% respectively (`ai_memory_open_issues.md` §3). What the enum
+ordinals buy is not suppression but flatness: a Baron win on a Countess and one on a Princess
+cost the same 400, because the multiplier reads `Unknown` where the rank of the kill was meant to
+be read. Only correct Guard guesses carry rank scaling; the rest of the table lives in the 5-20
+band.
 
 `eval_moves` is also called for the **human** player (`main.gd:181`) purely to print the
 score table when `print_valid_moves` is on — it does not constrain the human's choice.
@@ -81,13 +87,14 @@ score table when `print_valid_moves` is on — it does not constrain the human's
   are treated as facts (`player.gd:222`).
 - **Card-count probing for Guard guesses**: `left_cards[guess]` is the correct Bayesian
   prior — `_left` starts at full card counts and is decremented on every discard
-  (`main.gd:411`), so it tracks exactly the cards the AI cannot see; the code also removes
+  (`main.gd:421`), so it tracks exactly the cards the AI cannot see; the code also removes
   the copies it holds itself. Guessing the most numerous remaining type is a genuinely
   Love-Letter-specific insight.
 - **Weighted random** keeps the AI imperfect: good moves are *more* likely, bad moves still
   happen, which makes it a beatable opponent rather than a solver.
 - **Rank-weighted kills** (`GOOD × type`) express "eliminating a higher card is worth more"
-  — correct intent, realised only for Guard.
+  — realised for Guard, where `type` is the guess, and flattened to 400 for Baron and Prince,
+  where `type` is `Unknown`.
 - **King is the best modelled card**: safe swap, trading down, trading up and blind trade
   are four distinct scores (10 / 20 / 5 / 5).
 - **Prince on self** distinguishes self-kill from safe self-play (0 vs 5/10).
@@ -97,8 +104,8 @@ score table when `print_valid_moves` is on — it does not constrain the human's
 - **No lookahead**: only the current turn is scored. Deck exhaustion, the race to
   `_max_score` (6 / 5 / 4 points for 2 / 3 / 4 players, `main.gd:109-114`), holding a card
   for later, and who plays next are all invisible to the evaluation.
-- **Guaranteed kills score 0** (`GOOD * 0`, see table): the AI systematically prefers passive
-  20-point moves over winning a Baron or burning a Princess.
+- **Guaranteed kills are rank-blind**: they score 400 and are played (94% / 78% of the
+  opportunities), but a Baron win worth a match point and one worth nothing cost the same.
 - **0-score moves are unplayable**, and the all-zero fallback is positional, not uniform —
   it lands on the Princess guess.
 - **Score multipliers are arbitrary**: `GOOD × type` (50 → 350) sits next to fixed 5-20
@@ -111,8 +118,10 @@ score table when `print_valid_moves` is on — it does not constrain the human's
 - **Baron/Prince risk is not probabilistic**: with no belief, Baron is scored on my card
   alone (`> Handmaid ? 20 : 5`); the likelihood of the rival holding a higher card, given
   what is in discard, is not considered.
-- **Memory hygiene is lossy**: Prince clears the wrong slot, eliminations clear nothing, so
-  Level 4 acts on stale beliefs (`ai_memory_open_issues.md` §4).
+- **Memory depth is single-author**: `_memory` records only what this seat itself revealed
+  (Priest) or deduced (Baron tie, King trade); a Priest reveal made by another seat is public
+  information that no seat records (`ai_memory_open_issues.md` §6), so the model sees the table
+  through the hand of one player.
 - **Protection is only implicit**: `find_valid_moves` filters protected targets (and self on
   Prince), so the AI never *sees* an illegal move — it does not weigh "keep the Handmaid for
   later".
@@ -124,9 +133,12 @@ score table when `print_valid_moves` is on — it does not constrain the human's
 Strongest of the scripted levels: in the speed-run runs recorded in `speedrun.txt` (six
 1000-game runs, levels 1-4 in fixed order, Level 4 seated at player 3) the Level 4 seat has
 the highest total score in every run (2694-2923 vs 1329-1547 for Level 1). Two caveats:
-player order and seeds are fixed, so position bias is baked in, and the runs predate the Oct 31
-Guard-memory fix. Its aggression is also capped by the zero-scored kills above, so it plays
-passively far more often than a human would.
+player order and seeds are fixed, so position bias is baked in, and the runs predate both the
+Oct 31 Guard-memory fix and the November memory-bookkeeping fix (§4). Measured recently, with
+shuffled seats and 10 000 games per player count: Level 4 wins 50.8% of 2-player games, 33.6%
+of 3-player games and 25.5% of 4-player games when every seat is Level 4
+(`tests/ai_policy_sim.py` / `tests/issue2_tiebreak_sim.py` - i.e. the seat advantage is the
+early-seat advantage, and the policy variants sit within 0.25pp of each other).
 
 Treat the old "~40-60% of rounds vs a random opponent in a 4-player game" figure as unmeasured
 folklore. Before quoting numbers, re-run with shuffled player order and rotating seeds

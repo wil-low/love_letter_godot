@@ -8,3 +8,7 @@
 
 # one-off patches
 *.diff
+
+# python test harness caches (tests/*.py)
+__pycache__/
+*.pyc

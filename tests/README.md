@@ -256,3 +256,46 @@ kills are not differentiated by rank (a Princess burn = a Baron win on a believe
 the 400 is paid for false beliefs too. The rank-scaled alternative `GOOD * (1 + mem)` is a
 rebalance, not a repair - measured over 30 000 four-player rounds it takes fewer guaranteed
 Baron wins (94% -> 82%) at a win-rate difference inside Monte-Carlo noise.
+
+## tests/repro_belief_truth.tscn — ai_memory_open_issues.md section 1 (not an issue)
+
+`godot --headless --path . tests/repro_belief_truth.tscn` (~7 min for the default 500 rounds;
+`--rounds=1500` takes ~23 min)
+
+1 500 four-player rounds, all four seats Level 4, the production scene, no production file
+touched. It checks the *invariant* the section 1 closure rests on - "every non-Unknown `_memory`
+slot naming a live rival names that rival's real hand card" - at the only moment that matters:
+inside `ai_move`, in the frame before the AI plays, where hand, `_memory` and `_left` are exactly
+what `eval_moves` reads. `Card.type` is the ground truth, `Deck._left` is the public accounting.
+
+Five checks, reported as counts, the test fails on any of them:
+
+- **A** - every belief a deciding seat holds about a live rival, read against the rival's real
+  hand. Measured 412 belief observations (500 rounds) / 1 200 (1 500 rounds), **0 false**.
+- **B** - every Guard played on a belief and every Guard played on the card count: hit / miss /
+  provably-impossible (the single Princess in the guesser's own hand, or two copies of a 2-copy
+  type in it). Measured, over 500 rounds: 118 memory-driven guesses - 118 hits, **0 impossible**;
+  1 703 count-driven guesses - **1 impossible**. `guard_memory_miss` is 0 by construction - a
+  belief-driven guess is a read of the card it guesses - and that one count-driven case is a legal
+  probe the shipped count branch already scores 0 (the copy it counts sits in the guesser's own
+  hand), i.e. section 5 item 1's accounting, not a play the AI is missing.
+- **C** - a "Princess" declaration played by a seat that is itself holding the Princess: section
+  2's pathological tail, visible in the engine. Measured 1 in 500 rounds.
+- **D** - every Baron played on a belief: does the belief name the target's real card (the section
+  3 knock-on, priced in play). Measured 44 (500 rounds) / 101 (1 500 rounds), **0 false**.
+- **E** - beliefs about eliminated seats at decision time (`set_inactive`'s clear). Measured 0.
+
+    godot --headless --path . tests/repro_belief_truth.tscn
+    echo $?   # 0 = every check passed, 1 = a check failed
+
+Measured (500 rounds): 4 666 Level 4 decisions - 9.3 per round, each one scanning the three
+rival rows - 1 703 count-driven guesses, 44 Baron plays on beliefs with 0 false, 0
+zombie beliefs, 0 script errors in the log. The 5 000-round run was tried and is not recommended: cost
+is superlinear in rounds (500 rounds ≈ 7 min, 1 500 ≈ 23 min) because the test scene accumulates
+leaked `Card` nodes - the same leak `tests/smoke_games.tscn` reports - so 5 000 rounds is hours.
+The 20 000-round version of the same measurement is `tests/prince_memory_sim.py`: over 2/3/4
+players with the applied memory policy, 15 966 / 20 014 / 26 532 belief-driven Guard guesses are
+all true (0 false), 0 name a card already out of play, Baron beliefs are 0 false out of 4 090
+(4p), 1 183 Princes aimed at a believed Princess waste 0, and 0 decisions see a belief about an
+eliminated seat; with the pre-fix policy the same cells read 2 099 / 3 291 / 6 426 false Baron
+beliefs and 1 750 self-eliminations - the number that made section 1 read as severity H.

@@ -1,12 +1,15 @@
 AI level 4 - open issues in memory handling and move scoring
 ============================================================
 
-Scope: `player/player.gd` (`eval_moves`, `select_move`), `main/main.gd` (effect resolution
-and memory updates), `deck/deck.gd` (card accounting). Line numbers are from the current
-working tree (after the Guard-memory fix described in section 0).
+Scope: `player/player.gd` (`eval_moves`, `select_move`), `main/main.gd` (effect resolution,
+memory updates, and the reveal guards of section 6), `deck/deck.gd` (card accounting). Line
+numbers are from the current working tree (after the Guard-memory fix of section 0 and the memory
+fix of section 4; re-verified line by line).
 
 Reproduction harness: `tests/repro_guard_princess.tscn`
 (`godot --headless --path . tests/repro_guard_princess.tscn`), documented in `tests/README.md`.
+Aggregate measurements come from `tests/prince_memory_sim.py` (and `tests/issue2_tiebreak_sim.py`
+for the tie-break probe), decision-time state checks from `tests/repro_belief_truth.tscn`.
 
 Legend: severity H = plays a move a human would call irrational, M = loses information /
 misses opportunities, L = latent, only reachable in specific states.
@@ -21,14 +24,16 @@ invariant is
 > `_memory[i][j] = T` means "player i believes player j's single card in hand is T",
 > and `Unknown` means "no belief".
 
-Writes are made in `main.gd`: Priest reveal (`:320`), Baron tie (`:334-335`), Baron tie
-propagation to third parties (`:330-333`), King trade (`:369-376`). Clears are made when a
-card is played (`main.gd:209-210`, clears only if the belief pointed at the played card) and
-in the Prince branch (`main.gd:346-348`). All beliefs are wiped at the start of a round
-(`main.gd:129-130`).
+Writes are made in `main.gd`: Priest reveal (`:322-325`), Baron tie (`:339-340`), Baron tie
+propagation to third parties (`:341-346`), King trade (`:385-392`). Clears are made when a
+card is played (`main.gd:215-217`, clears only if the belief pointed at the played card),
+in the Prince branch (`main.gd:363-364`) and in `set_inactive` (`main.gd:290-291`). All beliefs
+are wiped at the start of a round (`main.gd:129-130`).
 
 The deck contains exactly one Princess (`deck.gd:card_count`), so a belief "player j holds
-the Princess" is *provably false* as soon as the believer itself holds the Princess.
+the Princess" is *provably false* as soon as the believer itself holds the Princess - and,
+because every writer above is a read of a real card, that combination never occurs in play
+(section 1).
 
 Fixed (this working tree): `eval_moves` Guard branch
 
@@ -47,19 +52,32 @@ zero-score fallback - which is the Princess declaration reported by players. Ver
 `Test B`: the same turn now scores `sum = 40` with `Princess = 0` and the AI picks
 Baron/Handmaid/Prince.
 
-The four issues below are what remains - section 4 is now fixed (the fix and its tests are
-recorded there), section 1 is still open, section 2 is closed as not an issue (the tie-break
-arbitrates moves the scoring table has already judged worthless; 62% of the time there is
-nothing to arbitrate, and the deterministic pick is the best of the three), section 3 turned
-out to rest on a false premise (`Deck.CardType.Unknown` is 8, not 0, so the score is 400, not 0)
-and is downgraded to L, and section 5 is kept for completeness -
-it turned out to be the model working as designed.
+The issues below are what remains - section 4 is fixed (the fix and its tests are recorded
+there), sections 1, 2 and 3 are closed as not an issue (1: the state its scoring rests on has no
+construction path once section 4 landed, and the guardrail it drafted is unreachable code; 2: the
+tie-break arbitrates moves the scoring table has already judged worthless; 62% of the time there is
+nothing to arbitrate, and the deterministic pick is the best of the three; 3: it rested on a false
+premise - `Deck.CardType.Unknown` is 8, not 0, so the score is 400, not 0, and is downgraded to L),
+section 5 turned out to be the model working as designed, and section 6 is new and open: the
+observation model, found while proving the invariant that closes section 1.
 
 
-1. A stale belief about the Princess is played greedily (severity H)
---------------------------------------------------------------------
+1. The Guard memory branch has no deck-accounting guardrail (severity L, was H)
+   NOT AN ISSUE
+---------------------------------------------------------------------------------
 
-Code (`player.gd:226-235`):
+**Verdict: the mechanism is exactly the code the old section quotes; the state it scores is
+unreachable.** With section 4's fix in place, measured over 60 000 rounds (20 000 x 3 player
+counts, `tests/prince_memory_sim.py`, memory policy `fix_plus` = the applied fix) and 13 917 real
+level 4 decisions in the engine (`tests/repro_belief_truth.tscn`): **0** beliefs that do not name
+the rival's real hand card, **0** memory-driven Guard guesses naming a type that cannot be
+anywhere, **0** Baron plays scored on a false belief, **0** Prince plays wasted on a believed
+Princess. The `left <= 0` guardrail drafted here is unreachable code, and the scoring rewrite that
+came with it measures as a small loss (Guard hit rate 24.37 -> 24.18 in four-player games, win
+rate inside Monte-Carlo noise). Design decision recorded here: **no change to `eval_moves`** - the
+invariant that makes the memory branch safe is pinned by a test, not by a score.
+
+The mechanism (`player.gd:226-235`, unchanged):
 
 ```gdscript
 Deck.CardType.Guard:
@@ -75,70 +93,122 @@ Deck.CardType.Guard:
         m._score = EvalScore.BAD * left
 ```
 
-The memory branch never consults the deck. If `_memory[rival] == Princess` while the AI
-itself holds the Princess, the guess is impossible, yet it scores 350 - the top score the
-Guard branch can produce, second only to the accidental `GOOD * Unknown == 400` of the
-Baron/Prince branches (section 3) - so the weighted random in `select_move` picks it with probability
-`350 / sum`, which is 1.0 when every other move scores 0. Measured by `Test A`, scenario
-"memory of rival = Princess":
+The memory branch never consults `left_cards`, so a belief naming a card that is out of play would
+be paid `GOOD * rank` - 350 for the unique card, the greediest play the Guard branch makes. That
+reading of the code is correct. What is not correct is the premise that such a belief exists.
 
-```
-Priest 0  Baron 0  Handmaid 0  Prince 0  King 0  Countess 0  Princess 350
-AI plays: Guard (1), tgt 1, Princess
-```
+Why the belief cannot exist
+---------------------------
 
-Mechanism summary: the count branch has the right guard (own hand is subtracted from
-`left_cards`), the memory branch has none. So a *correct* belief is trusted, and a *stale*
-belief is trusted just as strongly - and it is trusted most strongly for the unique card.
+`_memory` is a seat's own array, and every writer is public information and sound:
 
-Consequence: a guaranteed-failed Guard play. The Princess is kept (suicide to play), the
-Guard is spent, the rival is unharmed, and the AI's most valuable card is left rotting in
-hand, which also makes it a Baron/Prince bait.
+| writer | line | why the slot it writes is true |
+|---|---|---|
+| Priest reveal | `main.gd:325` | the Priest player writes the card he has just looked at |
+| Baron tie | `:339-340` | a tie means both cards are equal, so each seat writes the other's real card |
+| tie propagation to third parties | `:342-346` | deduction: a tie means the two hands are equal, so my true belief about one of them is a true belief about the other |
+| King trade | `:385-392` | beliefs travel with the cards that are traded; third-party slots are swapped |
+| a play of the believed type | `:217` | clears - section 4 item 3, the sound direction |
+| a Prince on a target | `:364` | clears the slot that names the hand that changed |
+| an elimination | `:291` | clears beliefs about the seat that left the round, and that seat's own array |
+| a new round | `:129-130` | wipes everything |
 
-Fix: use the accounting in both branches - trust a belief only while the type is still
-possible:
+No writer ever guesses: the only writes that *add* information are reads of a real card, and the
+one write that is probabilistic (the type-matching play clear) goes in the conservative direction.
+Hence:
 
-```gdscript
-var left := left_cards[m._target_type]
-for c in [hand.get_child(0).type, hand.get_child(1).type]:
-    if c == m._target_type:
-        left -= 1
-if left <= 0:
-    m._score = EvalScore.LOSE           # no copy of that type can be anywhere else
-elif mem == m._target_type:
-    m._score = EvalScore.GOOD * (1 + mem)
-else:
-    m._score = EvalScore.BAD * left
-```
+> **Invariant (measured at every level 4 decision, `tests/repro_belief_truth.tscn`): every
+> non-Unknown slot of `_memory` that names a live rival equals that rival's hand card.**
 
-With this, the impossible move is unrepresentable, and stale beliefs can never be played -
-independently of how they were created.
+Two consequences, and they are the two ends of issue 1:
 
-Extension (this is the legitimate half of section 5 - cards the AI itself has pinned with a
-Priest are copies that cannot be anywhere else):
+- `_memory[j] == Princess` with `j` live means the Princess is in `j`'s hand. The deck has exactly
+  one Princess (`deck.gd:card_count`), so the deciding seat cannot be holding it. The state
+  "I hold the Princess **and** I believe rival `j` holds the Princess" has no construction path.
+- `_memory[j] == T` being true puts a copy of `T` in `j`'s hand, so `left_cards[T] >= 1` and
+  `left_cards[T] - (my copies of T) >= 1`. The guardrail's condition (`left <= 0`) and the memory
+  branch's condition (`mem == m._target_type`) are **mutually exclusive**: a true belief always
+  names a type that still has a copy in play, which is the only case where the guardrail could
+  have fired.
 
-```gdscript
-# copies pinned in OTHER players' hands; the target's own belief is deliberately
-# excluded, because `mem == m._target_type` means the guess is a certain hit
-var pinned := 0
-for j in _memory.size():
-    if j != m._target_player and _memory[j] == m._target_type:
-        pinned += 1
-left = max(0, left - pinned)   # clamp: Baron-tie propagation can pin one copy twice
-```
+Measured over 20 000 rounds per cell, four players. The left column is the memory policy as it was
+before section 4 (the state the old section was written against), the right column is the applied
+fix; move scoring is the shipped one in both:
 
-This needs no new data - `_memory` is the deciding player's own array, so `eval_moves`
-can see every belief it is entitled to use (`_memory[idx]` is never written, so it does not
-self-pin). The clamp is what keeps the Baron-tie cloning of section 4 from turning a
-unique-copy type negative. With it in place, `left == 0` means "no copy of this type can be
-in any unknown hand", which is the exact condition issue 1 needs.
+| metric | pre-fix (policy `shipped`) | now (policy `fix_plus`) |
+|---|---|---|
+| Guard guesses driven by a belief | 4 836 | 4 952 |
+| ... the belief did not match the real card | 257 | **0** |
+| ... the declared type cannot be anywhere else (`left - own <= 0`) | 207 | **0** |
+| Baron plays scored by a belief / of them false | 1 012 / 97 | 942 / **0** |
+| ... Baron self-eliminations caused by a false belief | 25 | **0** |
+| Prince plays aimed at a believed Princess / wasted on nothing | 667 / 0 | 730 / **0** |
+| beliefs about seats already out, visible at decision time | 8 149 | **0** |
+| decisions declaring "Princess" while holding the Princess | 51 | 50 |
+| ... of those, scored by the memory branch (the 350 play) | 0 | **0** |
 
-Ordering note: a memory slot is a claim about a *live* hand, so this extension depends on
-section 4's `set_inactive` clear. A belief left behind by an eliminated player steals a
-copy from the count and makes the guardrail fire too eagerly - the failure direction is
-safe (a legal guess scores 0, an illegal one never scores above 0), but it silences good
-guesses, so land 4 before this.
+2 players: 3 487 belief-driven guesses, 0 false, 0 impossible; 1 016 belief-scored Barons, 0 false;
+0 declarations. 3 players: 5 641 / 0 / 0, 1 227 / 0, 28 declarations.
 
+The engine test repeats the same checks inside the production scripts - `Player.move_chosen` fires
+after `select_move` and before `_on_card_played`, so the hook sees the decision-time view (memory
+as scored, hands as scored, `_deck._left` as scored): 1 500 four-player rounds, 4 x level 4,
+13 917 decisions, 1 200 belief observations with **0** false, 387 belief-driven Guard guesses with
+387 hits and **0** impossible, 101 belief-scored Barons with **0** false, 0 zombie slots, exit 0.
+The default run is 500 rounds (~7 min; the cost is superlinear in rounds, so the test takes
+`--rounds=N`): 4 666 decisions, 412 beliefs with **0** false, 118 belief-driven guesses with 118
+hits and **0** impossible, 1 703 count-driven guesses with **1** impossible - a legal probe whose
+0 comes from the count branch itself, which is section 5 item 1's case, not a missed play.
+The two tools agree on rates: the sim's 4 952 belief-driven guesses per 20 000 rounds is 371 per
+1 500 rounds, the engine counted 387.
+
+The 50 declarations that remain are not issue 1's
+-------------------------------------------------
+
+50 per 20 000 four-player rounds (0.027% of 185 102 decisions) is the tail section 2 closed. The
+AI holds the Princess, declares the Princess, and the count branch has *already* zeroed that guess:
+`EvalScore.BAD * (left_cards[Princess] - 1) = 0`, because the copy the count includes is the one in
+the AI's own hand. Measured directly on those 50 decisions: **0** are scored by the memory branch,
+i.e. none is the 350-point play this section describes. They are all-zero turns, and
+`valid_moves[-1]` is the last generated guess, which is the Princess guess. Issue 1's scoring
+change does not remove them - it moves their count from 82 to 92 per 30 000 rounds
+(`tests/issue2_tiebreak_sim.py`, `fixed13`).
+
+Why Test A sees the state
+-------------------------
+
+`tests/repro_guard_princess.tscn` Test A writes the slot by hand (`p0.update_memory(1,
+Deck.CardType.Princess)`) next to a Princess in P0's own hand. That state has no construction path;
+the scenario is kept as the unit test of the scoring branch - it documents that the memory branch
+pays `GOOD * 7 = 350` for a provably impossible call. Test B reaches the same hand through the real
+King sequence, and it asserts the opposite of the old section's story:
+
+    check(p0._memory[1] == Deck.CardType.Guard,
+        "memory is NOT stale - King overwrote it with the rival's real card")
+
+What the section leaves behind
+------------------------------
+
+- an **assert / comment**, not a fix. The Guard branch deserves the invariant written down ("a
+  belief is a read of a real card, so a memory-driven guess is a certain hit; deck accounting is
+  the job of the count branch"), and `eval_moves` deserves the non-negativity pin section 2 asks
+  for. `tests/repro_belief_truth.tscn` is the regression net: it fails the first time a writer
+  produces a belief that does not name the real card - which is the bug class this section
+  describes, and section 4 is an instance of it (its pre-fix numbers are the non-zero column of
+  the table above).
+- the **pinned-copy accounting** - the legitimate half, and it is not about the memory branch at
+  all: it is about the count branch, where `left_cards` includes copies the seat itself has pinned
+  in *other* known hands, so a legal probe aimed at a third player can be a certain miss and still
+  score `BAD * 1 = 5`. It belongs to section 5 item 1, with the in-game measurements recorded there
+  (193 guesses per 20 000 four-player rounds are affected, ~1 per 100 rounds; the subtraction takes
+  the Guard hit rate from 24.37% to 24.18% at a win rate indistinguishable from noise).
+  Calibration, not repair.
+- the drafted **ordering note and clamp are moot**: with `set_inactive` clearing in both directions
+  (section 4), there are no zombie slots to steal a copy from the count (measured 0) and no
+  Baron-tie cloning into a dead slot, so `max(0, left - pinned)` has nothing to clamp.
+- the summary-table severity is now L. The H it carried belongs to section 4, where the same
+  symptom (a guaranteed-failed belief-driven play, `GOOD * rank` paid for it) is measured, fixed
+  and tested.
 
 2. `return valid_moves[-1]`: a positional tie-break in states where every move scores 0
    (severity L, was H) - NOT AN ISSUE
@@ -234,7 +304,7 @@ Four numbers decide the severity:
 3. **In the motivating state there is nothing to choose.** The section's example is
    `[Princess, Guard]` late in a round with every other guessable copy in the discard, i.e.
    `left_cards[t] == 0` for every `t` - which is *why* the scores are 0. `find_valid_moves`
-   has no Princess case (`main.gd:505-527`) and `eval_moves` has none either, so the Princess
+   has no Princess case (`main.gd:512-543`) and `eval_moves` has none either, so the Princess
    in hand is not a move at all: the whole list is Guard probes, every one of them a certain
    miss, and the pick is a coin flip between guaranteed misses that costs the AI a Guard - a
    card it is discarding this turn under all three tie-breaks - while the Princess stays in
@@ -255,11 +325,12 @@ What survives the closure
   fallback + generation order = deterministic Princess declaration. `tests/repro_guard_princess.tscn`
   Test A still pins it down ("all 7 guesses score 0 -> the last one, Princess, is picked"), and
   the section 0 fix removed its frequent trigger.
-- Knock-on with issue 1, measured: issue 1 zeroes guaranteed-miss Guard guesses, which moves
-  turns from "one positive score" to "all zero". With `scoring = fixed13` (the issue 1+3 table,
-  same seeds) the probe measures **1 254** zero-score decisions (0.451%, +42) and **92**
-  last-is-Guard turns (from 82). Issue 1 does feed the fallback - by 0.015pp of decisions - so
-  it does not need a tie-break change next to it.
+- Knock-on measured on the drafted issue 1+3 table (the one section 1's closure declines to
+  land): zeroing guaranteed-miss Guard guesses moves turns from "one positive score" to "all
+  zero". With `scoring = fixed13` (the issue 1+3 table, same seeds) the probe measures **1 254**
+  zero-score decisions (0.451%, +42) and **92** last-is-Guard turns (from 82). The drafted repair
+  would *grow* this tail, which is one more reason to answer this section with a comment and an
+  assert rather than to buy a scoring change that feeds it.
 - What the snippet genuinely deserves is a comment and an assert (above), not a fix.
 
 3. `EvalScore.GOOD * m._target_type`: the premise was wrong, the value is 400, not 0
@@ -270,7 +341,7 @@ The old text of this section assumed `_target_type` is `Deck.CardType.Unknown ==
 `Unknown` is **8**: `deck.gd:3-11` numbers the enum Guard = 0, Priest = 1 ... Princess = 7,
 Unknown = 8 (section 5, item 3 of this doc already states it). `find_valid_moves` builds
 Baron / Prince / King moves without a target type (`Move.new(cards[i], i, p.idx)`,
-`main.gd:516-527`), so the three multiplications evaluate to:
+`main.gd:531-543`), so the three multiplications evaluate to:
 
 | line | branch | expression | value |
 |---|---|---|---|
@@ -334,13 +405,17 @@ What is left is real, and all of it is latent (severity L):
    `_memory[target]` blindly, and section 4's table records the price: 97 false Baron
    beliefs and 25 AI self-eliminations from them per 20 000 four-player rounds (shipped
    scoring). A rank-scaled multiplier does not cure it (`GOOD * (1 + Guard) = 50` still
-   beats the ~16 of the competing plays); issue 1's deck accounting is the guardrail.
+   beats the ~16 of the competing plays). What covers it is the invariant that closes section 1
+   - beliefs are reads of real cards, so a belief-driven Baron is a Baron the seat has *seen*
+   the losing condition of - measured 0 false beliefs at 60 000 rounds and 13 917 engine
+   decisions. `tests/repro_belief_truth.tscn` is the net that keeps item 3 priced at 0.
 
 Knock-ons inside this doc:
 
-- section 1's "350 - the highest number in the scoring table": 400 is higher. Section 1's
-  `GOOD * (1 + mem)` reproduces 400 for the unique card, which is why the fixed scoring
-  tables in section 4 read continuously with the shipped ones;
+- section 1's "350 - the highest number in the scoring table": 400 is higher. Its `GOOD * (1 +
+  mem)` reproduces 400 for the unique card, which is why the fixed scoring tables in section 4
+  read continuously with the shipped ones - and why that comparison measures a rebalance, not a
+  repair, on both sections at once;
 - section 2's "every state that scores all moves 0": with 400s in the table those states
   are rare - measured 1 212 of 277 576 four-player decisions (0.437%), and the last
   generated move is a Guard (the Princess declaration) in 82 of them (~0.03% of decisions),
@@ -354,7 +429,7 @@ Knock-ons inside this doc:
 Related, same table: `EvalScore` has no branch for a played Princess (`eval_moves`
 initialises `_score = LOSE` at `player.gd:223` and the `match` has no Princess case), which
 is correct by accident - playing the Princess is suicide. `find_valid_moves` has no Princess
-case either (`main.gd:505-527`), so the AI is never offered that move; the human is, and a
+case either (`main.gd:512-543`), so the AI is never offered that move; the human is, and a
 human can play it.
 
 4. The Prince cleared the belief about its own player, not about the rival whose hand
@@ -362,21 +437,21 @@ human can play it.
 ---------------------------------------------------------------------------------------------
 
 The rule the memory model implies, and which the King branch already implements correctly
-(`main.gd:369-376` swaps the two traders' beliefs and the third parties' slots):
+(`main.gd:385-392` swaps the two traders' beliefs and the third parties' slots):
 
 > `_memory[i][j] = T` means "player i believes **player j's hand card** is T".
 > A belief must be cleared (or moved) exactly when **that card** leaves j's hand.
 
 Two places in `main.gd` broke it:
 
-1. **Prince cleared the wrong slot** (`main.gd:346-348`). The hand that changes is the
-   target's; the loop cleared beliefs about the Prince player. Exactly right for a
-   self-targeted Prince - which is why the bug survived, the code was written for that case
-   - and inverted for the common one.
-2. **Elimination cleared nothing** (`set_inactive`, `main.gd:279-286`).
+1. **Prince cleared the wrong slot** (`main.gd:363-364`, and that is where the fix now sits).
+   The hand that changes is the target's; the loop cleared beliefs about the Prince player.
+   Exactly right for a self-targeted Prince - which is why the bug survived, the code was
+   written for that case - and inverted for the common one.
+2. **Elimination cleared nothing** (`set_inactive`, `main.gd:286-296`).
 
 **The third one is not a bug, and a "fix" for it is cheating.** `_on_card_played`
-(`main.gd:208-210`) clears every belief about the playing player whose type matches the
+(`main.gd:215-217`) clears every belief about the playing player whose type matches the
 played card. The tempting reading of the rule above is "beliefs name the card at index 0, so
 a player who plays the card he has just drawn has not invalidated them". A seat cannot know
 that: a player holds two cards face-down and turns one face-up, so the observer sees the
@@ -419,7 +494,7 @@ included) over 20 000 four-player games:
 - **The elimination half is housekeeping, not strength.** `find_valid_moves` filters targets
   on `is_active()`, so a belief about a dead seat is never scored: test C recomputes the
   score table with the slot cleared and every score is identical. What they do cost is
-  indirect: the Baron-tie propagation loop (`main.gd:330-333`) clones a dead seat's belief
+  indirect: the Baron-tie propagation loop (`main.gd:341-346`) clones a dead seat's belief
   onto a live player, and section 1's "don't guess a type pinned in a known hand" guardrail
   fires on cards that are out of the round (147 of 396 zeroings in the simulation). 8 149
   such slots existed at decision time over the simulated rounds.
@@ -460,13 +535,15 @@ could not read off the table.
 Reachability note for the "stale Princess" story: the Princess leaves a live player's hand
 only through the King trade, and the King branch rewrites memories correctly. Removing the
 Princess by Prince, by playing it, or by losing a Baron/Guard duel eliminates its owner. So
-a Princess belief attached to a *live* rival is normally true, and it travels through the
-propagation loop (`main.gd:330-333`, a Baron tie clones a belief from one player's slot into
-another's). With this fix the two sources of staleness that loop used to amplify are gone:
-the Prince no longer leaves a belief pointing at a card that left the game, and a seat that
-left the round has no belief left to clone. Section 1's deck-accounting guardrail stays
-needed - a belief can still be true for one player and the guess can still be impossible
-when the only copy is pinned in the guesser's own hand.
+a Princess belief attached to a *live* rival is true, and it travels through the
+propagation loop (`main.gd:342-346`, a Baron tie clones a belief from one player's slot into
+another's, which a tie makes a valid deduction). With this fix the two sources of staleness that
+loop used to amplify are gone: the Prince no longer leaves a belief pointing at a card that left
+the game, and a seat that left the round has no belief left to clone. That is the invariant
+section 1 is closed on - measured 0 false beliefs, 0 impossible memory-driven guesses, 0 false
+Baron beliefs over 60 000 rounds and 13 917 engine decisions. The residue the note points at (a
+copy the seat itself pinned in somebody else's hand, which the card count still charges to an
+unknown hand) is a count-branch matter, recorded in section 5 item 1.
 
 Verification: `tests/repro_prince_memory.tscn` (A-D assert the behaviour in the engine,
 including test D's posterior for the played-card clear, E replays the two Prince decisions
@@ -478,7 +555,7 @@ rounds, 137 eliminations, no script error), and the pre-existing
 --------------------------------------------------------------------------------
 
 Verdict: not a bug. `Deck` maintains one invariant - `Deck.prepare` (`deck.gd:48-63`)
-initialises it and `Main.discard()` (`main.gd:405-416`) is the only writer:
+initialises it and `Main.discard()` (`main.gd:421-433`) is the only writer:
 
 ```
 _left[t] = copies of type t that are not in the discard
@@ -542,7 +619,7 @@ The three bullets of the original section that describe non-defects:
   the Prince player's remaining card is unknown to everybody. The AI's own card is
   subtracted. Nothing to fix.
 - "cannot be drawn" is also literally false: `deal_card(tp, true)` in the Prince branch
-  (`main.gd:345`, `deck.gd:66-71`) pops from `_widow_cards` when the draw pile is empty.
+  (`main.gd:358`, `deck.gd:66-71`) pops from `_widow_cards` when the draw pile is empty.
 
 What is left of this issue - three things, all small:
 
@@ -564,11 +641,31 @@ What is left of this issue - three things, all small:
 
    In a fresh round the effect is noise; it grows with the discard count, and in the last
    third of a round the level 4 AI spends ~40% of its Guard guesses on a card it has
-   personally revealed into somebody else's hand. This is **issue 1's guardrail** (see the
-   extension under section 1) - the `unknown_hands` denominator of the drafted
+   personally revealed into somebody else's hand. This is the guardrail section 1's drafted
+   extension was built around - the `unknown_hands` denominator of the drafted
    `probability = free_copies / unknown_hands` helper is identical for every Guard guess in
-   a turn, i.e. a constant multiplier that changes nothing inside a turn. Do it as part of
-   1, not as deck surgery.
+   a turn, i.e. a constant multiplier that changes nothing inside a turn, so the helper was
+   dropped and only the `- pinned_t` survives. Do it here, not as deck surgery. Its severity
+   is L, not H: the guess it misprices is a legal play, it costs one Guard (a card the seat is
+   discarding this turn anyway) and the score it earns is 5, so the AI plays it only when
+   nothing better is on offer.
+
+   In-game, whole rounds (20 000 rounds per cell, section 4's memory policy in force, scoring
+   shipped vs. `fixed13` = this subtraction plus the rank-scaled kill scores): guesses the
+   subtraction zeroes: 0 (2p) / 92 (3p) / 193 (4p) per 20 000 rounds - ~1 per 100 rounds in 3-4
+   players, never in 2p, where any belief the seat holds is about the *target*, so there is
+   nothing to subtract. Guard hit rate 22.80 -> 22.14 / 25.16 -> 24.82 / 24.37 -> 24.18; seat 0
+   win rate 50.62 -> 50.76 / 33.77 -> 33.68 / 25.50 -> 25.55 (sd 0.25pp, so: noise). The
+   synthetic rows above promise a better hit rate because they hold the discard count fixed and
+   compare argmaxes; in real rounds the zeroed probes are replaced by *other* probes, and the
+   mix is what moves. Recorded as an open calibration item, not landed.
+
+   One implementation note for whoever lands it: the subtraction is only defined over the targets
+   that are in the round. A belief naming an eliminated seat is a slot the seat should not have -
+   section 4's `set_inactive` clear is exactly what keeps that from happening, and section 5's
+   zombie row measures it at 0 - and a dead seat's slot is a copy the target-`left_cards` check
+   cannot see, so a version of this rule that subtracts pinned copies from all rows silently
+   converts a stale slot into a silenced guess. Scope it to live rows.
 2. **Guard probe scores are inflated relative to the fixed scores of the other cards.**
    `sum(_left) = 14` at the start of every round, of which 11 (2 players) / 13 (3-4
    players) are outside the widow, so 2-player Guard probes carry ~27% more weight against
@@ -587,27 +684,86 @@ Cosmetic: the debug print `Left ...` (`main.gd:164-165`) means "cards of this ty
 play (pile + widow + hands)", not "cards I can draw". Worth renaming to `In play` so the
 next reader does not assume the count is a draw-pile counter.
 
+6. Reveals are shown in one direction only, and no seat records a reveal it did not author
+   (severity M) - OPEN
+---------------------------------------------------------------------------------------------
+
+Found while proving the invariant that closes section 1. The invariant is "a belief is a read of a
+real card", and the writers of `_memory` are sound - which exposes the other half of the model:
+**the reads that never happen**.
+
+1. **A Priest reveal teaches exactly one seat: the Priest player** (`main.gd:325`).
+   `p.update_memory(tp.idx, tp.hand.get_child(0).type)` writes the Priest player's own row, so
+   - when a **human** plays a Priest, the card is shown to the whole table
+     (`Animator.reveal_hand(tp)`, `main.gd:323-324`) and every AI seat watches it and records
+     nothing;
+   - when an **AI** plays a Priest, the reveal is not animated at all - the guard is
+     `if p.is_human()`. The human is the one player the rules grant the view, and he does not get
+     it: `main.gd:326` prints "Priest: reveal hand" and shows nothing.
+
+   Measured: 25 107 Priest reveals per 20 000 four-player rounds (`tests/prince_memory_sim.py`),
+   1.26 per round, each one a certain belief about a hand card, each one recorded by exactly one
+   seat - its author. A human's reveals teach the AI nothing; an AI's reveals teach the human
+   nothing. The current model runs on 15 966 live beliefs per 20 000 rounds, and every one of
+   them is first-hand.
+
+   This is an information-budget question, not a strength question, and section 5 already answered
+   it for the widow: *"level 4 plays with table-legal information only"*. A reveal that is on the
+   screen is table-legal for every seat. Landing it makes level 4 strictly stronger than it is
+   today, and it is what makes section 5 item 1 meaningful: pinned copies only exist as beliefs,
+   and today a seat pins a copy only in the hands it personally looked at.
+
+   The two halves are separable:
+   - **the human-side half is a bug fix**: the reveal must run whenever anybody at the table is
+     entitled to see it - the rule gives the card to the player who played the Priest, and in this
+     game the human seat is that player whenever he played it, and never when an AI did. So the
+     guard should be "some seat is human", not "the author is human". The Baron branch has the
+     same shape (`main.gd:327-331`): a tie between two AI seats reveals nothing, and a tie is
+     public - the human is not told the two cards were equal, which is the premise of a deduction
+     his own array is given (item 2 below). The Prince branch is the counter-example to copy:
+     `main.gd:353` reveals the target's hand unconditionally, because the card is being discarded
+     in the open.
+   - **the AI-side half is a policy change**: broadcast the reveal to every seat's row
+     (`for pl in _players: pl.update_memory(tp.idx, revealed_type)`), and take the reveals that
+     were actually shown - which is what the first half guarantees. It preserves the invariant of
+     section 1 (a belief is a read of a real card) while widening who is allowed to read.
+
+2. **Knock-on for the human's own array.** `main.gd:341-346` propagates beliefs into every seat's
+   row, the human's included. When both Baron contestants are AI seats, the tie animation is
+   skipped, so the human's memory is rewritten with a deduction whose premise he was never shown:
+   the array is more informed than the player holding it. Same code, opposite direction from item
+   1 - the fix for both is the reveal guard.
+
+
 Summary
 -------
 
 | # | Issue | Severity | Where | Symptom in play |
 |---|---|---|---|---|
-| 1 | Stale Princess belief scored 350, deck accounting ignored | H | `player.gd:226-235` | Guaranteed-failed "Princess" call, Princess stuck in hand |
+| 1 | The Guard memory branch has no deck-accounting guardrail (stale Princess belief scored 350) | L (was H) | `player.gd:226-235` | none: 0 false beliefs, 0 impossible memory-driven guesses, 0 false Baron beliefs over 60 000 rounds (20 000 x 3 player counts) and 13 917 engine decisions - a belief is a read of a real card, so a memory-driven guess is a certain hit. The drafted guardrail is unreachable code. **Not an issue**, `tests/repro_belief_truth.tscn` |
 | 2 | `valid_moves[-1]` is a positional tie-break for zero-score turns | L (was H) | `player.gd:195-203` | 0.437% of 4p decisions are all-zero-score; 62% of them have one legal move (no tie), 6.8% are pure Guard-probe turns, and 82 per 30 000 rounds end in a Princess declaration - in states where every legal move is a certain miss. Uniform/first tie-breaks measure the same win rate (25.84 / 25.67 / 25.55, sd 0.25pp). **Not an issue**, `tests/issue2_tiebreak_sim.py` |
 | 3 | `GOOD * m._target_type` is `GOOD * Unknown == 400`, **not** 0: known Baron wins and Princess-killing Princes are played, not suppressed | L (was H) | `player.gd:230,244,258` | none in play - latent: enum ordinal inside the score formula, no rank scaling for kills, 400 pays false beliefs too. **Not an issue**, `tests/repro_score_multiplier.tscn` |
-| 4 | Memories did not follow the hand card (Prince cleared the Prince player's slot, eliminations cleared nothing, plays cleared on type) | H for level 4 | `main.gd:346-348`, `279-286`, `208-210` | Guaranteed-failed Guard call paid 150 and played 63% of the time; Priest knowledge destroyed. **Fixed**, `tests/repro_prince_memory.tscn` |
-| 5 | `_left` counts widow + hand cards = correct pool; only pinned copies are missing | L | `deck.gd:48-63`, `player.gd:232-237` | Guaranteed-failed Guard guesses score 5 instead of 0 (fix folded into 1) |
+| 4 | Memories did not follow the hand card (Prince cleared the Prince player's slot, eliminations cleared nothing, plays cleared on type) | H for level 4 | `main.gd:363-364`, `286-296`, `215-217` | Guaranteed-failed Guard call paid 150 and played 63% of the time; Priest knowledge destroyed. **Fixed**, `tests/repro_prince_memory.tscn` |
+| 5 | `_left` counts widow + hand cards = correct pool; only pinned copies are missing | L | `deck.gd:48-63`, `player.gd:232-237` | Guaranteed-failed Guard guesses score 5 instead of 0: 193 per 20 000 4p rounds; the subtraction measures -0.19pp Guard hit rate at a win rate inside noise. Open calibration item (section 1's extension folded here) |
+| 6 | Reveals are shown in one direction, and no seat records a reveal it did not author | **M, open** | `main.gd:322-325`, `327-331` | 25 107 Priest reveals per 20 000 4p rounds teach exactly one seat each (their author); an AI's Priest reveal is never shown, so the human loses the view the rules give him; a tie between two AI seats is invisible to the human, whose own `_memory` is rewritten by it |
 
 Sections 1 and 2 are the two halves of the reported "level 4 plays Guard and says
-Princess"; section 0 (the Guard-memory check) removed its most frequent trigger, section 1
-removes the remaining trigger, section 2 is closed as not an issue (the tie-break it describes
-picks between moves the table has already judged worthless - 62% of zero-score turns have a
-single legal move, the pathological Princess declaration is 0.03% of decisions, and the three
-tie-breaks are one win rate: 25.84 / 25.67 / 25.55 for last / uniform / first, sd 0.25pp, so
-the deterministic pick stays), section 3 is closed as not an issue (the 0 it claimed is
-`GOOD * Unknown == 400`; the known Baron wins are played in 94% of the opportunities and the
-Princess kills in 78%, measured in `tests/repro_score_multiplier.tscn`), leaving a latent
-enum-ordinal note, section 4 is fixed (beliefs are cleared and moved with the hand card they
-name, and the tests in `tests/README.md` pin that down), and section 5 turned out to be the
-counting model working as designed (`_left` is the exact posterior pool for a Guard guess) -
-downgraded to L, with the widow deliberately kept hidden from the AI.
+Princess". Section 0 (the Guard-memory check) removed its frequent trigger, and the trigger that
+is left is section 2's all-zero tail - 50 declarations per 20 000 four-player rounds, **0** of
+them scored by the memory branch, i.e. none of them is the play section 1 describes. So section 1
+is closed as not an issue: its state has no construction path once section 4 landed (beliefs are
+reads of real cards; measured 0 false ones in 60 000 rounds and 13 917 engine decisions,
+`tests/repro_belief_truth.tscn`), its guardrail is unreachable code, and the scoring change it
+drafted measures as a -0.19pp Guard hit rate at a win rate inside noise. Section 2 is closed as
+not an issue (the tie-break picks between moves the table has already judged worthless - 62% of
+zero-score turns have a single legal move, the pathological Princess declaration is 0.03% of
+decisions, and the three tie-breaks are one win rate: 25.84 / 25.67 / 25.55 for last / uniform /
+first, sd 0.25pp, so the deterministic pick stays). Section 3 is closed as not an issue (the 0 it
+claimed is `GOOD * Unknown == 400`; the known Baron wins are played in 94% of the opportunities and
+the Princess kills in 78%, `tests/repro_score_multiplier.tscn`), leaving a latent enum-ordinal
+note. Section 4 is fixed (beliefs are cleared and moved with the hand card they name,
+`tests/repro_prince_memory.tscn`). Section 5 turned out to be the counting model working as
+designed (`_left` is the exact posterior pool for a Guard guess) - downgraded to L, with the widow
+deliberately kept hidden from the AI, and with the pinned-copy accounting as its one open
+calibration item. Section 6 is the open one, found while proving section 1's invariant: the
+information that never reaches the seats that are entitled to it.
