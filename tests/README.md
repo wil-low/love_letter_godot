@@ -299,3 +299,30 @@ all true (0 false), 0 name a card already out of play, Baron beliefs are 0 false
 (4p), 1 183 Princes aimed at a believed Princess waste 0, and 0 decisions see a belief about an
 eliminated seat; with the pre-fix policy the same cells read 2 099 / 3 291 / 6 426 false Baron
 beliefs and 1 750 self-eliminations - the number that made section 1 read as severity H.
+
+## tests/noble_family_rules.tscn — Noble Family variant, resolved rules (docs/noble-family-todo.md)
+
+Step 4 pins the **deal table** of `Deck.prepare_noble()`; later steps append scripted cases to
+the same file (step 14 round end, step 15 Prince family/widow/elimination, step 16 elimination
+reveal + discard accounting, step 31 joint move legality and L1 determinism). TEST A needs no
+`Main` scene - it drives the real `Deck` scene directly, 200 seeded deals per player count.
+
+| player count | burn / widow | first-hand | family per seat | main pile leftovers |
+|---|---|---|---|---|
+| 2 | 3 | 1 per seat | 5 | 1 |
+| 3 | 1 | 1 per seat | 4 | 0 |
+| 4 | 0 (no widow pile exists) | 1 per seat | 3 | 0 |
+
+10 checks per player count, all PASS (30 checks): widow size == burn and the widow sprite is
+visible iff burn > 0; 1 first-hand card per seat; `count` families of equal size; every family is
+an `Array[Deck.CardType]` (so it is assignable to `Player.family` in step 5); conservation
+`burn + first_hand + families + main == 16`; `_left` elementwise equal to `Deck.card_count`
+(family dealing decrements nothing - the step 17 invariant is `sum(_left) == 16 - played`); and the
+four piles form an exact permutation of the 16-card deck (no duplicate, none lost, no `Unknown`).
+
+Harness sanity: breaking one expectation (`widow == burn + 1`) prints 3 FAIL lines and exits 1.
+
+```
+godot --headless --path . tests/noble_family_rules.tscn
+echo $?   # 0 = every check passed, 1 = a check failed
+```
