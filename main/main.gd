@@ -179,6 +179,31 @@ func deal_card(p: Player, allow_widow: bool = false, card_type: Deck.CardType = 
 	c.position = p.hand.to_local(dst)
 
 
+# Noble Family variant: the draw from a seat's own private family - the mandatory turn-start
+# draw (step 7) and the Prince redraw (step 15).
+#
+# The family is private and already out of the main pile, so a family draw touches nothing in
+# Deck: nothing is popped, `_left` is NOT decremented and `update_piles()` is not called. A
+# family card leaves the supply only when it is played (`discard()`), which is what keeps the
+# step 17 invariant `sum(_left) == 16 - played_cards` true: family cards are counted in `_left`
+# while they sit in the family. The popped type is handed straight to the card node, so no
+# `Deck.pop()` and no `_deck._cards` involvement at all.
+func deal_from_family(p: Player, family_idx: int) -> void:
+	_deal_audio_player.play()
+	var card_type: Deck.CardType = p.pop_family(family_idx)
+	var c = card_scene.instantiate()
+	_animation_layer.add_child(c)
+	c.type = card_type
+	c.faceup = p.idx == 0
+	# The family lives at the seat (the human stack is rendered there, step 18), so the card
+	# flies from the seat to the hand slot, exactly like a deal from a pile.
+	c.global_position = p.global_position
+	var dst := p.drawn_card_position()
+	await Animator.move_card(c, dst)
+	p.add_card(c)
+	c.position = p.hand.to_local(dst)
+
+
 func new_turn():
 	print("\nnew_turn for Player " + str(_cur_player) + ", level " + str(_players[_cur_player].ai_level))
 	if get_parent().print_memory:
