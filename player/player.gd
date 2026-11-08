@@ -139,12 +139,24 @@ func update_memory(player_idx: int, type: Deck.CardType = Deck.CardType.Unknown)
 
 func countess_restricted() -> int:
 	# returns -1 if Countess rule is not in effect
-	var child_types: Array[Deck.CardType] = [hand.get_child(0).type, hand.get_child(1).type]
-	var has_countess = child_types[0] == Deck.CardType.Countess or child_types[1] == Deck.CardType.Countess
-	var has_men = child_types[0] == Deck.CardType.Prince or child_types[0] == Deck.CardType.King or child_types[1] == Deck.CardType.Prince or child_types[1] == Deck.CardType.King
-	var result = -1
+	return countess_restricted_types(hand.get_child(0).type, hand.get_child(1).type)
+
+
+func is_man(t: Deck.CardType) -> bool:
+	return t == Deck.CardType.Prince or t == Deck.CardType.King
+
+
+# The Countess rule over an arbitrary pair of card types, index-semantics agnostic:
+# 0 = card `a` is forced, 1 = card `b` is forced, -1 = no restriction.
+# Holding the Countess together with a man (Prince/King) forces playing the Countess.
+# Classic callers pass the two hand cards (index = hand child index); the Noble Family
+# variant passes (active card, drawn family card) so index = Move._played_card_idx.
+func countess_restricted_types(a: Deck.CardType, b: Deck.CardType) -> int:
+	var has_countess: bool = a == Deck.CardType.Countess or b == Deck.CardType.Countess
+	var has_men: bool = is_man(a) or is_man(b)
+	var result := -1
 	if has_countess and has_men:
-		result = 0 if child_types[0] == Deck.CardType.Countess else 1
+		result = 0 if a == Deck.CardType.Countess else 1
 	return result
 
 
