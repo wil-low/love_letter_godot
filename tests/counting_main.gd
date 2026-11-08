@@ -21,6 +21,18 @@ var family_draws: Array[int] = [0, 0, 0, 0]  # per seat, cumulative
 var family_draw_idx: Array = [[], [], [], []]  # per seat, cumulative family INDICES drawn
 var draw_mismatches: Array[String] = []  # moves whose draw did not deliver the named family card
 var draws_checked: int = 0  # noble moves verified (move named index == index drawn)
+var pile_draws: int = 0  # real pile draws (Deck.pop from the main pile / the widow): the variant never does this at turn start
+var first_hand_deals: int = 0  # deal_card() with an explicit type = the animated first-hand card per seat
+var round_start_actor: Array[int] = []  # per round: the seat that took the FIRST turn of that round
+var round_end_turns: Array = []  # per round end: per-seat turn counts (cumulative)
+# Snapshots taken INSIDE round_over(): the state a harness can never recover by polling, because
+# `_on_round_over_pressed()` -> `_new_round()` re-deals families and re-builds `_left`, and at
+# `_speed = 0` that can happen in the same frame the round ended.
+var round_end_families: Array = []  # per round end: family size per seat
+var round_end_hands: Array = []  # per round end: hand card count per seat
+var round_end_left: Array = []  # per round end: a copy of Deck._left
+var _round_start: int = -1  # the seat that opened the running round (-1 = round_over seen, no turn yet)
+var _turn_counts: Array[int] = [0, 0, 0, 0]  # per seat, cumulative
 
 
 func set_inactive(p: Player, reveal_hand: bool = true) -> void:
@@ -35,6 +47,43 @@ func round_over() -> void:
 	# new_turn() / resolve_effect() call this without awaiting it, so a plain super() call keeps
 	# the production flow exactly as it is
 	round_end_actor.append(_cur_player)
+	round_start_actor.append(_round_start)
+	round_end_turns.append(_turn_counts.duplicate())
+	_round_start = -1
+	var fams: Array = []
+	var hands: Array = []
+	for p in _players:
+		fams.append(p.family_size())
+		hands.append(p.hand.get_child_count())
+	round_end_families.append(fams)
+	round_end_hands.append(hands)
+	var left: Array = []
+	for n in _deck._left.size():
+		left.append(_deck._left[n])
+	round_end_left.append(left)
+	super()
+
+
+# Every draw that comes from a pile (main pile / widow) - the Noble Family variant must never do
+# this at turn start, it is how a harness proves the turn-start draw is a FAMILY draw only.
+# An explicit `card_type` is the Noble Family FIRST-HAND deal (`_new_round` deals it through the
+# animated deal path without popping anything), so it is counted separately.
+func deal_card(p: Player, allow_widow: bool = false,
+		card_type: Deck.CardType = Deck.CardType.Unknown) -> void:
+	if card_type == Deck.CardType.Unknown:
+		pile_draws += 1  # this one pops the main pile / the widow
+	else:
+		first_hand_deals += 1
+	await super(p, allow_widow, card_type)
+
+
+# Turn counting, so a harness can say how long a round was: `new_turn()` is called once per turn,
+# and the family-out rule makes the LAST call of a round the one that ends it (13 in a 4p round of
+# 3-card families: 12 plays + the turn that found an empty family).
+func new_turn():
+	if _round_start < 0:
+		_round_start = _cur_player
+	_turn_counts[_cur_player] += 1
 	super()
 
 
@@ -67,3 +116,11 @@ func _on_move_chosen(move: Move) -> void:
 	elif family_draw_idx[seat][pos] != named:
 		draw_mismatches.append("seat " + str(seat) + " played a move naming family index " + str(named) +
 			" but the play chain drew family index " + str(family_draw_idx[seat][pos]))
+
+
+# `draw_mismatches` is TYPED, so a harness must not assign a plain [] to it: Godot rejects the
+# untyped array ("Invalid assignment of property or key 'draw_mismatches'"), and the script error
+# kills the caller's frame - which silently skips everything after the assignment in that frame.
+# Reset it through a method call instead.
+func clear_draw_mismatches() -> void:
+	draw_mismatches.clear()

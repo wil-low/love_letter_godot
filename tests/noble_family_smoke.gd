@@ -31,6 +31,13 @@ extends Node2D
 # - a round with no elimination is a family-out end: the seat that was to act has an EMPTY family
 #   (his family draws == family size), and `sum(Deck._left) == 16 - plays - prince_plays` (plays and
 #   the Prince's discarded target card are the only decrements - family draws must not touch `_left`);
+# - the round draws from a pile AT MOST once per Prince play: today the only pile draw is the
+#   Prince's redraw of its target (`deal_card(target, true)`), which todo step 15 moves to the
+#   target's family with the widow as fallback; the turn-start draw is never a pile draw, and the
+#   scripted round in rules TEST C (no Prince in the supply) asserts 0 pile draws;
+# - when a family-out round had no elimination AND no Prince play (a "clean" round), its length is
+#   exact: `plays == seats x family size`, `turns == plays + 1` (the round ends ON the turn that
+#   found the empty family) and the seat that ends it is the seat that opened it;
 # - every live seat holds exactly 1 card at round end (the invariant the whole design rests on).
 # Suite-level: the requested round count is reached, at least 1 elimination happens, at least
 # 1 round runs all the way to the family-out end.
@@ -99,19 +106,33 @@ func _ready() -> void:
 	var seen_rounds: int = 0
 	var elim_seen: int = 0
 	var fam_seen: Array[int] = [0, 0, 0, 0]
+	var turns_seen: Array[int] = [0, 0, 0, 0]
+	var pile_seen: int = 0
+	var first_hand_seen: int = 0
 
 	for _f in FRAME_BUDGET:
 		if main.round_end_actor.size() > seen_rounds:
+			var r_idx: int = seen_rounds
 			var actor_idx: int = main.round_end_actor[seen_rounds]
+			var start_actor: int = main.round_start_actor[seen_rounds]
 			seen_rounds += 1
 			_rounds += 1
 			var elim: int = main.eliminations - elim_seen
 			elim_seen = main.eliminations
 			var fam_round: Array[int] = [0, 0, 0, 0]
+			var turns_round: int = 0
+			var turn_snapshot: Array = main.round_end_turns[r_idx]
 			for j in 4:
 				fam_round[j] = main.family_draws[j] - fam_seen[j]
 				fam_seen[j] = main.family_draws[j]
-			check_round(main, count, fam, plays, fam_round, prince_plays, elim, actor_idx)
+				turns_round += int(turn_snapshot[j]) - turns_seen[j]
+				turns_seen[j] = int(turn_snapshot[j])
+			var pile_round: int = main.pile_draws - pile_seen
+			var first_hand_round: int = main.first_hand_deals - first_hand_seen
+			pile_seen = main.pile_draws
+			first_hand_seen = main.first_hand_deals
+			check_round(main, count, fam, plays, fam_round, prince_plays, elim, actor_idx,
+				turns_round, start_actor, pile_round, first_hand_round)
 			check_draw_pairing(main)
 			for i in 4:
 				plays[i] = 0
@@ -176,8 +197,10 @@ func count_card_play(c: Card, seat: int) -> void:
 
 # One finished round. `actor_idx` is the seat that was to act when `round_over()` ran,
 # `plays` / `fam_draws` / `prince_plays` are the counts collected since the previous round end.
+# `turns` is the number of `new_turn()` calls the round took, `start_actor` the seat that opened it.
 func check_round(main, count: int, fam: int, plays: Array[int], fam_draws: Array[int],
-	princes: int, elim: int, actor_idx: int) -> void:
+	princes: int, elim: int, actor_idx: int, turns: int, start_actor: int,
+	pile_drawn: int, first_hand: int) -> void:
 	var total: int = 0
 	for j in count:
 		total += plays[j]
@@ -192,6 +215,16 @@ func check_round(main, count: int, fam: int, plays: Array[int], fam_draws: Array
 			fail("seat " + str(j) + " has " + str(p.family_size()) + " family cards left, expected " +
 				str(fam - fam_draws[j]) + " (family size " + str(fam) + " - " + str(fam_draws[j]) +
 				" draws)")
+	if pile_drawn > princes:
+		fail(str(pile_drawn) + " draw(s) from a pile in a round with " + str(princes) + " Prince play(s): " +
+			"today the ONLY draw from the main pile / the widow is the Prince's redraw of its target " +
+			"(`Main.play_card`'s Prince branch, `deal_card(target, true)`), so pile draws are bounded by " +
+			"the number of Prince plays. Todo step 15 moves that redraw to the target's FAMILY (widow as " +
+			"fallback), and then a round must touch no pile at all. The turn-start draw is never a pile " +
+			"draw in any case (rules TEST C asserts 0 with a Prince-free supply)")
+	if first_hand != count:
+		fail(str(first_hand) + " first-hand cards dealt in a round, expected 1 per seat (" + str(count) +
+			") - every round is re-dealt, the families are re-dealt and never carried over")
 	_plays_total += total
 	_max_plays = max(_max_plays, total)
 
@@ -207,6 +240,17 @@ func check_round(main, count: int, fam: int, plays: Array[int], fam_draws: Array
 			fail("the seat to act drew " + str(fam_draws[actor_idx]) +
 				" family cards in a round with no elimination, expected the full family (" + str(fam) +
 				") - the family-out rule is what ends such a round")
+		if turns != total + 1 and princes == 0:
+			fail("the round took " + str(turns) + " turns for " + str(total) + " plays, expected " +
+				str(total + 1) + ": every play is a turn and the family-out round ends ON THE TURN " +
+				"THAT FOUND the empty family, so exactly one turn more than there were plays. The " +
+				"count is only exact when no Prince was played: a Prince play belongs to a chain that " +
+				"resumes after the round end, and such a play is not a turn of this round")
+		if actor_idx != start_actor and princes == 0:
+			fail("the round ended on seat " + str(actor_idx) + " but was opened by seat " +
+				str(start_actor) + ": with " + str(count) + " seats and " + str(fam) +
+				" family cards each and no Prince redraw, the " + str(count * fam + 1) + "th turn belongs " +
+				"to the seat that took the 1st turn, and that is the seat the family-out rule stops")
 		var left := 0
 		for i in main._deck._left.size():
 			left += main._deck._left[i]
@@ -231,7 +275,7 @@ func check_round(main, count: int, fam: int, plays: Array[int], fam_draws: Array
 func check_draw_pairing(main) -> void:
 	for msg in main.draw_mismatches:
 		fail("move/draw mismatch: " + msg)
-	main.draw_mismatches = []
+	main.clear_draw_mismatches()
 
 
 func fail(msg: String) -> void:

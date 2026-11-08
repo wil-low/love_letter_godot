@@ -369,12 +369,49 @@ level 1 takes `valid_moves[0]` (family index 0, active card, as-dealt order = de
 the cheapest family card (Guard, 15 candidate moves) and plays the cheaper card of the pair when
 such a play exists; level 4 scores the list (sum 140) and never plays a 0-score move.
 
-```
-godot --headless --path . tests/noble_family_rules.tscn
-echo $?   # 0 = every check passed, 1 = a check failed
-```
+### TEST C — a whole scripted 4p round that ends on the family (step 14)
 
-## tests/noble_family_smoke.tscn — Noble Family variant, whole games on the AI (steps 7, 11)
+TESTS A and B build state by hand. TEST C plays **whole real games** through the unmodified
+production flow, on a **scripted supply**: `FakeDeckScript` gains `prepare_noble()` (the classic
+`prepare()` stays for the classic suites) and replays its `scripted` list through the real Noble
+deal table - 4p burns 0, so first-hand 1 per seat, family 3 per seat, main pile 0, no widow - and
+`scripted_left` so `_left` mirrors the scripted supply instead of the full 16-card deck.
+`prepare_noble()` pops from the back, so the deal order reads front to back in `scripted`.
+
+The supply is 16 cards of Guard / Handmaid / Countess only, and every seat is level 1, so the whole
+round is deterministic: `valid_moves[0]` is (draw family index 0, play the active card), seat *i*
+plays his first-hand card, family[0] and family[1] on his 1st/2nd/3rd turn and keeps family[2]. The
+supply has no Priest in any hand, so every Guard probe misses by construction: **no seat can be
+eliminated**, the scripted deal is re-applied identically every round (the same family-out actor,
+so nothing drifts), and 4 rounds are compared round by round.
+
+The rule under test is the todo step 14 rule - *the round ends at **turn start** when the seat to
+act has an empty family* - and the invariant it lives with: **a family draw happens exactly on the
+play of the move that named it, and an AI seat never draws at turn start.** Counted by
+`tests/counting_main.gd`, which now also counts `new_turn()` calls per seat (`round_end_turns`),
+the seat that opened each round (`round_start_actor`), real pile draws (`pile_draws`, i.e.
+`deal_card()` without an explicit type) and the first-hand deals. Per round:
+
+| check | why it is the rule |
+|---|---|
+| 12 plays == 4 seats x family size 3 | the round ran to the family-out end; it never stopped earlier |
+| 13 turns == 4 x 3 + 1 | the round ended **on the turn that found the empty family**: every playable turn was taken, then exactly one more |
+| the ending seat == the seat that opened the round | 4 seats x 3 family cards means the 13th turn belongs to the 1st seat - that is where the families run out |
+| the seat to act has family size 0, every family sums to 0 | the round-end condition is "the seat to act is out of family cards", nothing else |
+| 0 eliminations, 0 draws from the main pile / widow | the family-out rule is the ONLY way this round could end, and the turn-start draw is never a pile draw |
+| 4 first-hand cards dealt | the round was re-dealt (families are re-dealt every round, never carried over) |
+| per seat: plays == family draws == 3, every draw index 0 | one family draw per play - a turn-start placeholder draw for an AI seat would push draws past the family size (and crash `pop_family`) - and the as-dealt order is kept |
+| 1 card in every live seat at round end | the variant's hand is 1 card, always |
+| `_left == [3,0,0,0,0,0,1,0]`, sum == 16 - 12 | 16 - 12 plays, family draws decremented nothing |
+| 48 move/draw pairings, 0 mismatches | every move named the family card its own play chain drew, checked from inside the chain |
+
+Harness sanity (sabotage, then `git checkout -- main/main.gd`, which discards nothing tracked):
+round-end on `family.size() <= 1` instead of `is_empty()` -> **25 FAILs** (8 plays, 9 turns, actor
+with 1 family card left, `_left == [5,0,0,0,0,0,3,0]`); adding the placeholder turn-start draw for
+AI seats -> **23 FAILs**, the family empties in half a round and the game degenerates
+(`pop_family` past the end), so the invariant is pinned from both sides.
+
+## tests/noble_family_smoke.tscn — Noble Family variant, whole games on the AI (steps 7, 11, 14)
 
 Variant games (`main.noble_family = true`) with every seat on the AI (levels 4/4/3/2), animations
 at speed 0, audio muted: the "the variant plays and terminates" check, the twin of
@@ -428,7 +465,31 @@ of this check sampled per round and reported 36 phantom mismatches in 20 rounds 
 reason). A chain abandoned by a round end never resumes, so its move is not counted - and its draw
 never happened either, which is the same fact about the same chain. The suite prints how many
 pairings it verified (`move/draw pairings verified: 175` in a 4p/20-round run) and fails if that is
-0. Harness sanity: making the chain draw family index 0 instead of the named card prints 3
+0.
+
+**Step 14 added three per-round checks** (`check_round`, with counters `CountingMain` collects now:
+`new_turn()` calls per seat, the seat that opened each round, real pile draws, first-hand deals):
+
+- **a round draws from a pile at most once per Prince play** - today the only pile draw is the
+  Prince's redraw of its target (`Main.play_card`'s Prince branch, `deal_card(target, true)`); todo
+  step 15 moves that redraw to the target's family with the widow as fallback, and then a round
+  touches no pile at all. Counted by wrapping `deal_card()`: an explicit `card_type` is the
+  first-hand deal, `Unknown` is a pile pop. The scripted round in rules TEST C (no Prince) asserts 0.
+- **1 first-hand card per seat per round** - every round is re-dealt, the families are re-dealt and
+  never carried over.
+- **the length of a *clean* family-out round** (no elimination, no Prince play): `plays == seats x
+  family size`, `turns == plays + 1`, and the seat that ends the round is the seat that opened it.
+  Those three numbers are what the family-out rule means. They are asserted only for a clean round:
+  a Prince play belongs to a chain that resumes after the round end (its play is not a turn of this
+  round), and a chain abandoned at a round end lets one family draw land in the next round's bucket -
+  which is why the per-seat bound stays `plays[seat] <= family_draws[seat]` here and the exact
+  equality is asserted in the scripted suite (rules TEST C, whose supply has no Prince).
+
+And one harness bug this step exposed: `CountingMain.draw_mismatches` is typed (`Array[String]`), so
+`main.draw_mismatches = []` from a harness is a runtime SCRIPT ERROR ("Invalid assignment"), and a
+script error kills the rest of that frame - the pairing loop after it never ran, so the smoke suite
+printed **nothing** about mismatches (3 suites x 40 rounds) while claiming the pairing was clean.
+Reset typed arrays through a method (`clear_draw_mismatches()`), never by assigning `[]`. Harness sanity: making the chain draw family index 0 instead of the named card prints 3
 `move/draw mismatch` FAIL lines and exits 1 (the desynced hand then crashes the run, the same fact
 from the game's side).
 

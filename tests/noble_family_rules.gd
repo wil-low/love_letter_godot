@@ -17,9 +17,15 @@ extends Node2D
 # written down by hand (68 / 4 / 17 / 2) instead of recomputed from the production code, plus the
 # level 1-4 draw policies over an enumerated list.
 #
-# Later steps append to this file: step 14 (round ends at turn start with an empty
-# family), step 15 (Prince: family draw -> widow fallback -> elimination), step 16
-# (elimination reveal + discard accounting), step 31 (joint move legality, L1
+# TEST C (todo step 14) runs a real 4-player variant GAME on a scripted deal with every seat on
+# level 1 (deterministic: `valid_moves[0]` = draw family index 0, play the active card), with the
+# `tests/fake_deck.gd` scripted-deal technique. The scripted 16 cards are Guard / Handmaid /
+# Countess only, so NO play can ever eliminate anybody (a Guard probe declares Priest and no seat
+# ever holds a Priest): the round can only end by the family-out rule, which is what the step 14
+# gate asks for.
+#
+# Later steps append to this file: step 15 (Prince: family draw -> widow fallback -> elimination),
+# step 16 (elimination reveal + discard accounting), step 31 (joint move legality, L1
 # determinism). Those cases use the `tests/fake_deck.gd` scripted-deal technique;
 # TEST A deliberately needs no Main scene at all, so the deal table is pinned
 # independently of the game loop.
@@ -29,13 +35,30 @@ extends Node2D
 
 const DeckScene := preload("res://deck/deck.tscn")
 const MainScene := preload("res://main/main.tscn")
+const FakeDeckScript := preload("res://tests/fake_deck.gd")
+const CountingMainScript := "res://tests/counting_main.gd"  # load()ed at runtime: preload() of a
+# script that extends Main is a cyclic dependency (this harness preloads main.tscn)
 
 const TRIALS: int = 200
 const SEED: int = 20260607
 const TOTAL_CARDS: int = 16
 
+# TEST C: the scripted 4-player supply, in DEAL ORDER (Deck.prepare_noble() pops it as
+# burn 0 -> first-hand seat 0..3 -> family column 0 seat 0..3 -> column 1 -> column 2).
+# Slot i of a seat's family is played on his i-th turn and his last card is never played, so the
+# played multiset is 5 Guard + 3 Handmaid + 4 Countess = 12 = 4 seats x family size 3.
+const NOBLE_SCRIPTED: Array[Deck.CardType] = [
+	Deck.CardType.Guard, Deck.CardType.Guard, Deck.CardType.Handmaid, Deck.CardType.Handmaid,
+	Deck.CardType.Handmaid, Deck.CardType.Guard, Deck.CardType.Countess, Deck.CardType.Countess,
+	Deck.CardType.Guard, Deck.CardType.Guard, Deck.CardType.Countess, Deck.CardType.Countess,
+	Deck.CardType.Guard, Deck.CardType.Guard, Deck.CardType.Guard, Deck.CardType.Countess,
+]
+const NOBLE_SCRIPTED_LEFT: Array[int] = [8, 0, 0, 3, 0, 0, 5, 0]  # == the scripted multiset
+const NOBLE_ROUND_END_LEFT: Array[int] = [3, 0, 0, 0, 0, 0, 1, 0]  # 16 - 12 plays
+
 var _failed: int = 0
 var _deck: Deck
+var _c_plays: Array[int] = [0, 0, 0, 0]  # TEST C: plays per seat, counted on `move_chosen`
 # main.gd / player.gd read these off the game's parent node, so the harness must expose them
 var print_memory: bool = false
 var print_valid_moves: bool = false
@@ -54,6 +77,7 @@ func _ready() -> void:
 
 	await _test_deal_table()
 	await _test_joint_moves()
+	await _test_family_out_round_end()
 	await await_frames(1)
 
 	print("\n==========================")
@@ -406,6 +430,198 @@ func legal_target(m: Move, played: Deck.CardType, count: int) -> bool:
 	if played == Deck.CardType.Guard:
 		return tgt != 0 and (not target_protected or _main._other_protected)
 	return tgt != 0 and not target_protected
+
+
+# ----------------------------------------------------------------------------------------
+# TEST C (todo step 14): a whole scripted 4-player variant round.
+#
+# The rule under test: "the round ends at TURN START when the seat to act has an empty family",
+# and the corollary the same step demands: an AI seat does NOT draw at turn start - the family
+# draw belongs to the chosen move (step 13), so exactly ONE family draw happens per play.
+#
+# Every seat is level 1 -> `valid_moves[0]` = (draw family index 0, play the active card), so the
+# whole round is deterministic: seat i plays first-hand, family[0], family[1] on his 1st/2nd/3rd
+# turn and keeps family[2]. 12 plays, zero eliminations (the scripted supply has no Priest in any
+# hand, so every Guard probe misses by construction), and the 13th turn starts at seat 0 with an
+# empty family - the round ends there and nowhere else.
+# ----------------------------------------------------------------------------------------
+func _test_family_out_round_end() -> void:
+	print("\n########## TEST C: a 4p round ends exactly at the turn start with an empty family (step 14) ##########")
+	var main = MainScene.instantiate()
+	var card_scene: PackedScene = main.card_scene  # set_script resets exported vars
+	main.set_script(load(CountingMainScript))
+	main.card_scene = card_scene
+	# the deck script goes on BEFORE the scene enters the tree, so the Deck node's @onready
+	# references are resolved by the test script (set_script on a ready node leaves them null)
+	var deck = main.get_node("Table/Deck")
+	deck.set_script(FakeDeckScript)
+	deck.scripted = NOBLE_SCRIPTED
+	deck.scripted_left = NOBLE_SCRIPTED_LEFT
+	add_child(main)
+	main.noble_family = true
+	for i in 4:
+		main._players[i].ai_level = Player.AI_Level.Level_1  # deterministic seat, seat 0 is NOT human
+	for i in 4:
+		main._players[i].move_chosen.connect(_count_c_play.bind(i))
+	await main.init_players(SEED)
+	# init_players() does not await the deal coroutine, so poll until the opening deal settled
+	await await_until(func() -> bool:
+		var ready := true
+		for p in main._players:
+			ready = ready and p.hand.get_child_count() == 1 and p.family_size() == Deck.NOBLE_FAMILY_SIZE[4]
+		return ready)
+
+	# --- the scripted deal, as the production deal table applies it in 4p ---
+	var fam: int = Deck.NOBLE_FAMILY_SIZE[4]
+	check(main._deck.first_hand.size() == 4, "4p deal: 1 first-hand card per seat (4 cards)")
+	for p in main._players:
+		check(p.family_size() == fam, "seat " + str(p.idx) + " holds a family of " + str(fam)
+			+ " scripted cards: " + family_str(p))
+	check(deck._widow_cards.is_empty() and !deck._widow.visible,
+		"4p burns nothing -> no widow pile exists (empty and hidden)")
+	check(deck._cards.is_empty() and !deck._main.visible,
+		"4p main pile: 16 - 0 burn - 4 first-hand - 12 family = 0 leftovers (empty and hidden)")
+	var supply := 0
+	for n in deck._left.size():
+		supply += deck._left[n]
+	check(supply == TOTAL_CARDS, "the scripted supply is 16 cards and `_left` mirrors it ("
+		+ str(supply) + "), so the discard accounting of a whole round is assertable")
+
+	# --- play 4 whole rounds and check every one of them ---
+	var seen_rounds: int = 0
+	var seen_fam: Array[int] = [0, 0, 0, 0]
+	var seen_idx: Array[int] = [0, 0, 0, 0]
+	var seen_elim: int = 0
+	var seen_pile: int = 0
+	var seen_first_hand: int = 0
+	var seen_turns: Array[int] = [0, 0, 0, 0]
+	var rounds: Array = []  # per round: total plays (cross-check of the harness counters)
+	for _f in 20000:
+		if main.round_end_actor.size() > seen_rounds:
+			var r: int = seen_rounds
+			seen_rounds += 1
+			var prefix := "round " + str(r + 1) + ":"
+			var actor: int = main.round_end_actor[r]
+			var fams: Array = main.round_end_families[r]
+			var hands: Array = main.round_end_hands[r]
+			var left: Array = main.round_end_left[r]
+			var turns: Array = main.round_end_turns[r]
+			var start_seat: int = main.round_start_actor[r]
+			var turns_total := 0
+			for j in 4:
+				turns_total += int(turns[j]) - seen_turns[j]
+				seen_turns[j] = int(turns[j])
+			var drew: Array[int] = [0, 0, 0, 0]
+			var drew_idx: Array = []
+			var total: int = 0
+			for j in 4:
+				drew[j] = main.family_draws[j] - seen_fam[j]
+				seen_fam[j] = main.family_draws[j]
+				var k: int = seen_idx[j]
+				while k < main.family_draw_idx[j].size():
+					drew_idx.append(main.family_draw_idx[j][k])
+					k += 1
+				seen_idx[j] = main.family_draw_idx[j].size()
+				total += _c_plays[j]
+			var elim_delta: int = main.eliminations - seen_elim
+			seen_elim = main.eliminations
+			var pile_delta: int = main.pile_draws - seen_pile
+			seen_pile = main.pile_draws
+
+			check(total == 4 * fam, prefix + " " + str(total) + " plays == 4 seats x family size "
+				+ str(fam) + ": the round ran to the family-out end, it never stopped earlier")
+			check(turns_total == 4 * fam + 1, prefix + " " + str(turns_total) + " turns == 4 x "
+				+ str(fam) + " plays + 1: the round ended on the turn that found the empty family, i.e."
+				+ " at TURN START, after every playable turn was taken")
+			check(actor == start_seat, prefix + " the round ended on seat " + str(actor) + ", the same seat"
+				+ " that opened it (seat " + str(start_seat) + "): 4 seats x " + str(fam)
+				+ " family cards means the seat to act on the " + str(4 * fam + 1) + "th turn is the seat "
+				+ "that took the 1st turn, so the family-out rule ends the round there")
+			check(int(fams[actor]) == 0, prefix + " the seat to act has an EMPTY family: that is the"
+				+ " variant's only round-end rule (" + str(int(fams[actor])) + " family card left)")
+			var fam_total := 0
+			for j in 4:
+				fam_total += int(fams[j])
+			check(fam_total == 0, prefix + " every family is exhausted (sum " + str(fam_total)
+				+ "), no seat was cut off before his last card")
+			check(elim_delta == 0, prefix + " no elimination (" + str(elim_delta) + "): the scripted plays"
+				+ " (Guard probes on non-Priests, Handmaid, Countess) cannot kill a seat, so the family-out"
+				+ " rule is the only way this round could end")
+			check(pile_delta == 0, prefix + " zero draws from the main pile / the widow ("
+				+ str(pile_delta) + " Deck.pop draws): the turn-start draw is a family draw only")
+			var fh_delta: int = main.first_hand_deals - seen_first_hand
+			seen_first_hand = main.first_hand_deals
+			check(fh_delta == 4, prefix + " " + str(fh_delta) + " first-hand cards dealt (1 per seat,"
+				+ " animated through deal_card with an explicit type) - the round was re-dealt")
+			var one_draw_per_play := true
+			for j in 4:
+				# THE step 14 assertion: seat plays == family draws == family size. A turn-start
+				# placeholder draw would make family_draws 4 > family size (and crash pop_family).
+				one_draw_per_play = one_draw_per_play and drew[j] == fam and drew[j] == _c_plays[j]
+			check(one_draw_per_play, prefix + " every seat drew exactly " + str(fam)
+				+ " family cards in exactly " + str(fam) + " plays - one draw per play, no turn-start"
+				+ " draw for an AI seat (draws " + str(drew) + ", plays " + str(_c_plays) + ")")
+			var idx_zero_only := true
+			for k in drew_idx:
+				idx_zero_only = idx_zero_only and int(k) == 0
+			check(idx_zero_only, prefix + " every draw used family index 0 (as-dealt order): "
+				+ str(drew_idx))
+			var one_card := true
+			for j in 4:
+				one_card = one_card and int(hands[j]) == 1
+			check(one_card, prefix + " every live seat holds exactly 1 card at the round end ("
+				+ str(hands) + ")")
+			var left_ok := true
+			var left_sum := 0
+			for n in left.size():
+				left_sum += int(left[n])
+				left_ok = left_ok and int(left[n]) == NOBLE_ROUND_END_LEFT[n]
+			check(left_ok, prefix + " `_left` == " + str(left) + ", expected "
+				+ str(NOBLE_ROUND_END_LEFT) + " (16 - 12 plays, family draws decremented nothing)")
+			check(left_sum == TOTAL_CARDS - total, prefix + " sum(_left) == 16 - " + str(total)
+				+ " plays == " + str(left_sum))
+			rounds.append(total)
+			for j in 4:
+				_c_plays[j] = 0
+		if seen_rounds >= 4:
+			break
+		await get_tree().process_frame
+
+	check(seen_rounds >= 4, "4 scripted rounds ran (" + str(seen_rounds) + " observed), every one of"
+		+ " them a 12-play family-out end: " + str(rounds))
+	check(main.draws_checked > 0 and main.draw_mismatches.is_empty(),
+		"every move named the family card its own play chain drew (" + str(main.draws_checked)
+		+ " pairings, " + str(main.draw_mismatches.size()) + " mismatches)")
+	# the scripted deal is re-applied every round (families are re-dealt, never carried over)
+	var redeal := true
+	for p in main._players:
+		redeal = redeal and p.active
+	check(redeal, "the next round is dealt and the seats are live again (families are re-dealt every"
+		+ " round, they are not carried over)")
+	for p in main._players:
+		p.clear_hand()
+		check(p.hand.get_child_count() == 0, "seat " + str(p.idx) + " hand cleared")
+	main.queue_free()
+	await await_frames(2)
+
+
+func family_str(p: Player) -> String:
+	var s := "["
+	for t in p.family:
+		s += Deck.card_names[t] + " "
+	return s + "]"
+
+
+func _count_c_play(m: Move, seat: int) -> void:
+	_c_plays[seat] += 1
+
+
+func await_until(cond: Callable, max_frames: int = 4000) -> void:
+	for i in max_frames:
+		if cond.call():
+			return
+		await get_tree().process_frame
+	print("  (await_until timed out)")
 
 
 # ----------------------------------------------------------------------------------------
