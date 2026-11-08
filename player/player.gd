@@ -55,6 +55,10 @@ var score: int = 0:
 
 var total_score: int = 0
 
+# Noble Family variant: this seat's private family pile, in as-dealt order.
+# Never sorted. Owned/filled by Main, stored here.
+var family: Array[Deck.CardType] = []
+
 var _memory: Array[Deck.CardType] = [
 	Deck.CardType.Unknown,
 	Deck.CardType.Unknown,
@@ -101,6 +105,21 @@ func clear_hand() -> void:
 	for ch in hand.get_children():
 		hand.remove_child(ch)
 		ch.queue_free()
+
+
+func family_size() -> int:
+	return family.size()
+
+
+func pop_family(family_idx: int) -> Deck.CardType:
+	assert(family_idx >= 0 and family_idx < family.size(),
+		"Player " + str(idx) + ": family index " + str(family_idx) + " out of range")
+	return family.pop_at(family_idx)
+
+
+func clear_family() -> void:
+	# Data only; visual clearing is added with Player.render_family() (step 18).
+	family.clear()
 
 
 func print_memory() -> void:
