@@ -234,13 +234,22 @@ enum EvalScore {
 }
 
 
+# Scores every move in place (m._score). Works for classic moves (2-card hand, real Card
+# nodes) and for Noble Family moves, which are scored BEFORE the family card is drawn:
+# such a move carries only types (_drawn_type / _leftover_type) and may have a null
+# _played_card, so the pair is read via Move.played_type() + _leftover_type.
 func eval_moves(valid_moves: Array[Move], left_cards: Array[int]):
-	assert(hand.get_child_count() == 2, "Player " + str(idx) + ": wrong hand count")
 	for m in valid_moves:
-		var my_type = hand.get_child(1 - m._played_card_idx).type  # leftover card
+		var is_classic: bool = m._drawn_family_idx == -1
+		if is_classic:
+			assert(hand.get_child_count() == 2, "Player " + str(idx) + ": wrong hand count")
+		var played_t: Deck.CardType = m.played_type()
+		var my_type: Deck.CardType = m._leftover_type
+		if my_type == Deck.CardType.Unknown:
+			my_type = hand.get_child(1 - m._played_card_idx).type  # leftover card
 		var mem := _memory[m._target_player]
 		m._score = EvalScore.LOSE
-		match m._played_card.type:
+		match played_t:
 			Deck.CardType.Guard:
 				# Guard is not a guessable type (find_valid_moves guesses Priest..Princess),
 				# so a Guard memory can never be matched - fall through to the card-count heuristic
@@ -249,9 +258,11 @@ func eval_moves(valid_moves: Array[Move], left_cards: Array[int]):
 						m._score = EvalScore.GOOD * m._target_type
 				else:
 					var left := left_cards[m._target_type]
-					if hand.get_child(0).type == m._target_type:
+					# cards of the pair visible to me: the played one + the card I keep.
+					# For classic moves these are exactly hand[0] and hand[1] in some order.
+					if played_t == m._target_type:
 						left -= 1
-					if hand.get_child(1).type == m._target_type:
+					if my_type == m._target_type:
 						left -= 1
 					m._score = EvalScore.BAD * left
 			Deck.CardType.Priest:
