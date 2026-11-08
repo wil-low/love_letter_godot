@@ -411,6 +411,45 @@ with 1 family card left, `_left == [5,0,0,0,0,0,3,0]`); adding the placeholder t
 AI seats -> **23 FAILs**, the family empties in half a round and the game degenerates
 (`pop_family` past the end), so the invariant is pinned from both sides.
 
+### TEST D — the Prince chain: family draw, widow fallback, elimination (step 15)
+
+Two scripted 4-player / 3-player rounds in which the **only** interesting event is a Prince play.
+Every seat is level 1, so each round is deterministic; the Prince hits are *forced* by Handmaids:
+an acting seat is always unprotected at his turn start (`new_turn()` resets it) and the Prince
+target list is scanned in seat-index order, so the target is the lowest-index live unprotected
+seat - protecting seats 0/1 aims seat 3's Prince at seat 2.
+
+| fixture | deal | Prince plays | what they find |
+|---|---|---|---|
+| 4p | `H,H,G,P` + families `H,[H,G,G]` `H,[H,G,G]` `G,[G,G,G]` `P,[P,G,G]`; **no widow** (4p burns 0), main pile 0 | 4th, 8th, both on seat 2 | family 2 -> 1; then family **0** and no widow -> seat 2 **eliminated** |
+| 3p | widow 1 Guard, `G,P,P` + families `G x4`, `P,[P,G,G,G]`, `P,[P,G,G,G]` | 2nd, 3rd, 5th, 6th, all on seat 0 | family 3 -> 2; family 2 -> 1; family **0** + widow 1 -> draws **the widow**; family **0** + widow **0** -> seat 0 **eliminated** |
+
+`CountingMain.resolve_effect()` runs exactly once per play, so it snapshots the whole board
+**before** and **after** every effect (`effect_log`): family sizes, hand sizes, `is_active()`,
+widow size + sprite, and `_left`. "The target's family size AT THE HIT" is unreadable by polling
+(the whole chain resolves in a few frames at `_speed = 0`), which is why the hook is a
+`resolve_effect()` override. `before` is taken after the played card reached the table and before
+`discard(_table)`, so each record shows exactly the state the Prince acts on.
+
+Asserted per round: the outcome of each hit is decided by the family size and the widow size at
+the hit (family first, widow as fallback, elimination only when both are empty) - never by
+anything else; the hand is exactly 1 card for every live seat at **every** effect boundary; the
+eliminated seat has 0 hand cards and is out; `sum(_left) == 16 - plays - prince_hits` at every
+play (each play discards 1 card, each Prince hit discards the target's hand card, family/widow
+drawing discards nothing - the formula holds here only because every elimination in these
+fixtures is Prince-caused, a Guard/Baron/Princess elimination would add one more decrement);
+`pile_draws == 0` in 4p and `== 1` in 3p, and that single pile draw **is** the widow fallback, so
+the widow is never touched at a turn start; the widow sprite is hidden in 4p for the whole round
+and hidden in 3p once its 1 card is spent; every family draw used index 0; 11 plays / 12 turns /
+actor 0 in 4p and 10 plays / 11 turns / actor 1 in 3p (the elimination does **not** end the round -
+the family-out rule does); round-end `_left == [3,0,0,0,0,0,0,0]` (4p, 16 - 11 - 2) and
+`[2,0,0,0,0,0,0,0]` (3p, 16 - 10 - 4); and 0 move/draw pairing mismatches.
+
+Harness sanity: swapping the family test for the widow test in the Prince branch (widow first) ->
+**12 FAILs** in the 3p round (the widow is spent on play 2, so the family draws, the widow
+fallback and the elimination all move), 4p unchanged (4p has no widow) - the *order* of the
+cascade is what is pinned.
+
 ## tests/noble_family_smoke.tscn — Noble Family variant, whole games on the AI (steps 7, 11, 14)
 
 Variant games (`main.noble_family = true`) with every seat on the AI (levels 4/4/3/2), animations
@@ -425,8 +464,9 @@ at speed 0, audio muted: the "the variant plays and terminates" check, the twin 
 
 `tests/counting_main.gd` (`extends Main`, installed with `set_script`, restoring the `card_scene`
 export afterwards) records the events that cannot be polled: `set_inactive()` (eliminations),
-`round_over()` (round ends, plus the seat that was to act) and `deal_from_family()` (family draws
-per seat). Polling hand sizes / `Player.active` / the round-over label per frame **drops events**:
+`round_over()` (round ends, plus the seat that was to act), `deal_from_family()` (family draws per
+seat) and `resolve_effect()` (before/after snapshots of the whole board per play, TEST D of
+`tests/noble_family_rules.tscn`). Polling hand sizes / `Player.active` / the round-over label per frame **drops events**:
 at `_speed = 0` a whole turn chain, and even "eliminate → round_over → label → `_new_round`",
 can resolve inside a single frame. Plays are counted on each seat's own `move_chosen` /
 `card_played` signals, and a Prince play is recognized via `Move.played_type()` - in the variant a

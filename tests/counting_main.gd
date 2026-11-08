@@ -33,6 +33,14 @@ var round_end_hands: Array = []  # per round end: hand card count per seat
 var round_end_left: Array = []  # per round end: a copy of Deck._left
 var _round_start: int = -1  # the seat that opened the running round (-1 = round_over seen, no turn yet)
 var _turn_counts: Array[int] = [0, 0, 0, 0]  # per seat, cumulative
+# Per-effect snapshots (step 15: the Prince paths). `resolve_effect()` runs exactly ONCE per play,
+# so one record == one play, in play order. The BEFORE snapshot is the state the effect acts on -
+# the played card already sits on the table (so `_left` is not decremented yet) and the target's
+# hand card is still in his hand. The AFTER snapshot is the settled state: the played card is
+# discarded, the target has redrawn (family / widow / eliminated). That pair is what pins
+# "the target's family size AT THE HIT" - a harness cannot read it by polling, because the whole
+# effect chain resolves inside a few frames at `Animator._speed = 0`.
+var effect_log: Array = []  # per play: {played, target, before, after, plays, prince_hits}
 
 
 func set_inactive(p: Player, reveal_hand: bool = true) -> void:
@@ -68,6 +76,54 @@ func round_over() -> void:
 # this at turn start, it is how a harness proves the turn-start draw is a FAMILY draw only.
 # An explicit `card_type` is the Noble Family FIRST-HAND deal (`_new_round` deals it through the
 # animated deal path without popping anything), so it is counted separately.
+func resolve_effect() -> void:
+	var before := _snapshot()
+	var played: int = _played_card
+	var target: int = _target_player
+	await super()
+	var after := _snapshot()
+	var hits := 0
+	for r in effect_log:
+		if int(r["played"]) == Deck.CardType.Prince:
+			hits += 1
+	if played == Deck.CardType.Prince:
+		hits += 1
+	effect_log.append({
+		"played": played,
+		"target": target,
+		"before": before,
+		"after": after,
+		"plays": effect_log.size() + 1,  # this play is #N in the log, 1-based
+		"prince_hits": hits,  # Prince plays in the log INCLUDING this one
+	})
+
+
+func _snapshot() -> Dictionary:
+	var fams: Array = []
+	var hands: Array = []
+	var active: Array = []
+	for p in _players:
+		fams.append(p.family_size())
+		hands.append(p.hand.get_child_count())
+		# is_active(), not `active`: a Disabled seat keeps `active == true` (`_new_round` sets it for
+		# every seat) and holds no card at all - only a live seat owes the 1-card hand invariant
+		active.append(p.is_active())
+	var left: Array = []
+	var left_sum := 0
+	for n in _deck._left.size():
+		left.append(_deck._left[n])
+		left_sum += int(_deck._left[n])
+	return {
+		"fams": fams,
+		"hands": hands,
+		"active": active,
+		"widow": _deck._widow_cards.size(),
+		"widow_visible": _deck._widow.visible,
+		"left": left,
+		"left_sum": left_sum,
+	}
+
+
 func deal_card(p: Player, allow_widow: bool = false,
 		card_type: Deck.CardType = Deck.CardType.Unknown) -> void:
 	if card_type == Deck.CardType.Unknown:
