@@ -224,26 +224,47 @@ func new_turn():
 			_other_protected = false
 	_target_player = -1
 	_target_type = Deck.CardType.Unknown
+	# Noble Family: the round ends at turn start when the seat to act has no family card left,
+	# and the mandatory draw comes from his own family (never from the main pile, which this
+	# variant never draws from).
+	if noble_family:
+		if p.family.is_empty():
+			print("Round over: player " + str(p.idx) + " has no family card to draw")
+			round_over()
+			return
+		# TODO(step 20): human modal, AI joint move. Placeholder: every seat takes family index 0
+		# (as-dealt order), so the draw is not a decision yet and the play choice below is the
+		# classic 2-card choice.
+		await deal_from_family(p, 0)
+		_begin_play_selection(p)
+		return
 	if _deck._main.visible:
 		await deal_card(p)
 		#_players[_cur_player].hand.get_child(0).type = Deck.CardType.Baron
 		#_players[_cur_player].hand.get_child(1).type = Deck.CardType.King
-		p.current_mark.show()
-		if p.is_human():
-			var valid_moves = find_valid_moves()
-			p.eval_moves(valid_moves, _deck._left)
-			if get_parent().print_valid_moves:
-				for m in valid_moves:
-					print("\t" + str(m))
-			p._state = Player.State.SELECT_CARD
-			var countess_idx := p.countess_restricted()
-			if countess_idx != -1:
-				p.hand.get_child(1 - countess_idx).modulate.a = 0.25
-		else:
-			var valid_moves = find_valid_moves()
-			p.ai_move(valid_moves, _deck._left)
+		_begin_play_selection(p)
 	else:
 		round_over()
+
+
+# The shared tail of new_turn(): the seat has just drawn his second card (main pile in classic,
+# own family in the Noble Family variant), the hand holds 2 cards and the seat chooses which one
+# to play.
+func _begin_play_selection(p: Player) -> void:
+	p.current_mark.show()
+	if p.is_human():
+		var valid_moves = find_valid_moves()
+		p.eval_moves(valid_moves, _deck._left)
+		if get_parent().print_valid_moves:
+			for m in valid_moves:
+				print("\t" + str(m))
+		p._state = Player.State.SELECT_CARD
+		var countess_idx := p.countess_restricted()
+		if countess_idx != -1:
+			p.hand.get_child(1 - countess_idx).modulate.a = 0.25
+	else:
+		var valid_moves = find_valid_moves()
+		p.ai_move(valid_moves, _deck._left)
 
 
 func _on_card_played(card: Card) -> void:
@@ -408,7 +429,23 @@ func resolve_effect() -> void:
 				if type == Deck.CardType.Princess:
 					await set_inactive(tp, false)
 				else:
-					await deal_card(tp, true)
+					# Noble Family: a Prince redraw draws from the target's own family first
+					# (as-dealt index 0), the widow is the fallback pile, and a target with an
+					# empty family and no widow (4p burns nothing, so no widow exists) is
+					# eliminated. The widow is never drawable at a turn start - only here.
+					if noble_family:
+						if not tp.family.is_empty():
+							# TODO(step 21): a human target picks the family card in the modal.
+							await deal_from_family(tp, 0)
+						elif not _deck._widow_cards.is_empty():
+							await deal_card(tp, true)
+						else:
+							# No family card left and no widow (4p): the target is out of the round.
+							# No early return - resolve_effect() must still discard the played card,
+							# run the 1-card hand invariant and pick the next seat.
+							await set_inactive(tp, false)
+					else:
+						await deal_card(tp, true)
 					# The target's card left the game, so every belief about him is dead.
 					# The Prince player's own hand card never changed, so beliefs about him
 					# stay valid; when he Prince-plays himself (tp == p) his own card did

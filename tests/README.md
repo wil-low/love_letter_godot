@@ -326,3 +326,41 @@ Harness sanity: breaking one expectation (`widow == burn + 1`) prints 3 FAIL lin
 godot --headless --path . tests/noble_family_rules.tscn
 echo $?   # 0 = every check passed, 1 = a check failed
 ```
+
+## tests/noble_family_smoke.tscn — Noble Family variant, whole games on the AI (step 7)
+
+Variant games (`main.noble_family = true`) with every seat on the AI (levels 4/4/3/2), animations
+at speed 0, audio muted: the "the variant plays and terminates" check, the twin of
+`tests/smoke_games.tscn` for the classic path.
+
+    godot --headless --path . tests/noble_family_smoke.tscn                        # 4 players
+    godot --headless --path . tests/noble_family_smoke.tscn -- --players=3 --rounds=40
+    echo $?   # 0 = the variant flowed, 1 = a check failed / the loop stalled
+
+`tests/counting_main.gd` (`extends Main`, installed with `set_script`, restoring the `card_scene`
+export afterwards) records the events that cannot be polled: `set_inactive()` (eliminations),
+`round_over()` (round ends, plus the seat that was to act) and `deal_from_family()` (family draws
+per seat). Polling hand sizes / `Player.active` / the round-over label per frame **drops events**:
+at `_speed = 0` a whole turn chain, and even "eliminate → round_over → label → `_new_round`",
+can resolve inside a single frame. Plays are counted on each seat's own `move_chosen` /
+`card_played` signals.
+
+Measured, 40 rounds per player count (seed 20260607):
+
+| players | games started | family-out ends | eliminations | plays | avg plays/round | max plays/round |
+|---|---|---|---|---|---|---|
+| 4 | 6 | 4 | 70 | 336 | 8.4 | 11 (ceiling 12) |
+| 3 | 4 | 2 | 61 | 267 | 6.67 | 10 (ceiling 12) |
+| 2 | 5 | 5 | 35 | 156 | 3.9 | 8 (ceiling 10) |
+
+Per-round checks: `plays[seat] <= family_draws[seat] <= family size`; `family_size(seat) ==
+family size - family_draws[seat]`; a round with no elimination is a **family-out end** (the seat
+that was to act has an empty family, `family_draws[actor] == family size`) with `sum(_left) ==
+16 - plays - prince_plays`; every live seat holds exactly 1 card at round end.
+
+**A round with no Prince involvement is 12 plays in 3p/4p and 10 in 2p; the measured averages are
+far lower because a Prince aimed at a seat consumes one of *his* family cards (`deal_from_family`),
+so a seat can run out of family cards with fewer than `family size` plays to his name, and no 4p
+round in the sample reached the 12-play ceiling (max 11).** Only rounds with no elimination are
+checked against the family-out rule (`family_draws[actor] == family size` + the `_left` sum); the
+other rounds are cut short by an elimination and only the per-seat bounds are checked.
