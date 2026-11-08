@@ -1,5 +1,6 @@
 extends Node2D
-# Noble Family variant smoke test (docs/noble-family-todo.md step 7).
+# Noble Family variant smoke test (docs/noble-family-todo.md steps 7 + 11: joint (draw, play, target) moves,
+# verified per move from inside the play chain by CountingMain._on_move_chosen).
 #
 # Plays whole variant games in the production scene with every seat on the AI (levels 4/4/3/2),
 # animations at speed 0, audio muted, and asserts that the variant loop keeps producing rounds,
@@ -39,7 +40,7 @@ const CountingMain := "res://tests/counting_main.gd"  # load()ed at runtime: pre
 # a cyclic dependency (this harness preloads main.tscn, counting_main.gd extends Main)
 
 var print_memory: bool = false
-var print_valid_moves: bool = false
+var print_valid_moves: bool = false  # set by --print-moves=1
 
 const SEED: int = 20260607
 const PLAYERS: int = 4
@@ -74,6 +75,10 @@ func _ready() -> void:
 
 	var count: int = _arg("players", PLAYERS)
 	var target_rounds: int = _arg("rounds", ROUNDS)
+	var seed_value: int = _arg("seed", SEED)
+	# `-- --print_moves=1` turns on Main's own move-list dump (the step 11 gate check: every
+	# variant move line shows the draw, `draw <Type> (#idx), keep <Type>`).
+	print_valid_moves = _arg("print_moves", 0) == 1
 	assert(count >= 2 and count <= 4, "--players must be 2, 3 or 4")
 	var fam: int = Deck.NOBLE_FAMILY_SIZE[count]
 
@@ -89,7 +94,7 @@ func _ready() -> void:
 		main._players[i].move_chosen.connect(count_play.bind(i))
 		main._players[i].card_played.connect(count_card_play.bind(i))
 
-	await main.init_players(SEED)
+	await main.init_players(seed_value)
 
 	var seen_rounds: int = 0
 	var elim_seen: int = 0
@@ -107,6 +112,7 @@ func _ready() -> void:
 				fam_round[j] = main.family_draws[j] - fam_seen[j]
 				fam_seen[j] = main.family_draws[j]
 			check_round(main, count, fam, plays, fam_round, prince_plays, elim, actor_idx)
+			check_draw_pairing(main)
 			for i in 4:
 				plays[i] = 0
 			prince_plays = 0
@@ -126,6 +132,8 @@ func _ready() -> void:
 		", prince plays: " + str(_prince_total) + ", avg plays/round: " + String.num(avg, 2) +
 		", max plays in a round: " + str(_max_plays) + " (no-Prince 4p round: " + str(count * fam) + ")")
 	print("family size per seat: " + str(fam) + ", scores: " + scores_str(main))
+	print("move/draw pairings verified: " + str(main.draws_checked) +
+		" - every move naming family card f drew family card f, checked inside its own play chain")
 
 	var ok: bool = true
 	if _rounds < target_rounds:
@@ -136,6 +144,9 @@ func _ready() -> void:
 		ok = false
 	if _family_out_ends == 0:
 		fail("no round ran to the family-out end (the seat to act had an empty family)")
+		ok = false
+	if main.draws_checked == 0:
+		fail("no (draw, play) pairing was verified - CountingMain._on_move_chosen never ran")
 		ok = false
 	if _failures > 0:
 		fail(str(_failures) + " per-round rule check(s) failed")
@@ -149,7 +160,9 @@ func _ready() -> void:
 
 func count_play(m: Move, seat: int) -> void:
 	plays[seat] += 1
-	if m._played_card != null and m._played_card.type == Deck.CardType.Prince:
+	# `played_type()` works for a Noble Family move that plays the DRAWN family card, whose
+	# `Move._played_card` node is null at decision time.
+	if m.played_type() == Deck.CardType.Prince:
 		prince_plays += 1
 		_prince_total += 1
 
@@ -210,6 +223,15 @@ func check_round(main, count: int, fam: int, plays: Array[int], fam_draws: Array
 		var n: int = p.hand.get_child_count()
 		if p.is_active() and n != 1:
 			fail("seat " + str(j) + " holds " + str(n) + " cards at round end, expected exactly 1")
+
+
+# The (draw, play, target) gate (step 11/12): `CountingMain._on_move_chosen` pairs every move that
+# names a family card with the family card the same play chain draws, from inside the chain. This
+# only reports what that pairing found since the last round end.
+func check_draw_pairing(main) -> void:
+	for msg in main.draw_mismatches:
+		fail("move/draw mismatch: " + msg)
+	main.draw_mismatches = []
 
 
 func fail(msg: String) -> void:

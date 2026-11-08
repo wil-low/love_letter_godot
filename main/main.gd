@@ -232,11 +232,16 @@ func new_turn():
 			print("Round over: player " + str(p.idx) + " has no family card to draw")
 			round_over()
 			return
-		# TODO(step 20): human modal, AI joint move. Placeholder: every seat takes family index 0
-		# (as-dealt order), so the draw is not a decision yet and the play choice below is the
-		# classic 2-card choice.
-		await deal_from_family(p, 0)
-		_begin_play_selection(p)
+		if p.is_human():
+			# TODO(step 20): human modal. Placeholder: family index 0 (as-dealt order), so the
+			# human keeps the classic 2-card play selection until the draw modal exists.
+			await deal_from_family(p, 0)
+			_begin_play_selection(p)
+		else:
+			# An AI seat does NOT draw here: the family draw is part of the move, enumerated by
+			# find_valid_moves() (step 11) and animated by _on_move_chosen() (step 13). The seat
+			# decides over the pair (his active card, family[f]) while his hand holds 1 card.
+			_begin_play_selection(p)
 		return
 	if _deck._main.visible:
 		await deal_card(p)
@@ -247,9 +252,10 @@ func new_turn():
 		round_over()
 
 
-# The shared tail of new_turn(): the seat has just drawn his second card (main pile in classic,
-# own family in the Noble Family variant), the hand holds 2 cards and the seat chooses which one
-# to play.
+# The shared tail of new_turn(): in classic the seat has just drawn his second card from the main
+# pile (hand = 2 cards, he chooses which one to play); in the Noble Family variant an AI seat has
+# 1 card in hand and chooses the whole (draw, play, target) triple, while the human seat is still
+# dealt a placeholder family draw at turn start (step 20) and keeps the 2-card choice.
 func _begin_play_selection(p: Player) -> void:
 	p.current_mark.show()
 	if p.is_human():
@@ -264,6 +270,14 @@ func _begin_play_selection(p: Player) -> void:
 			p.hand.get_child(1 - countess_idx).modulate.a = 0.25
 	else:
 		var valid_moves = find_valid_moves()
+		if valid_moves.is_empty():
+			# No legal (draw, play, target) triple: the seat holds only types that need a target
+			# (Guard / Priest / Baron / King) and every opponent is protected. Classic has the same
+			# dead end for a human (the target selection simply never accepts a tap), so the rule is
+			# not invented here; the AI must not crash on `valid_moves[0]`, so the round ends.
+			push_warning("Player " + str(p.idx) + " has no legal move, ending the round")
+			round_over()
+			return
 		p.ai_move(valid_moves, _deck._left)
 
 
@@ -348,6 +362,14 @@ func _on_move_chosen(move: Move) -> void:
 	await Animator.delay(1)
 	if get_parent().print_valid_moves:
 		print("My " + str(move))
+	if move.is_noble():
+		# The mandatory family draw is part of the move: it animates first, so the played card is
+		# the active one (`_played_card_idx` 0) or the card that was just drawn (1).
+		var p := _players[_cur_player]
+		await deal_from_family(p, move._drawn_family_idx)
+		move._drawn_card = p.hand.get_child(1)
+		if move._played_card_idx == 1:
+			move._played_card = move._drawn_card
 	await _on_card_played(move._played_card)
 	if move._target_player != -1:
 		await Animator.delay(1)
@@ -600,39 +622,84 @@ func _on_game_over_pressed() -> void:
 	_new_game()
 
 
+# The move list. Classic: the seat holds 2 cards and chooses which one to play.
+# Noble Family: the seat holds 1 card (the active one) and the mandatory family draw is part of
+# the move, so a move is a (draw, play, target) triple enumerated over the pairs
+# (active card, family[f]). A seat whose hand holds 2 cards in the variant is the human seat that
+# was dealt its placeholder draw at turn start (step 20 replaces that with the modal), so it keeps
+# the classic 2-card enumeration.
 func find_valid_moves() -> Array[Move]:
 	var result: Array[Move]
-	var move: Move;
 	var cp = _players[_cur_player]
-	var countess_idx = cp.countess_restricted() 
+	if noble_family and cp.hand.get_child_count() == 1:
+		return _find_noble_moves(cp)
+	var countess_idx = cp.countess_restricted()
 	var cards: Array[Card] = [cp.hand.get_child(0), cp.hand.get_child(1)]
 	if countess_idx != -1:
-		move = Move.new(cards[countess_idx], countess_idx)
-		result.append(move)
+		# the Countess rule forces which card of the hand is played
+		_append_play_moves(result, cp, cards[countess_idx], countess_idx, cards[1 - countess_idx].type)
 	else:
 		for i in cards.size():
-			var type = cards[i].type
-			match type:
-				Deck.CardType.Guard:
-					for p in _players:
-						if p.idx != cp.idx and p.is_active() and (!p.protected or _other_protected):
-							for t in range(Deck.CardType.Priest, Deck.CardType.Unknown):
-								move = Move.new(cards[i], i, p.idx, t)
-								result.append(move)
-				Deck.CardType.Priest, Deck.CardType.Baron, Deck.CardType.King:
-					for p in _players:
-						if p.idx != cp.idx and p.is_active() and (!p.protected or _other_protected):
-							move = Move.new(cards[i], i, p.idx)
-							result.append(move)
-				Deck.CardType.Handmaid, Deck.CardType.Countess:
-					move = Move.new(cards[i], i)
-					result.append(move)
-				Deck.CardType.Prince:
-					for p in _players:
-						if p.is_active() and !p.protected:
-							move = Move.new(cards[i], i, p.idx)
-							result.append(move)
+			_append_play_moves(result, cp, cards[i], i, cards[1 - i].type)
 	return result
+
+
+# Noble Family: every (draw, play, target) triple for the seat holding 1 hand card. Family order
+# is as-dealt (never sorted), which is what makes level 1 (`valid_moves[0]`) deterministic.
+# `_played_card_idx`: 0 = the active card is played, 1 = the drawn family card is played.
+func _find_noble_moves(cp: Player) -> Array[Move]:
+	var result: Array[Move]
+	var active: Card = cp.hand.get_child(0)
+	var active_type: Deck.CardType = active.type
+	for f in cp.family_size():
+		var drawn_type: Deck.CardType = cp.family[f]
+		# the Countess rule over the pair (active, family[f]) forces which card is played
+		var forced: int = cp.countess_restricted_types(active_type, drawn_type)
+		for play_idx in range(2):
+			if forced != -1 and forced != play_idx:
+				continue
+			var played_card: Card = active if play_idx == 0 else null
+			var leftover_type: Deck.CardType = drawn_type if play_idx == 0 else active_type
+			_append_play_moves(result, cp, played_card, play_idx, leftover_type, f, drawn_type)
+	return result
+
+
+# Append every legal (target, type) move for playing one card of the pair, keeping `leftover_type`
+# in hand. Shared by the classic enumeration (`played_card` is a real node, `drawn_family_idx` -1)
+# and by the Noble Family joint enumeration (`played_card` is null when the DRAWN family card is
+# the card being played, so its type is `drawn_type`). The target rules are the same for both:
+# Guard -> active non-protected opponents x every guessable type, Priest/Baron/King -> active
+# non-protected opponents, Handmaid/Countess -> self, Prince -> any active non-protected (self
+# included). Princess is enumerated in the variant only: an AI never plays a Princess voluntarily,
+# but a variant pair of two Princesses leaves nothing else, so it must be a legal move.
+func _append_play_moves(result: Array[Move], cp: Player, played_card: Card, play_idx: int,
+		leftover_type: Deck.CardType, drawn_family_idx: int = -1,
+		drawn_type: Deck.CardType = Deck.CardType.Unknown) -> void:
+	var played_t: Deck.CardType = played_card.type if played_card != null else drawn_type
+	match played_t:
+		Deck.CardType.Guard:
+			for p in _players:
+				if p.idx != cp.idx and p.is_active() and (!p.protected or _other_protected):
+					for t in range(Deck.CardType.Priest, Deck.CardType.Unknown):
+						result.append(Move.new(played_card, play_idx, p.idx, t,
+							drawn_family_idx, drawn_type, leftover_type))
+		Deck.CardType.Priest, Deck.CardType.Baron, Deck.CardType.King:
+			for p in _players:
+				if p.idx != cp.idx and p.is_active() and (!p.protected or _other_protected):
+					result.append(Move.new(played_card, play_idx, p.idx, Deck.CardType.Unknown,
+						drawn_family_idx, drawn_type, leftover_type))
+		Deck.CardType.Handmaid, Deck.CardType.Countess:
+			result.append(Move.new(played_card, play_idx, -1, Deck.CardType.Unknown,
+				drawn_family_idx, drawn_type, leftover_type))
+		Deck.CardType.Prince:
+			for p in _players:
+				if p.is_active() and !p.protected:
+					result.append(Move.new(played_card, play_idx, p.idx, Deck.CardType.Unknown,
+						drawn_family_idx, drawn_type, leftover_type))
+		Deck.CardType.Princess:
+			if drawn_family_idx != -1:
+				result.append(Move.new(played_card, play_idx, -1, Deck.CardType.Unknown,
+					drawn_family_idx, drawn_type, leftover_type))
 
 
 func _on_menu_button_pressed() -> void:

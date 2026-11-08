@@ -322,12 +322,59 @@ four piles form an exact permutation of the 16-card deck (no duplicate, none los
 
 Harness sanity: breaking one expectation (`widow == burn + 1`) prints 3 FAIL lines and exits 1.
 
+### TEST B — the joint (draw, play, target) enumeration (step 11 + step 12 policies)
+
+A `Main` scene is instantiated but **never started** (no `init_players()` call, so the game loop
+never runs): the harness sets seat 0's 1-card hand, his family array and the four protection flags
+by hand, then calls the production `Main.find_valid_moves()` and `Player.select_move()` on that
+state. `_other_protected` is recomputed exactly as `new_turn()` does it. Cards are built the way
+`Main.deal_card()` builds them (into `AnimationLayer` first, then `Player.add_card()` reparents
+them) - setting `Card.type` before the node is in the tree is a SCRIPT ERROR on the sprite.
+
+Move counts are written out by hand, not recomputed from the production code:
+
+| scripted state | expected moves |
+|---|---|
+| 4p, Guard + family `[Baron, Handmaid, Princess]`, nobody protected | 3 x 21 + 3 + 1 + 1 = **68** |
+| 4p, Countess + family `[Prince, King, Princess]` | 1 + 1 + 2 = **4** (Countess forced twice) |
+| 3p, Prince + family `[Handmaid, Guard]`, **both opponents protected** | 1 + 1 + 1 + 14 = **17** |
+| 2p, Princess + family `[Princess]` | **2** (the forced Princess play) |
+| variant seat with a 2-card hand (the human placeholder, step 20) | 3 x 7 + 3 = **24**, no draws |
+
+Every emitted move is then checked individually: `_drawn_family_idx` is a real family index and
+`_drawn_type` is that family card; playing one card of the pair `(active, family[f])` forces
+`_leftover_type` to be the other card; `_played_card` is the hand node when the active card is
+played and `null` when the drawn card is (so a variant move is describable with types alone); a
+Countess + man pair never plays the man; the target follows the type rules (self-only for
+Handmaid/Countess/Princess, Prince hits an unprotected seat including self, Guard probes name a
+Priest..Princess type and may hit a protected seat only when `_other_protected`); and no
+(draw, play, target, type) combination is generated twice.
+
+Two rules the enumeration had to settle, both pinned here:
+
+- **a Princess play exists in the variant enumeration only.** Classic never offers a Princess to
+  the AI (no `Princess` case in `find_valid_moves`) and cannot reach the state that forces one -
+  the deck has 1 copy. The variant deals 2 Princesses into one seat's pair (hand + family), where
+  an empty move list would strand the seat with no move at all, so the pair's Princess plays are
+  enumerated as self-targeted moves. TEST (2p, Princess + `[Princess]`) asserts the list is
+  non-empty, and the 2-card-hand case asserts a Princess is still never enumerated outside the
+  joint enumeration (classic behaviour, both modes).
+- **level 4 never pays for it.** A Princess has no `eval_moves` branch, so it scores 0, and the
+  weighted prefix loop can only pick a positive-scoring move when the sum is positive: 40 samples
+  play it 0 times.
+
+The level 1-4 policies over one enumerated list (the todo step 12 gate, asserted in the suite):
+level 1 takes `valid_moves[0]` (family index 0, active card, as-dealt order = deterministic); level
+2 stays inside the list and spreads over 4 distinct (draw, play) pairs in 60 samples; level 3 draws
+the cheapest family card (Guard, 15 candidate moves) and plays the cheaper card of the pair when
+such a play exists; level 4 scores the list (sum 140) and never plays a 0-score move.
+
 ```
 godot --headless --path . tests/noble_family_rules.tscn
 echo $?   # 0 = every check passed, 1 = a check failed
 ```
 
-## tests/noble_family_smoke.tscn — Noble Family variant, whole games on the AI (step 7)
+## tests/noble_family_smoke.tscn — Noble Family variant, whole games on the AI (steps 7, 11)
 
 Variant games (`main.noble_family = true`) with every seat on the AI (levels 4/4/3/2), animations
 at speed 0, audio muted: the "the variant plays and terminates" check, the twin of
@@ -335,6 +382,8 @@ at speed 0, audio muted: the "the variant plays and terminates" check, the twin 
 
     godot --headless --path . tests/noble_family_smoke.tscn                        # 4 players
     godot --headless --path . tests/noble_family_smoke.tscn -- --players=3 --rounds=40
+    godot --headless --path . tests/noble_family_smoke.tscn -- --seed=999         # other deal/RNG
+    godot --headless --path . tests/noble_family_smoke.tscn -- --print_moves=1   # move dumps
     echo $?   # 0 = the variant flowed, 1 = a check failed / the loop stalled
 
 `tests/counting_main.gd` (`extends Main`, installed with `set_script`, restoring the `card_scene`
@@ -343,15 +392,45 @@ export afterwards) records the events that cannot be polled: `set_inactive()` (e
 per seat). Polling hand sizes / `Player.active` / the round-over label per frame **drops events**:
 at `_speed = 0` a whole turn chain, and even "eliminate → round_over → label → `_new_round`",
 can resolve inside a single frame. Plays are counted on each seat's own `move_chosen` /
-`card_played` signals.
+`card_played` signals, and a Prince play is recognized via `Move.played_type()` - in the variant a
+move that plays the drawn family card has a **null** `Move._played_card` at decision time.
 
-Measured, 40 rounds per player count (seed 20260607):
+Measured, 40 rounds per player count (seed 20260607), **with the joint (draw, play) moves of step
+11 live** - an AI seat no longer draws family index 0 at turn start, he draws the card his chosen
+move names:
 
-| players | games started | family-out ends | eliminations | plays | avg plays/round | max plays/round |
-|---|---|---|---|---|---|---|
-| 4 | 6 | 4 | 70 | 336 | 8.4 | 11 (ceiling 12) |
-| 3 | 4 | 2 | 61 | 267 | 6.67 | 10 (ceiling 12) |
-| 2 | 5 | 5 | 35 | 156 | 3.9 | 8 (ceiling 10) |
+| players | games started | family-out ends | eliminations | plays | prince plays | avg plays/round | max plays/round |
+|---|---|---|---|---|---|---|---|
+| 4 | 5 | 3 | 76 | 329 | 31 | 8.22 | 11 (ceiling 12) |
+| 3 | 5 | 4 | 56 | 299 | 29 | 7.47 | 11 (ceiling 12) |
+| 2 | 5 | 7 | 33 | 203 | 20 | 5.08 | 10 (ceiling 10) |
+
+(The step-7 baseline, with the placeholder draw at turn start, was 70 / 336 / 8.4 · 61 / 267 /
+6.67 · 35 / 156 / 3.9 - the same shape, the same family-out ends, so the joint enumeration did not
+break the flow, it only changed which card a seat draws and plays.)
+
+**Determinism (the step 12 gate):** two runs of `--players=4 --rounds=20` on the default seed print
+byte-identical play logs (506 `new_turn` / `resolve_effect` / effect lines each); the same suite
+with `--seed=999` prints a different log (489 lines) - level 1's `valid_moves[0]` is deterministic,
+level 2's uniform pick is not. `--print_moves=1` dumps every enumerated move; in a 4p variant game
+every line carries its draw, e.g. `Move score 20: Baron (0), draw King (#2), keep King, tgt 0`, and
+a Baron turn on family `[Prince, Guard, King]` prints 37 moves (7 + 24 + 6).
+
+**The (draw, play) pairing (the step 11/12 gate):** `CountingMain._on_move_chosen` wraps the play
+chain itself (`Main` calls its own method, so the subclass override is what runs - the same trick
+the suite already uses for `set_inactive` / `round_over` / `deal_from_family`). It notes the family
+index the chosen move names (`Move._drawn_family_idx`) and how many family draws that seat has
+executed so far, and after the chain resumes it asserts that the draw the chain executed - at that
+position in the seat's draw history - IS the named card. Pairing from inside the chain is the only
+way this can be checked: `move_chosen` fires before the chain animates the draw, so a harness that
+samples the game always sees the recorded moves one ahead of the recorded draws (the first version
+of this check sampled per round and reported 36 phantom mismatches in 20 rounds for exactly that
+reason). A chain abandoned by a round end never resumes, so its move is not counted - and its draw
+never happened either, which is the same fact about the same chain. The suite prints how many
+pairings it verified (`move/draw pairings verified: 175` in a 4p/20-round run) and fails if that is
+0. Harness sanity: making the chain draw family index 0 instead of the named card prints 3
+`move/draw mismatch` FAIL lines and exits 1 (the desynced hand then crashes the run, the same fact
+from the game's side).
 
 Per-round checks: `plays[seat] <= family_draws[seat] <= family size`; `family_size(seat) ==
 family size - family_draws[seat]`; a round with no elimination is a **family-out end** (the seat

@@ -198,14 +198,37 @@ func select_move(valid_moves: Array[Move], left_cards: Array[int]) -> Move:
 	if strategy != AI_Level.Level_4 and print_valid_moves:
 		for m in valid_moves:
 			print("\t" + str(m))
+	# Noble Family joint moves (draw, play, target): the list is enumerated before the family card
+	# is drawn, so a move carries types only. Level 1 and level 2 do not look at the hand at all,
+	# level 4 scores via eval_moves (which reads Move._drawn_type / _leftover_type), and only the
+	# level 3 "cheaper card" heuristic has to be re-expressed on the pair instead of on 2 hand
+	# cards. Levels 1-4 are identical for classic moves.
 	match strategy:
 		AI_Level.Level_1:
-			# first valid move
+			# first valid move (variant: first family index in as-dealt order, active card played)
 			return valid_moves[0]
 		AI_Level.Level_2:
 			# random valid move
 			return valid_moves[randi() % len(valid_moves)]
 		AI_Level.Level_3:
+			if valid_moves[0].is_noble():
+				# cheapest draw: the lowest-rank family card that has a legal play
+				var cheapest: Deck.CardType = valid_moves[0]._drawn_type
+				for m in valid_moves:
+					if m._drawn_type < cheapest:
+						cheapest = m._drawn_type
+				var by_draw: Array[Move]
+				for m in valid_moves:
+					if m._drawn_type == cheapest:
+						by_draw.append(m)
+				# of those, the plays that cost less than the card they keep
+				var cheap_play: Array[Move]
+				for m in by_draw:
+					if m.played_type() <= m._leftover_type:
+						cheap_play.append(m)
+				if cheap_play.is_empty():  # every play of that draw is forced (Countess)
+					cheap_play.append_array(by_draw)
+				return cheap_play[randi() % len(cheap_play)]
 			# moves of cheaper card
 			var cheaper_idx = 0 if hand.get_child(0).type <= hand.get_child(1).type else 1
 			var filtered: Array[Move]
