@@ -13,6 +13,7 @@ var _random_seed: int = 0
 
 var game_counter: int = 0
 var interrupted: bool
+var noble_family: bool = false
 
 var _player_count: int
 var _max_score: int

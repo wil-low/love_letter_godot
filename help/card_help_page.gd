@@ -8,25 +8,25 @@ extends Node2D
 @export var card_type: Deck.CardType = Deck.CardType.Unknown:
 	set(value):
 		card_type = value
-		if Engine.is_editor_hint():
+		if Engine.is_editor_hint() and _card != null:
 			_card.frame = card_type
 
 @export var show_card: bool = true:
 	set(value):
 		show_card = value
-		if Engine.is_editor_hint():
+		if Engine.is_editor_hint() and _card != null:
 			_card.visible = show_card
 
 @export var card_name: String:
 	set(value):
 		card_name = value
-		if Engine.is_editor_hint():
+		if Engine.is_editor_hint() and _name != null:
 			_name.text = card_name
 
 @export_custom(PROPERTY_HINT_MULTILINE_TEXT, "") var card_description: String:
 	set(value):
 		card_description = value
-		if Engine.is_editor_hint():
+		if Engine.is_editor_hint() and _description != null:
 			_description.text = card_description
 
 
