@@ -9,6 +9,14 @@ signal save_stats
 @export var card_scene: PackedScene
 
 const max_games: int = 1000
+
+# Noble Family geometry: the private family stack of a seat, origin + cascade.
+# Seat 0 sits at (5, 31), so the origin is global (31, 31): the free bottom strip x 31..78, y 31..48,
+# right of his 2 hand cards. Cards are 11 px wide, a 9 px cascade leaves 2 px slivers.
+const FAMILY_STACK_ORIGIN := Vector2(26, 0)
+const FAMILY_STACK_MIRROR := Vector2(-11, 0)  # right_score seats (x 68): cards at 57 - 9*i, on the board
+const FAMILY_CASCADE_STEP: int = 9
+
 var _random_seed: int = 0
 
 var game_counter: int = 0
@@ -390,9 +398,69 @@ func set_inactive(p: Player, reveal_hand: bool = true):
 	_inactive_audio_player.play()
 	if reveal_hand:
 		await Animator.reveal_hand(p, false)
+	# Noble Family: an out seat's private family becomes public together with his hand and then
+	# leaves play. The revealed types resolve NO effects - the family cards are shown, counted into
+	# the discard pile and freed, they are never played.
+	# The family ALWAYS leaves play with its owner (the fixed rule), so its cards are materialized and
+	# discarded in EVERY elimination - only the flip is gated by the very same flag as the hand:
+	# `reveal_hand == false` means the hand card is already public knowledge (a Baron lost to a seat
+	# that SAW both cards, a Prince victim whose card the Prince effect flipped face-up before
+	# discarding it), so the family leaves face-down: the variant never publishes more about the same
+	# cards than the classic rules already publish.
+	# The family data is cleared here, not in `_new_round()`, so every snapshot taken after the
+	# elimination (round end, the next effect) sees an out seat with 0 family cards, and the
+	# `_left` identity "main pile + widow + families + hands + table" keeps holding.
+	if noble_family:
+		var family_pile: Node2D = await reveal_out_family(p, reveal_hand)
+		if family_pile != null:
+			# `discard()` is the ONLY `_left` decrement in the game, and each revealed card is a Card
+			# node under `family_pile` exactly once, so family cards are counted exactly once here
+			# (a family draw never decremented `_left`, they are still in the supply).
+			await discard(family_pile)
+			family_pile.queue_free()
+		p.clear_family()
 	discard(p.hand)
 	p._inactive.visible = true
 	await Animator.delay(1)
+
+
+# Noble Family, step 16: materialize the out seat's family at his seat, cascade-style, face-up when
+# `show` (his hand is revealed too). Returns the container the cards sit in (null when the family is
+# empty), so the caller discards those exact nodes through the regular discard path - that discard is
+# what counts the family cards into `_left`.
+#
+# Inline nodes for now: step 18 puts the permanent stack (`Player.render_family()` on the seat's
+# $Family node) in place and this function reuses its geometry - same origin, same cascade step.
+# Right-handed seats (2 and 3, `right_score`) mirror the stack, because their seat sits at x 68 and
+# a right-growing 5-card stack would leave the 84 px board.
+func reveal_out_family(p: Player, show: bool = true) -> Node2D:
+	if p.family.is_empty():
+		return null
+	# snapshot of the as-dealt order: the data is cleared by the caller, the nodes are what a
+	# harness can assert on (type, faceup, cascade positions)
+	var types: Array[Deck.CardType] = p.family.duplicate()
+	var root := Node2D.new()
+	root.name = "FamilyReveal"
+	var step: int = FAMILY_CASCADE_STEP
+	if p.right_score:
+		root.position = FAMILY_STACK_MIRROR
+		step = -step
+	else:
+		root.position = FAMILY_STACK_ORIGIN
+	p.add_child(root)
+	for i in types.size():
+		var c: Card = card_scene.instantiate()
+		# in the tree BEFORE type/faceup are set - both setters touch `_sprite.frame`, and Card._ready()
+		# turns the card face up, so the flip below is the visible reveal
+		root.add_child(c)
+		c.position = Vector2(step * i, 0)
+		c.type = types[i]
+		c.faceup = false
+		if show:
+			await Animator.flip(c, true)  # the visible reveal
+	if show:
+		await Animator.delay(1)  # let the player read the revealed family
+	return root
 
 
 func resolve_effect() -> void:

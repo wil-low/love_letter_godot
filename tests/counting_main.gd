@@ -40,7 +40,20 @@ var _turn_counts: Array[int] = [0, 0, 0, 0]  # per seat, cumulative
 # discarded, the target has redrawn (family / widow / eliminated). That pair is what pins
 # "the target's family size AT THE HIT" - a harness cannot read it by polling, because the whole
 # effect chain resolves inside a few frames at `Animator._speed = 0`.
-var effect_log: Array = []  # per play: {played, target, before, after, plays, prince_hits}
+var effect_log: Array = []  # per play: {played, target, target_type, before, after, plays, prince_hits}
+# Step 16 (elimination reveal) recorders. `Main.reveal_out_family()` materializes the out seat's
+# family as Card nodes, so the only way to see them is from INSIDE the call: production discards and
+# frees those exact nodes right after it returns, and at `_speed = 0` the whole reveal+discard+free
+# chain can settle within one frame. One record per CALL (an empty family records 0 cards), which is
+# also the proof that the reveal is called exactly once per elimination.
+var reveal_log: Array = []  # per reveal call: {seat, shown, family_size, container, pos, parent_is_seat, cards}
+var reveal_calls: int = 0  # every call, empty families included
+# Every card that left play through `Main.discard()` - the ONLY `_left` decrement in the game.
+# Summing it and comparing with the scripted supply minus `_left` is what proves a card is counted
+# exactly once (the "no double decrement" gate) - `_left` alone cannot show it.
+var discard_log: Array = []  # per discard() call that had cards: {container, cards: [{type, faceup}]}
+var discarded: Array[int] = [0, 0, 0, 0, 0, 0, 0, 0]  # per CardType, cumulative
+var debug_discards: bool = false  # per-call `_left` trace, for a fixture that needs to SEE the decrements
 
 
 func set_inactive(p: Player, reveal_hand: bool = true) -> void:
@@ -49,6 +62,71 @@ func set_inactive(p: Player, reveal_hand: bool = true) -> void:
 	# must await: every caller in main.gd does `await set_inactive(...)`, and calling a coroutine
 	# without await would let the game run on past the elimination
 	await super(p, reveal_hand)
+
+
+func reveal_out_family(p: Player, show: bool = true) -> Node2D:
+	var family_size: int = p.family_size()
+	var root: Node2D = await super(p, show)
+	reveal_calls += 1
+	var rec := {
+		"seat": p.idx,
+		"shown": show,
+		"family_size": family_size,
+		"container": "null",
+		"pos": Vector2(-1, -1),
+		"parent_is_seat": false,
+		"cards": [],
+		"faceups": 0,  # how many revealed cards ended face-up
+		"input_connections": 0,  # a display-only stack must connect no input_event at all
+	}
+	if root != null:
+		rec["container"] = root.name
+		rec["pos"] = root.position
+		rec["parent_is_seat"] = root.get_parent() == p
+		for c in root.get_children():
+			if c is Card:
+				if bool(c.faceup):
+					rec["faceups"] = int(rec["faceups"]) + 1
+				rec["input_connections"] = int(rec["input_connections"]) \
+					+ c.input_event.get_connections().size()
+				rec["cards"].append({
+					"type": int(c.type),
+					"faceup": bool(c.faceup),
+					"x": int(c.position.x),
+					"in_container": c.get_parent() == root,
+					"global_x": int(c.global_position.x),
+					"global_y": int(c.global_position.y),
+				})
+	reveal_log.append(rec)
+	return root
+
+
+func discard(from: Node2D) -> void:
+	# snapshot BEFORE super(): production removes and frees these children as it animates them
+	var cards: Array = []
+	var types: Array = []
+	for ch in from.get_children():
+		if ch is Card:
+			cards.append({"type": int(ch.type), "faceup": bool(ch.faceup)})
+			types.append(int(ch.type))
+			discarded[int(ch.type)] += 1
+	var before: Array = _deck._left.duplicate(true)
+	await super(from)
+	if debug_discards:
+		print("  [discard] " + str(from.name) + " types=" + str(types) + " left " + str(before) + " -> "
+			+ str(_deck._left))
+	if !cards.is_empty():
+		discard_log.append({"container": from.name, "cards": cards})
+
+
+func reset_step16() -> void:
+	# TYPED fields (`discarded`) cannot be reset from a harness with `= []` - a typed-array
+	# assignment is a runtime script error and it kills the rest of that frame.
+	reveal_log = []
+	discard_log = []
+	reveal_calls = 0
+	for i in discarded.size():
+		discarded[i] = 0
 
 
 func round_over() -> void:
@@ -80,6 +158,10 @@ func resolve_effect() -> void:
 	var before := _snapshot()
 	var played: int = _played_card
 	var target: int = _target_player
+	# `_target_type` must be read BEFORE super(): `resolve_effect()` ends with `new_turn()`, which resets
+	# it to Unknown for the next turn, and at `_speed = 0` the whole next turn runs synchronously inside
+	# that call - reading it after super() reports the NEXT turn's value, not this play's declaration.
+	var target_type: int = _target_type
 	await super()
 	var after := _snapshot()
 	var hits := 0
@@ -91,6 +173,7 @@ func resolve_effect() -> void:
 	effect_log.append({
 		"played": played,
 		"target": target,
+		"target_type": target_type,  # the Guard's declared type, captured inside this play's chain
 		"before": before,
 		"after": after,
 		"plays": effect_log.size() + 1,  # this play is #N in the log, 1-based

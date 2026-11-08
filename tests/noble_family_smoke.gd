@@ -27,7 +27,9 @@ extends Node2D
 #
 # Checks per finished round:
 # - `plays[seat] <= family_draws[seat] <= family size`, and `family_size(seat) == family size -
-#   family_draws[seat]` (the family array shrinks by exactly the draws);
+#   family_draws[seat]` (the family array shrinks by exactly the draws) - EXCEPT for a seat eliminated
+#   in this round, who has `family_size == 0`: step 16 revealed his family, moved it to the discard
+#   pile through `Main.discard()` and cleared the data the moment he left the round;
 # - a round with no elimination is a family-out end: the seat that was to act has an EMPTY family
 #   (his family draws == family size), and `sum(Deck._left) == 16 - plays - prince_plays` (plays and
 #   the Prince's discarded target card are the only decrements - family draws must not touch `_left`);
@@ -118,6 +120,9 @@ func _ready() -> void:
 			seen_rounds += 1
 			_rounds += 1
 			var elim: int = main.eliminations - elim_seen
+			var eliminated_this: Array = []  # the seats this round eliminated, by index
+			for k in elim:
+				eliminated_this.append(main.eliminated_seats[elim_seen + k])
 			elim_seen = main.eliminations
 			var fam_round: Array[int] = [0, 0, 0, 0]
 			var turns_round: int = 0
@@ -132,7 +137,7 @@ func _ready() -> void:
 			pile_seen = main.pile_draws
 			first_hand_seen = main.first_hand_deals
 			check_round(main, count, fam, plays, fam_round, prince_plays, elim, actor_idx,
-				turns_round, start_actor, pile_round, first_hand_round)
+				turns_round, start_actor, pile_round, first_hand_round, eliminated_this)
 			check_draw_pairing(main)
 			for i in 4:
 				plays[i] = 0
@@ -200,7 +205,7 @@ func count_card_play(c: Card, seat: int) -> void:
 # `turns` is the number of `new_turn()` calls the round took, `start_actor` the seat that opened it.
 func check_round(main, count: int, fam: int, plays: Array[int], fam_draws: Array[int],
 	princes: int, elim: int, actor_idx: int, turns: int, start_actor: int,
-	pile_drawn: int, first_hand: int) -> void:
+	pile_drawn: int, first_hand: int, eliminated_this: Array) -> void:
 	var total: int = 0
 	for j in count:
 		total += plays[j]
@@ -211,10 +216,16 @@ func check_round(main, count: int, fam: int, plays: Array[int], fam_draws: Array
 			fail("seat " + str(j) + " drew " + str(fam_draws[j]) +
 				" family cards, more than its family size " + str(fam))
 		var p = main._players[j]
-		if p.family_size() != fam - fam_draws[j]:
+		# Step 16: an out seat's family leaves play WITH him - it is materialized for the reveal, discarded
+		# through `Main.discard()` (the one `_left` decrement) and its DATA is cleared on the spot, so a seat
+		# eliminated this round has NO family left and drew no family card after the elimination. A live seat
+		# is unchanged: family size minus the family cards he drew.
+		var want_fam: int = 0 if eliminated_this.has(j) else fam - fam_draws[j]
+		if p.family_size() != want_fam:
 			fail("seat " + str(j) + " has " + str(p.family_size()) + " family cards left, expected " +
-				str(fam - fam_draws[j]) + " (family size " + str(fam) + " - " + str(fam_draws[j]) +
-				" draws)")
+				str(want_fam) + " (" + ("eliminated this round: his family left play with him (step 16)" if
+					eliminated_this.has(j) else
+					"family size " + str(fam) + " - " + str(fam_draws[j]) + " draws)"))
 	if pile_drawn > princes:
 		fail(str(pile_drawn) + " draw(s) from a pile in a round with " + str(princes) + " Prince play(s): " +
 			"today the ONLY draw from the main pile / the widow is the Prince's redraw of its target " +

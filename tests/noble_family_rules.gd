@@ -115,6 +115,78 @@ const NOBLE_2P_PRINCE: Array[Deck.CardType] = [
 const NOBLE_2P_PRINCE_LEFT: Array[int] = [13, 0, 0, 0, 3, 0, 0, 0]  # 13 Guard, 3 Prince
 const NOBLE_2P_PRINCE_END_LEFT: Array[int] = [7, 0, 0, 0, 0, 0, 0, 0]  # 16 - 6 plays - 3 hits
 
+# TEST E, 4p fixture 1 (todo step 16) - a Guard KILLS a seat that never played, so his WHOLE family
+# is revealed with his hand card. Deal order: 4 first-hand cards, then the 3 family columns.
+#   seat 0 Guard + [Guard, Guard, Guard]   seat 1 PRIEST + [Baron, King, Countess]
+#   seat 2 Guard + [Guard, Guard, Guard]   seat 3 Guard + [Guard, Guard, Guard]
+# Play 1 is seat 0's level-1 move (draw family 0, play the ACTIVE Guard, lowest index live
+# opponent = seat 1, declared type Priest) -> seat 1 is eliminated, `reveal_hand == true`.
+# The victim's family is Baron / King / Countess - three DISTINCT types, so the `_left` drop of the
+# reveal is unambiguous. Then every seat holds only Guards, the Guard probes all declare Priest and
+# all miss, so this round has exactly ONE elimination and zero Prince plays.
+#   9 plays (3 per live seat), 10 turns, seat 1 out, round ends at seat 0's turn start (family 0).
+#   out of play: 9 Guard (played) + Priest + Baron + King + Countess = 13 = 9 plays + 4 revealed
+#   -> after play 1 `_left` == [11,...] (16 - 1 play - 4 revealed), at the round end [3,0,...] = 16 - 13
+const NOBLE_4P_GUARD_KILL: Array[Deck.CardType] = [
+	Deck.CardType.Guard, Deck.CardType.Priest, Deck.CardType.Guard, Deck.CardType.Guard,
+	Deck.CardType.Guard, Deck.CardType.Baron, Deck.CardType.Guard, Deck.CardType.Guard,
+	Deck.CardType.Guard, Deck.CardType.King, Deck.CardType.Guard, Deck.CardType.Guard,
+	Deck.CardType.Guard, Deck.CardType.Countess, Deck.CardType.Guard, Deck.CardType.Guard,
+]
+const NOBLE_4P_GUARD_KILL_LEFT: Array[int] = [12, 1, 1, 0, 0, 1, 1, 0]
+const NOBLE_4P_GUARD_KILL_SEAT1_FAMILY: Array[Deck.CardType] = [
+	Deck.CardType.Baron, Deck.CardType.King, Deck.CardType.Countess]
+const NOBLE_4P_GUARD_KILL_DROP: Array[int] = [1, 1, 1, 0, 0, 1, 1, 0]  # the play-1 drop: played Guard + 4 revealed
+const NOBLE_4P_GUARD_KILL_AFTER1: Array[int] = [11, 0, 0, 0, 0, 0, 0, 0]
+const NOBLE_4P_GUARD_KILL_END_LEFT: Array[int] = [3, 0, 0, 0, 0, 0, 0, 0]
+
+# TEST E, 4p fixture 2 - a seat Princesses HIMSELF, so the reveal is the family MINUS the card he
+# drew for that play, plus the 1 card left in his hand:
+#   seat 0 Guard + [Guard x3]   seat 1 Guard + [Guard x3]
+#   seat 2 PRINCESS + [Baron, King, Countess]   seat 3 Guard + [Guard x3]
+# Seat 2's level-1 move on turn 3 is (draw family 0 = Baron, play the ACTIVE Princess, self) -> he
+# discards his Princess, keeps the Baron, and is eliminated with `reveal_hand == true`: revealed =
+# hand Baron + family [King, Countess], i.e. 2 family cards, NOT 3 - the drawn one is in his hand.
+# Seat 2 is a `right_score` seat (x 68) -> the reveal stack mirrors and must stay on the 84 px board.
+#   plays: s0 3 (T1,T5,T8) + s1 3 (T2,T6,T9) + s2 1 (T3) + s3 3 (T4,T7,T10) = 10, 11 turns, seat 2 out,
+#   round ends at seat 0's turn start. Out of play: 9 Guard + 1 Princess (played) + Baron + King +
+#   Countess (revealed) = 13 -> after play 3 `_left` == [10,...] (16 - 3 plays - 3 revealed), end [3,0,...]
+const NOBLE_4P_PRINCESS_KILL: Array[Deck.CardType] = [
+	Deck.CardType.Guard, Deck.CardType.Guard, Deck.CardType.Princess, Deck.CardType.Guard,
+	Deck.CardType.Guard, Deck.CardType.Guard, Deck.CardType.Baron, Deck.CardType.Guard,
+	Deck.CardType.Guard, Deck.CardType.Guard, Deck.CardType.King, Deck.CardType.Guard,
+	Deck.CardType.Guard, Deck.CardType.Guard, Deck.CardType.Countess, Deck.CardType.Guard,
+]
+const NOBLE_4P_PRINCESS_KILL_LEFT: Array[int] = [12, 0, 1, 0, 0, 1, 1, 1]
+const NOBLE_4P_PRINCESS_KILL_SEAT2_FAMILY: Array[Deck.CardType] = [
+	Deck.CardType.Baron, Deck.CardType.King, Deck.CardType.Countess]
+const NOBLE_4P_PRINCESS_KILL_DROP: Array[int] = [0, 0, 1, 0, 0, 1, 1, 1]  # played Princess + hand Baron + family 2
+const NOBLE_4P_PRINCESS_KILL_AFTER3: Array[int] = [10, 0, 0, 0, 0, 0, 0, 0]
+const NOBLE_4P_PRINCESS_KILL_END_LEFT: Array[int] = [3, 0, 0, 0, 0, 0, 0, 0]
+
+# TEST E, 4p fixture 3 - seat 0 is HUMAN and WINS a Baron, so `reveal_hand == false` (classic: the
+# winner SAW the loser's card, the loser is not published to the table). The family still leaves
+# play (it always does - it is out of the round with its owner), face-DOWN:
+#   seat 0 BARON + [King, Guard, Guard]   seat 1 PRIEST + [King, Countess, Princess]
+#   seat 2 Guard + [Guard x3]             seat 3 Guard + [Guard x3]
+# The variant compares the ACTIVE cards, i.e. the card each seat keeps in hand (`the leftover is the
+# active card`), so the human wins with the King he drew from family[0]: King 6 > Priest 2.
+#   plays: s0 3 (T1 Baron, T4 King, T7 Guard) + s2 3 + s3 3 = 9, 10 turns, seat 1 out.
+#   out of play: 7 Guard + Baron + King (played) + Priest + King + Countess + Princess (revealed,
+#   face-down) = 13 -> after play 1 `_left` == [10,1,0,0,0,1,0,0], at the round end [3,0,0,0,0,0,0,0]
+const NOBLE_4P_BARON_HUMAN: Array[Deck.CardType] = [
+	Deck.CardType.Baron, Deck.CardType.Priest, Deck.CardType.Guard, Deck.CardType.Guard,
+	Deck.CardType.King, Deck.CardType.King, Deck.CardType.Guard, Deck.CardType.Guard,
+	Deck.CardType.Guard, Deck.CardType.Countess, Deck.CardType.Guard, Deck.CardType.Guard,
+	Deck.CardType.Guard, Deck.CardType.Princess, Deck.CardType.Guard, Deck.CardType.Guard,
+]
+const NOBLE_4P_BARON_HUMAN_LEFT: Array[int] = [10, 1, 1, 0, 0, 2, 1, 1]
+const NOBLE_4P_BARON_HUMAN_SEAT1_FAMILY: Array[Deck.CardType] = [
+	Deck.CardType.King, Deck.CardType.Countess, Deck.CardType.Princess]
+const NOBLE_4P_BARON_HUMAN_DROP: Array[int] = [0, 1, 1, 0, 0, 1, 1, 1]  # played Baron + 4 revealed
+const NOBLE_4P_BARON_HUMAN_AFTER1: Array[int] = [10, 0, 0, 0, 0, 1, 0, 0]
+const NOBLE_4P_BARON_HUMAN_END_LEFT: Array[int] = [3, 0, 0, 0, 0, 0, 0, 0]
+
 var _failed: int = 0
 var _deck: Deck
 var _c_plays: Array[int] = [0, 0, 0, 0]  # TEST C: plays per seat, counted on `move_chosen`
@@ -138,6 +210,7 @@ func _ready() -> void:
 	await _test_joint_moves()
 	await _test_family_out_round_end()
 	await _test_prince_paths()
+	await _test_elimination_reveal()
 	await await_frames(1)
 
 	print("\n==========================")
@@ -1207,3 +1280,446 @@ func check(ok: bool, desc: String) -> void:
 func await_frames(n: int) -> void:
 	for i in n:
 		await get_tree().process_frame
+
+
+# ----------------------------------------------------------------------------------------
+# TEST E helpers (todo step 16) - the elimination reveal
+# ----------------------------------------------------------------------------------------
+const BOARD := Rect2(0, 0, 84, 75)  # main.tscn seats sit at (5,31) (5,0) (68,0) (68,31), 21 x 44 seats
+
+
+func _rn(cards: Array) -> Array:
+	# a reveal/discard record's cards, as NAMES, in the order they were materialized
+	var out: Array = []
+	for c in cards:
+		out.append(Deck.card_names[int(c["type"])].strip_edges())
+	return out
+
+
+func _faceups(cards: Array) -> Array:
+	var out: Array = []
+	for c in cards:
+		out.append(bool(c["faceup"]))
+	return out
+
+
+func _xs(cards: Array) -> Array:
+	var out: Array = []
+	for c in cards:
+		out.append(int(c["x"]))
+	return out
+
+
+func _ftypes(family: Array[Deck.CardType]) -> Array:
+	var out: Array = []
+	for t in family:
+		out.append(int(t))
+	return out
+
+
+func _check_reveal(main, tag: String, seat: int, shown: bool, fam_size: int, names: Array,
+		xs: Array, origin: Vector2) -> void:
+	# What `Main.reveal_out_family()` materialized, read from INSIDE the call (see counting_main):
+	# production discards and frees those exact nodes right after it returns, and at `_speed = 0` the
+	# whole reveal -> discard -> free chain can settle within a single frame, so nothing outside sees it.
+	check(main.reveal_calls == 1 and main.reveal_log.size() == 1, tag + ": the reveal ran exactly once for the"
+		+ " round's " + str(main.eliminations) + " elimination(s) (" + str(main.reveal_calls)
+		+ " calls) - an empty family is a call that materializes 0 cards, not a skipped call")
+	var rec: Dictionary = main.reveal_log[0] if main.reveal_log.size() > 0 else {}
+	check(int(rec.get("seat", -99)) == seat, tag + ": the reveal is the out seat's (seat "
+		+ str(rec.get("seat", -99)) + " expected " + str(seat) + ")")
+	check(bool(rec.get("shown", !shown)) == shown, tag + ": the reveal's `show` == reveal_hand ("
+		+ str(rec.get("shown", "?")) + " expected " + str(shown) + ") - reveal_hand gates the FLIP only, a family"
+		+ " always leaves play with its owner, so only its visibility is gated")
+	var cards: Array = rec.get("cards", [])
+	check(int(rec.get("family_size", -1)) == fam_size, tag + ": the reveal materializes the family DATA ("
+		+ str(rec.get("family_size", -1)) + " expected " + str(fam_size) + ") - the cards the seat never drew are"
+		+ " still in the data, and the card he drew at the turn start is revealed from his HAND, not from the family")
+	check(_rn(cards) == names, tag + ": the revealed family cards are the family data in AS-DEALT order ("
+		+ str(_rn(cards)) + " expected " + str(names) + ")")
+	check(int(rec.get("faceups", -1)) == (names.size() if shown else 0), tag + ": " + str(rec.get("faceups", -1))
+		+ " of " + str(names.size()) + " revealed cards ended face-up, expected "
+		+ str(names.size() if shown else 0) + " - face-down when reveal_hand is false")
+	check(str(rec.get("container", "")) == "FamilyReveal", tag + ": the revealed cards sit in ONE container named"
+		+ " FamilyReveal (" + str(rec.get("container", "")) + ") - the 44 px seat has room for a 3-card cascade below"
+		+ " the badge row, the hand row has not (it holds 2 cards at decision time)")
+	check(bool(rec.get("parent_is_seat")), tag + ": the container is a CHILD OF THE SEAT, so the stack follows the"
+		+ " seat's position, its scale and its fade (a seat fades at 0.6, a card only at 0.3)")
+	check(rec.get("pos") == origin, tag + ": the stack starts at the seat-local " + str(origin) + " (recorded "
+		+ str(rec.get("pos")) + ") - the seat's own top-left corner is on the badge (y -23) and the score (x 11), so"
+		+ " the stack starts below the badge, where the card row sits")
+	var seat_y: int = int(main._players[seat].global_position.y)
+	var cont_y: int = int(rec.get("pos", Vector2(-1, -1)).y)
+	var cascade_ok := true
+	for i in cards.size():
+		cascade_ok = cascade_ok and bool(cards[i]["in_container"])
+		cascade_ok = cascade_ok and int(cards[i]["global_y"]) == seat_y + cont_y
+	check(cascade_ok, tag + ": every revealed card is INSIDE the container, at the container's own y - a stack is not"
+		+ " a row: a container that ignores its children's position renders nothing")
+	check(_xs(cards) == xs, tag + ": the cascade steps by " + str(Main.FAMILY_CASCADE_STEP) + " px and MIRRORS on the"
+		+ " right-handed seats (" + str(_xs(cards)) + " expected " + str(xs) + ") - x 26 + 9*i ends at 61 + the 11 px"
+		+ " card on a seat at x 68, off the 84 px board, and the mirrored x -11 - 18 - 11 reaches -4 on a seat at x 5")
+	var on_board := true
+	for c in cards:
+		on_board = on_board and int(c["global_x"]) >= int(BOARD.position.x) \
+			and int(c["global_x"]) + 11 <= int(BOARD.position.x) + int(BOARD.size.x) \
+			and int(c["global_y"]) >= int(BOARD.position.y) \
+			and int(c["global_y"]) + 17 <= int(BOARD.position.y) + int(BOARD.size.y)
+	check(on_board, tag + ": every revealed card is fully INSIDE the " + str(BOARD.size) + " play area - 9 px is the"
+		+ " biggest cascade step that fits 3 cards on a 44 px tall seat")
+	check(int(rec.get("input_connections", -1)) == 0, tag + ": the revealed cards connect NO input_event ("
+		+ str(rec.get("input_connections", -1)) + ") - the Card scene's Area2D fills the whole 11 x 17 rect, so"
+		+ " connected cards would steal the tap from the hand behind them (the human's own turn starts 1 frame later"
+		+ " and the tap chain is 600 ms per tap)")
+
+
+func _check_family_discard(main, tag: String, names: Array, faceup: bool, hand_names: Array) -> void:
+	# The revealed cards must leave play through the ONE path that decrements `_left`.
+	var idx: int = -1
+	for i in main.discard_log.size():
+		if str(main.discard_log[i]["container"]) == "FamilyReveal":
+			idx = i
+			break
+	check(idx >= 0, tag + ": the revealed family left play through `Main.discard()` (" + str(main.discard_log.size())
+		+ " discard() calls recorded, none on the reveal container) - only `discard()` decrements `_left`, so a family"
+		+ " that leaves any other way is invisible to the supply")
+	if idx < 0:
+		return
+	var rec: Dictionary = main.discard_log[idx]
+	check(_rn(rec["cards"]) == names, tag + ": the discarded family cards are exactly the revealed ones ("
+		+ str(_rn(rec["cards"])) + " expected " + str(names) + ")")
+	var want: Array = []
+	for i in names.size():
+		want.append(faceup)
+	check(_faceups(rec["cards"]) == want, tag + ": the family is discarded " + ("face-UP" if faceup else "face-DOWN")
+		+ " (" + str(_faceups(rec["cards"])) + " expected " + str(want) + ") - the same gate as the hand:"
+		+ " `hide_afterwards` already flips a compared card back face-down, `reveal_hand` is the variant gate")
+	check(idx + 1 < main.discard_log.size(), tag + ": a hand discard is recorded after the family discard")
+	# find the out seat's hand discard: `discard()` is a coroutine and its calls OVERLAP (a played card
+	# leaves the table by animation, so a call finishes when its animation finishes, not when it starts),
+	# so the records are in COMPLETION order, not in call order
+	var hand_idx: int = -1
+	for i in range(idx + 1, main.discard_log.size()):
+		if str(main.discard_log[i]["container"]) == "Hand":
+			hand_idx = i
+			break
+	if hand_idx >= 0:
+		var nxt: Dictionary = main.discard_log[hand_idx]
+		# the hand has its own card count, so the face-up expectation is per hand card
+		var hand_want: Array = []
+		for i in hand_names.size():
+			hand_want.append(faceup)
+		check(str(nxt["container"]) == "Hand" and _rn(nxt["cards"]) == hand_names
+			and _faceups(nxt["cards"]) == hand_want, tag + ": the out seat's hand card(s) leave the same way ("
+			+ str(nxt["container"]) + " " + str(_rn(nxt["cards"])) + " " + str(_faceups(nxt["cards"]))
+			+ " expected Hand " + str(hand_names) + " " + str(hand_want) + ")")
+
+
+func _check_left_drop(recs: Array, play_no: int, tag: String, expected_after: Array, drop: Array) -> void:
+	var b: Array = recs[play_no - 1]["before"]["left"]
+	var a: Array = recs[play_no - 1]["after"]["left"]
+	var got_drop: Array = []
+	for i in expected_after.size():
+		got_drop.append(int(b[i]) - int(a[i]))
+	check(got_drop == drop, tag + ": `_left` dropped by EXACTLY the played card + the revealed hand + family cards ("
+		+ str(got_drop) + " expected " + str(drop) + ") - a Guard kill moves 5 cards out of the supply and 4 of them"
+		+ " are revealed, so an uncounted family shows up right here")
+	var sum: int = 0
+	for i in a.size():
+		sum += int(a[i])
+	check(int(recs[play_no - 1]["after"]["left_sum"]) == sum, tag + ": the recorded `_left` sum is the elementwise sum"
+		+ " (" + str(recs[play_no - 1]["after"]["left_sum"]) + " vs " + str(sum) + ") - the sum is all the classic"
+		+ " 16 - plays - princes rule ever reads, so the elementwise view is the variant's only probe")
+	check(a == expected_after, tag + ": `_left` after play " + str(play_no) + " == " + str(expected_after) + " ("
+		+ str(a) + ") - the family is invisible to the classic rule, so the variant's number is exactly this many"
+		+ " plays + reveals out of 16")
+
+
+func _check_discard_totals(main, tag: String, scripted_left: Array, expected: Array) -> void:
+	# The ONLY way to prove a card is counted EXACTLY once: `discarded` counts every card that left play through
+	# `discard()`, and `scripted - _left` is what the game BELIEVES left play.
+	var got: Array = []
+	for i in main.discarded.size():
+		got.append(main.discarded[i])
+	var want: Array = []
+	for i in scripted_left.size():
+		want.append(int(scripted_left[i]) - int(expected[i]))
+	check(got == want, tag + ": every card left play EXACTLY ONCE - discard() moved " + str(got)
+		+ " cards per type, the supply says " + str(want) + " (scripted " + str(scripted_left) + " minus `_left` "
+		+ str(expected) + ") - `_left` alone cannot show a double decrement: a family counted twice and a family"
+		+ " counted zero times can add up to the same total")
+	check(main.round_end_left.size() > 0, tag + ": round_over() snapshotted `_left` - the re-deal overwrites"
+		+ " `_deck._left` 1-2 frames after the round end at `_speed = 0`, so a live read is not the round-end state")
+
+
+func _check_round_end(recs: Array, main, tag: String, turn_counts: Array, actor: int, elims: Array,
+		hand_sizes: Array, family_sizes: Array, end_left: Array) -> void:
+	var end: Dictionary = recs[recs.size() - 1]["after"]
+	var plays: int = recs.size()
+	var end_actor: int = -1  # the seat whose turn start ended the round, -1 when the round never ended
+	if main.round_end_actor.size() > 0:
+		end_actor = main.round_end_actor[0]
+	var got_hands: Array = []
+	var got_fams: Array = []
+	for p in main._players:
+		got_hands.append(p.hand.get_child_count())
+		got_fams.append(p.family_size())
+	var turns: int = 0
+	if main.round_end_turns.size() > 0:
+		for n in main.round_end_turns[0]:
+			turns += int(n)
+	check(main.round_end_turns.size() > 0 and main.round_end_turns[0] == turn_counts, tag
+		+ ": turns per seat are " + str(turn_counts) + " (" + str(main.round_end_turns[0])
+		+ ") - every live seat takes exactly one turn per family card he draws, an eliminated seat stops taking"
+		+ " turns, and the LAST turn of the round is the empty-family turn-start that ends it")
+	check(turns == plays + 1, tag + ": " + str(turns) + " turns == " + str(plays)
+		+ " plays + 1 (the ending turn-start draws nothing, so it is not a play)")
+	check(int(end["left_sum"]) >= 0, tag + ": the round-end `_left` is a real number")
+	check(end_actor == actor, tag + ": the round ends at seat " + str(actor) + "'s turn start (" + str(end_actor)
+		+ ") - the family-empty check runs at the turn start, not after the last play")
+	check(main.eliminations == elims.size() and main.eliminated_seats == elims, tag
+		+ ": eliminations are " + str(elims) + " (" + str(main.eliminated_seats) + ") - a revealed card resolves NO"
+		+ " effect, so the reveal adds none: a revealed Guard never matches a declared Priest")
+	check(main.pile_draws == 0, tag + ": no Prince was played (" + str(main.pile_draws)
+		+ " pile draws) - the reveal never triggers a draw")
+	check(got_hands == hand_sizes, tag + ": the out seat's hand is empty, every live seat holds 1 card ("
+		+ str(got_hands) + " expected " + str(hand_sizes) + ") - an out seat leaves with nothing in his hand AND no"
+		+ " family")
+	check(got_fams == family_sizes, tag + ": every family is empty at the round end (" + str(got_fams)
+		+ " expected " + str(family_sizes) + ") - the live seats drew all their cards and the out seat's family DATA"
+		+ " was cleared the moment he left, so a round-end snapshot never shows a dead seat holding family")
+	check(main.round_end_left.size() > 0, tag + ": round_over() snapshotted `_left` for the round end")
+	if main.round_end_left.size() > 0:
+		var l: Array = main.round_end_left[0]
+		var ls: int = 0
+		for i in l.size():
+			ls += int(l[i])
+		var want: int = 0
+		for i in end_left.size():
+			want += int(end_left[i])
+		check(l == end_left, tag + ": `_left` at the round end == " + str(end_left) + " (" + str(l) + ") - "
+			+ str(16 - want) + " cards left play: " + str(plays) + " plays + the revealed hand + family")
+		check(ls == want, tag + ": the round-end `_left` sums to " + str(want) + " (" + str(ls) + ") - " + str(plays)
+			+ " plays + reveals out of 16, the classic rule's shape with the reveals added")
+
+
+func _check_no_family_leak(main, tag: String) -> void:
+	var leaked: String = ""
+	for p in main._players:
+		for ch in p.get_children():
+			if str(ch.name) == "FamilyReveal":
+				leaked += " seat " + str(p.idx)
+	check(leaked.is_empty(), tag + ": no reveal container survives the round (" + leaked + ") - the container and its"
+		+ " cards are queue_free()d together, a leak would render a ghost family in the next round")
+
+
+func _check_e_basics(recs: Array, main, tag: String) -> void:
+	# The invariants every variant round must keep on EVERY recorded play. The classic
+	# `sum(_left) == 16 - plays - prince_hits` is NOT asserted here: these rounds eliminate seats that
+	# are not Prince victims, and a non-Prince elimination discards a hand AND a family, so the classic
+	# formula has no term for what leaves. The elementwise `_left` checks below are the variant's probe.
+	check(recs.size() > 0, tag + ": the round recorded " + str(recs.size())
+		+ " effect records (resolve_effect runs exactly once per play)")
+	var one_card := true
+	var neg_ok := true
+	var fam_ok := true
+	for r in recs:
+		var after: Dictionary = r["after"]
+		for i in 4:
+			if bool(after["active"][i]):
+				one_card = one_card and int(after["hands"][i]) == 1
+			else:
+				one_card = one_card and int(after["hands"][i]) == 0
+			# the out seat's family is cleared ON THE SPOT (step 16), so an inactive seat never keeps family
+			fam_ok = fam_ok and (int(after["fams"][i]) == 0 if !bool(after["active"][i]) else int(after["fams"][i]) >= 0)
+		for side in ["before", "after"]:
+			for n in r[side]["left"]:
+				neg_ok = neg_ok and int(n) >= 0
+			neg_ok = neg_ok and int(r[side]["main_pile"]) >= 0
+	check(one_card, tag + ": after every play every LIVE seat holds EXACTLY 1 card and an out seat holds 0 - the"
+		+ " variant's `the leftover is the active card` invariant, checked at all " + str(recs.size())
+		+ " effect boundaries")
+	check(fam_ok, tag + ": no inactive seat ever holds family cards - the family leaves play WITH its owner, in the"
+		+ " same `set_inactive()` that discards his hand")
+	check(neg_ok, tag + ": no `_left` count and no derived main pile ever went negative - a double decrement drives a"
+		+ " count below the cards that exist, which is how a family counted twice shows up")
+
+
+# The human seat 0 plays by tapping: `_on_card_played` is what Player emits on a card tap, and
+# `_on_target_player_selected` / `_on_target_type_selected` are what the target / type selectors emit.
+# The seat always plays his ACTIVE card (hand[0]) - the variant's real decision is which card to KEEP.
+func _human_play(main, target: int, type: Deck.CardType) -> void:
+	var p = main._players[0]
+	await await_until(func() -> bool:
+		return p._state == Player.State.SELECT_CARD and p.hand.get_child_count() == 2)
+	await main._on_card_played(p.hand.get_child(0))
+	await await_until(func() -> bool:
+		return p._state == Player.State.INPUT_OTHER_P)
+	await main._on_target_player_selected(target)
+	if p._state == Player.State.INPUT_T:
+		await main._on_target_type_selected(type)
+	await await_until(func() -> bool:
+		return main._cur_player != 0)
+
+
+func _settle_deal_human(main) -> void:
+	# `_settle_deal()` polls for "1 hand card + a full family" in every seat, which the HUMAN seat can
+	# never satisfy: `new_turn()` gives him the placeholder family draw (step 20) BEFORE he taps, so he
+	# is settled at 2 cards, the classic 2-card play selection.
+	await main.init_players(SEED)
+	var fam: int = Deck.NOBLE_FAMILY_SIZE[int(main._player_count)]
+	await await_until(func() -> bool:
+		var ready := true
+		for p in main._players:
+			if p.is_active() and p.idx > 0:
+				ready = ready and p.hand.get_child_count() == 1 and p.family_size() == fam
+		return ready and main._players[0].hand.get_child_count() == 2 \
+			and main._players[0].family_size() == fam - 1)
+
+
+func _scripted_main_human(count: int, scripted: Array[Deck.CardType], scripted_left: Array[int]):
+	var main = _scripted_main(count, scripted, scripted_left)
+	# `init_players()` asserts that every seat but 0 is NOT human, so the variant's human seat is set
+	# after the seats are built. The todo's UI phase puts the human at seat 0, so this is also the shape
+	# the real menu runs - a human seat is the ONLY way to reach `reveal_hand == false` on a Baron win.
+	main._players[0].ai_level = Player.AI_Level.Human
+	return main
+
+
+# ----------------------------------------------------------------------------------------
+# TEST E (todo step 16): the elimination reveal
+#
+# The rule: an out seat reveals his hand AND his private family, the revealed cards move to the discard
+# pile, they resolve NO effects, and every one of them is counted in `_left` exactly once. Step 16 is a
+# PRODUCTION change, not a test-only one: the family data is cleared the moment its owner leaves, so the
+# round-end snapshot and the next round's re-deal both see a consistent world.
+# ----------------------------------------------------------------------------------------
+func _test_elimination_reveal() -> void:
+	print("--- TEST E1 (4p Guard kill: the victim never played, so his WHOLE family is revealed) ---")
+	await _test_elim_guard_reveal()
+	print("--- TEST E2 (4p Princess self-kill: the reveal is the family MINUS the card he drew) ---")
+	await _test_elim_princess_reveal()
+	print("--- TEST E3 (4p, human WINS a Baron: reveal_hand false, the family leaves play face-DOWN) ---")
+	await _test_elim_baron_hidden()
+
+
+func _test_elim_guard_reveal() -> void:
+	var main = _scripted_main(4, NOBLE_4P_GUARD_KILL, NOBLE_4P_GUARD_KILL_LEFT)
+	await _settle_deal(main)
+	var seat1_family: Array = _ftypes(main._players[1].family)
+	var recs: Array = await _run_to_first_round_end(main)
+	var tag := "E1"
+	_check_e_basics(recs, main, tag)
+	_check_no_family_leak(main, tag)
+
+	check(seat1_family == _ftypes(NOBLE_4P_GUARD_KILL_SEAT1_FAMILY), tag + ": seat 1's family is dealt as"
+		+ " [Baron, King, Countess] (" + str(seat1_family) + ") - 3 DISTINCT types, so the reveal's `_left` drop is"
+		+ " unambiguous. A 4p family is 3 cards and Guards are 12 of 16, so 3 Guards per seat is a legal supply")
+	check(int(recs[0]["played"]) == int(Deck.CardType.Guard) and int(recs[0]["target"]) == 1
+		and int(recs[0]["target_type"]) == int(Deck.CardType.Priest), tag + ": play 1 is seat 0's level-1 move ("
+		+ Deck.card_names[int(recs[0]["played"])].strip_edges() + " on seat " + str(recs[0]["target"]) + " declared "
+		+ Deck.card_names[int(recs[0]["target_type"])].strip_edges() + ") - level 1 plays valid_moves[0], the lowest"
+		+ " index live opponent, and the declared-type loop starts at Priest. Seat 1's FIRST-HAND card is the Priest")
+	check(int(recs[0]["after"]["left_sum"]) == 11, tag + ": play 1 eliminates seat 1 (" + str(main.eliminations)
+		+ " elimination, seat " + str(main.eliminated_seats[0]) + ") - the victim never played, so NOTHING of his"
+		+ " family was ever drawn, and 16 - 1 play - 4 revealed cards = 11")
+
+	_check_reveal(main, tag, 1, true, 3, ["Baron", "King", "Countess"], [0, 9, 18], Main.FAMILY_STACK_ORIGIN)
+	_check_family_discard(main, tag, ["Baron", "King", "Countess"], true, ["Priest"])
+	_check_left_drop(recs, 1, tag, NOBLE_4P_GUARD_KILL_AFTER1, NOBLE_4P_GUARD_KILL_DROP)
+	_check_round_end(recs, main, tag, [4, 0, 3, 3], 0, [1], [1, 0, 1, 1], [0, 0, 0, 0],
+		NOBLE_4P_GUARD_KILL_END_LEFT)
+	_check_discard_totals(main, tag, NOBLE_4P_GUARD_KILL_LEFT, NOBLE_4P_GUARD_KILL_END_LEFT)
+	# Free the fixture: a scripted `Main` keeps playing rounds on its own, and a running fixture prints
+	# its turns into this log AND shares the `Animator` singleton with the next fixture.
+	main.queue_free()
+	await await_frames(2)
+
+
+func _test_elim_princess_reveal() -> void:
+	var main = _scripted_main(4, NOBLE_4P_PRINCESS_KILL, NOBLE_4P_PRINCESS_KILL_LEFT)
+	await _settle_deal(main)
+	var seat2_family: Array = _ftypes(main._players[2].family)
+	var recs: Array = await _run_to_first_round_end(main)
+	var tag := "E2"
+	_check_e_basics(recs, main, tag)
+	_check_no_family_leak(main, tag)
+
+	check(seat2_family == _ftypes(NOBLE_4P_PRINCESS_KILL_SEAT2_FAMILY), tag + ": seat 2's family is dealt as"
+		+ " [Baron, King, Countess] (" + str(seat2_family) + ")")
+	check(int(recs[2]["played"]) == int(Deck.CardType.Princess) and int(recs[2]["target"]) == -1, tag
+		+ ": play 3 (turn 3, seat 2's FIRST play) is the ACTIVE Princess on HIMSELF (target " + str(recs[2]["target"])
+		+ " = -1, the self-play index) - seat 2 drew family[0] = Baron, so the Princess is his active card, which is"
+		+ " what a level-1 seat plays with the 1 forced -1 (self) left")
+	check(main.eliminations == 1 and main.eliminated_seats[0] == 2, tag + ": play 3 eliminates seat 2 ("
+		+ str(main.eliminated_seats) + ") - a Princess play discards its own player")
+
+	# THE step-16 number: the family leaves play WITH its owner, minus the card he drew for that play
+	_check_reveal(main, tag, 2, true, 2, ["King", "Countess"], [0, -9], Main.FAMILY_STACK_MIRROR)
+	_check_family_discard(main, tag, ["King", "Countess"], true, ["Baron"])
+	_check_left_drop(recs, 3, tag, NOBLE_4P_PRINCESS_KILL_AFTER3, NOBLE_4P_PRINCESS_KILL_DROP)
+	_check_round_end(recs, main, tag, [4, 3, 1, 3], 0, [2], [1, 1, 0, 1], [0, 0, 0, 0],
+		NOBLE_4P_PRINCESS_KILL_END_LEFT)
+	_check_discard_totals(main, tag, NOBLE_4P_PRINCESS_KILL_LEFT, NOBLE_4P_PRINCESS_KILL_END_LEFT)
+
+	var fam_drawn: Array = []
+	for i in main.family_draws.size():
+		fam_drawn.append(main.family_draws[i])
+	check(fam_drawn[2] == 1, tag + ": seat 2 drew EXACTLY 1 family card (" + str(fam_drawn[2])
+		+ ") - his family was 3, the reveal is 2 and the drawn card sits in his hand: 3 = 2 + 1, so no card is"
+		+ " counted twice and no card is lost. The classic 16 - plays - princes rule has NO term for a family")
+	check(fam_drawn[1] == 3, tag + ": a seat that stayed live drew all 3 family cards (" + str(fam_drawn[1])
+		+ ") - an eliminated seat stops drawing together with his family, so his undrawn cards leave play with him")
+	main.queue_free()
+	await await_frames(2)
+
+
+func _test_elim_baron_hidden() -> void:
+	var main = _scripted_main_human(4, NOBLE_4P_BARON_HUMAN, NOBLE_4P_BARON_HUMAN_LEFT)
+	await _settle_deal_human(main)
+	var tag := "E3"
+	var seat1_family: Array = _ftypes(main._players[1].family)
+	check(main._players[0].is_human(), tag + ": seat 0 is human - the variant's menu seat - so a WON Baron runs the"
+		+ " classic `reveal_hand == false` branch (`set_inactive(tp, !p.is_human())`)")
+	check(seat1_family == _ftypes(NOBLE_4P_BARON_HUMAN_SEAT1_FAMILY), tag + ": seat 1's family is dealt as"
+		+ " [King, Countess, Princess] (" + str(seat1_family) + ") - 4 distinct types in the reveal, so the `_left`"
+		+ " drop pins the reveal even when nothing is face-up")
+
+	# the human plays his 3 cards by tapping: Baron on seat 1, then the King, then a Guard (declared Priest)
+	await _human_play(main, 1, Deck.CardType.Priest)
+	var play1: Dictionary = main.effect_log[0]
+	var active_after_play1: int = int(main._players[0].hand.get_child(0).type)
+	await _human_play(main, 2, Deck.CardType.Priest)
+	await _human_play(main, 2, Deck.CardType.Priest)
+	# the human's last play is mid-round: the seats behind him keep playing, and the round ends at the
+	# turn start that finds an empty family - settle it before asserting the round-end state
+	var settle: int = 0
+	while main.round_end_actor.size() == 0 and settle < 400:
+		await get_tree().process_frame
+		settle += 1
+	var recs: Array = main.effect_log.duplicate(true)
+	_check_e_basics(recs, main, tag)
+	_check_no_family_leak(main, tag)
+
+	check(int(play1["played"]) == int(Deck.CardType.Baron) and int(play1["target"]) == 1, tag
+		+ ": the human's play 1 is the Baron on seat 1 (" + Deck.card_names[int(play1["played"])].strip_edges()
+		+ " -> seat " + str(play1["target"]) + ")")
+	check(int(play1["target_type"]) == int(Deck.CardType.Unknown), tag + ": a Baron declares NO type ("
+		+ Deck.card_names[int(play1["target_type"])].strip_edges() + ") - `_target_type` belongs to the Guard, so a"
+		+ " Baron play must leave it untouched")
+	check(active_after_play1 == int(Deck.CardType.King), tag + ": the human's ACTIVE card after play 1 is the King from"
+		+ " family[0] (" + Deck.card_names[active_after_play1].strip_edges() + ") - the variant draws a family card"
+		+ " FIRST, so the Baron is the played card and the King is the card the Baron compares (`the leftover is the"
+		+ " active card`)")
+	check(int(play1["after"]["left_sum"]) == 11, tag + ": King 6 > Priest 2, so seat 1 is eliminated ("
+		+ str(main.eliminations) + " elimination) - 16 - 1 played Baron - 4 revealed (Priest + 3 family) = 11")
+
+	# reveal_hand == false: the family is materialized FACE-DOWN and discarded FACE-DOWN
+	_check_reveal(main, tag, 1, false, 3, ["King", "Countess", "Princess"], [0, 9, 18], Main.FAMILY_STACK_ORIGIN)
+	_check_family_discard(main, tag, ["King", "Countess", "Princess"], false, ["Priest"])
+	_check_left_drop(recs, 1, tag, NOBLE_4P_BARON_HUMAN_AFTER1, NOBLE_4P_BARON_HUMAN_DROP)
+	_check_round_end(recs, main, tag, [4, 0, 3, 3], 0, [1], [1, 0, 1, 1], [0, 0, 0, 0],
+		NOBLE_4P_BARON_HUMAN_END_LEFT)
+	_check_discard_totals(main, tag, NOBLE_4P_BARON_HUMAN_LEFT, NOBLE_4P_BARON_HUMAN_END_LEFT)
+	main.queue_free()
+	await await_frames(2)
