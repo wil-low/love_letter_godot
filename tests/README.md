@@ -304,7 +304,8 @@ beliefs and 1 750 self-eliminations - the number that made section 1 read as sev
 
 Step 4 pins the **deal table** of `Deck.prepare_noble()`; later steps append scripted cases to
 the same file (step 14 round end, step 15 Prince family/widow/elimination, step 16 elimination
-reveal + discard accounting, step 31 joint move legality and L1 determinism). TEST A needs no
+reveal + discard accounting, step 17 the continuous `_left` audit on the real deck, step 31 joint move
+legality and L1 determinism). TEST A needs no
 `Main` scene - it drives the real `Deck` scene directly, 200 seeded deals per player count.
 
 | player count | burn / widow | first-hand | family per seat | main pile leftovers |
@@ -317,7 +318,8 @@ reveal + discard accounting, step 31 joint move legality and L1 determinism). TE
 visible iff burn > 0; 1 first-hand card per seat; `count` families of equal size; every family is
 an `Array[Deck.CardType]` (so it is assignable to `Player.family` in step 5); conservation
 `burn + first_hand + families + main == 16`; `_left` elementwise equal to `Deck.card_count`
-(family dealing decrements nothing - the step 17 invariant is `sum(_left) == 16 - played`); and the
+(family dealing decrements nothing - the step 17 audit measures the DEAL, so the baseline of a
+round is the full 16-card supply, families included); and the
 four piles form an exact permutation of the 16-card deck (no duplicate, none lost, no `Unknown`).
 
 Harness sanity: breaking one expectation (`widow == burn + 1`) prints 3 FAIL lines and exits 1.
@@ -410,6 +412,35 @@ round-end on `family.size() <= 1` instead of `is_empty()` -> **25 FAILs** (8 pla
 with 1 family card left, `_left == [5,0,0,0,0,0,3,0]`); adding the placeholder turn-start draw for
 AI seats -> **23 FAILs**, the family empties in half a round and the game degenerates
 (`pop_family` past the end), so the invariant is pinned from both sides.
+
+### TEST C2 — the continuous `_left` audit on the REAL deck (step 17)
+
+TEST C and every fixture after it run on `FakeDeckScript`: `FakeDeck.deal_card()` decrements
+`_left.find(true)` - the type with the most left, not the type it hands out - and `scripted_left` is a
+hand-written multiset. The audit's per-type identity
+
+    _left[t] == (supply as dealt for this round) - (cards of type t discarded in it)
+
+is a statement about the REAL deck's accounting, so on those fixtures `CountingMain.audit_applies()` is
+false (it tests `_deck.get_script() == load("res://deck/deck.gd")`), the audit skips - **counted as a
+skip, never silently** - and the fixture's own end-of-round `_left` checks stay the gate. TEST C2 is the
+counterpart: the real `Deck` script stays on (no `set_script` on the deck node), 4 seats on level 1
+(deterministic), seed 20260607, 3 rounds. The plays are NOT scripted, so eliminations, Prince hits,
+reveals and family-out ends land wherever the cards fall - which is the point: the identity has to hold
+at every audit point, continuously, not only at the round-end snapshot the smoke suite reads.
+
+| check | measured |
+|---|---|
+| audit points | 114 audits, 3 skipped (the round-end `discard` animations), **0 violations** |
+| the baseline IS the deal | `_base_left == Deck.card_count == [5,2,2,2,2,1,1,1]` and `_base_kinds == [0,0,0,0]`: taken at the round's first turn, when every card of the supply has exactly one home |
+| per round, elementwise | `_left[t] == base[t] - discards[t]` for all 8 types, e.g. round 1 `[0,1,1,1,0,1,0,1]` with 11 discards, round 2 `[1,0,0,0,0,0,0,0]` with 15 |
+| per round, total | `sum(_left) == 16 - discards` (5 == 16-11, 1 == 16-15, 5 == 16-11) |
+| the deck is reset every round | `sum(_base_left) == 16` in EVERY round - `_build_deck()` restores the full supply at the round start, the family cards included |
+| cards that left play, by container | played 7 / 7 / 9, hand cards 2 / 3 / 2, revealed families 2 / 5 / 0, **other 0** (an unknown container is a FAIL) |
+
+Harness sanity (sabotage, then `git checkout -- main/main.gd`): skipping the `_left` decrement for
+Priest discards in `Main.discard()` -> the audit fires at every audit point in TEST C2 and in the smoke
+suite (see below).
 
 ### TEST D — the Prince chain: family draw, main-pile / widow fallback, elimination (step 15)
 
@@ -559,8 +590,70 @@ from the game's side).
 
 Per-round checks: `plays[seat] <= family_draws[seat] <= family size`; `family_size(seat) ==
 family size - family_draws[seat]`; a round with no elimination is a **family-out end** (the seat
-that was to act has an empty family, `family_draws[actor] == family size`) with `sum(_left) ==
-16 - plays - prince_plays`; every live seat holds exactly 1 card at round end.
+that was to act has an empty family, `family_draws[actor] == family size`); every live seat holds
+exactly 1 card at round end.
+
+### The continuous `_left` accounting audit (step 17)
+
+The invariant is checked **at every boundary, not at round ends only**, by `CountingMain.audit_left()`,
+hooked into `new_turn()`, `_begin_play_selection()` (the pre-decision state, which is where the AI
+levels are evaluated), `_on_move_chosen()` (the decision) and `resolve_effect()` (both sides of every
+effect), plus the round-end record. Two identities must hold at every point:
+
+1. **per type** - `_left[t] == (supply as dealt for this round) - (cards of type t discarded in it)`, the
+   baseline taken at the round's first turn (`_base_left`, `_base_discarded`, `_base_kinds`). Per type is
+   the point: a double decrement of one type and a missed decrement of another cancel in a sum, so a sum
+   check alone cannot see it.
+2. **homes** - `sum(_left) == main pile + widow + every family + every hand + table + cards in flight`,
+   i.e. `_left` counts exactly the cards that are still in play, once each. `Player.family_size()` is a
+   `Deck._left` decrement-free count of the seat's family array; cards in flight are counted with the
+   `deck.get_cards_at_pos("InFlight")` accessor the todo's step 17 note 3 added.
+
+The formula the todo quotes - `sum(_left) == 16 - played_cards` - is the **clean-round special case**:
+a Prince hit discards the target's hand card, an elimination reveals and discards a whole family, and
+the deck is rebuilt at every round start, so in general
+
+    sum(_left) == 16 - (plays + hand-card discards + revealed family cards + other discards)
+
+Every discard is therefore classified at `discard()` entry, before any card is removed, by its container:
+table (a play), a seat's hand, the revealed family of an out seat, other. An "other" discard fails the
+suite, and the four counters are what bracket each round.
+
+Skips are **counted, never silent** (`left_audits` / `left_skips` / `left_violations`, printed by the
+suite, and the suite fails if a run audits nothing). Three states are audited by skipping them:
+
+- a `discard()` / `reveal_out_family()` animation in flight - the frame after the call decrements
+  `_left` card by card while the Card nodes are still children of the container, so a homes census there
+  counts the same cards twice;
+- between rounds - `_new_round()` discards table and hands, re-deals the families and deals the first-hand
+  cards, so no settled round supply exists there;
+- fixtures on `FakeDeckScript`, whose `_left` is a scripted shape, not counted supply (rules TEST C2 is
+  the real-deck counterpart).
+
+A round-end snapshot that catches an animation in flight is recorded as `settled == false` and the
+smoke suite reports it as `round end(s) ended with a discard/reveal animation in flight: 0` (it fails if
+that is non-zero); a play chain abandoned by a round end, whose play fires after the round-end record,
+is reported as `boundary-chain deviation(s) of 1: 0` (same). Both counters are printed so a regression
+in either is visible instead of silently tolerated.
+
+Measured (seed 20260607, 40 rounds per player count):
+
+| players | audits ran | skipped | violations | played | hand cards | revealed families | other |
+|---|---|---|---|---|---|---|---|
+| 4 | 1615 | 40 (1 per round end) | **0** | 326 | 174 | 116 | 0 |
+| 3 | 1515 | 40 | **0** | 307 | 151 | 116 | 0 |
+| 2 | 982 | 40 | **0** | 203 | 98 | 94 | 0 |
+
+The audit's cost is 1 pass over the card tree per audit point (`deck.get_cards_at_pos("")` on an empty
+container, `deck.get_pile_size()`), and it runs on every AI seat's real move, so an accounting break is
+reported at the boundary where it happens, with the point's tag, e.g.
+`[effect #3 before (the played card is on the table)] Priest  : _left == 2, expected 1 (dealt 2 - 1
+discarded)`.
+
+Harness sanity (sabotage, then `git checkout -- main/main.gd`): skipping the `_left` decrement for Priest
+discards in `Main.discard()` -> **258 violation lines in a 6-round run** (both identities, at turn start,
+pre-decision, decision and effect boundaries) and `FAIL  258 continuous _left accounting violation(s)`,
+exit 1.
 
 **A round with no Prince involvement is 12 plays in 3p/4p and 10 in 2p; the measured averages are
 far lower because a Prince aimed at a seat consumes one of *his* family cards (`deal_from_family`),

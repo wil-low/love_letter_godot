@@ -209,6 +209,7 @@ func _ready() -> void:
 	await _test_deal_table()
 	await _test_joint_moves()
 	await _test_family_out_round_end()
+	await _test_left_audit_real_deck()
 	await _test_prince_paths()
 	await _test_elimination_reveal()
 	await await_frames(1)
@@ -725,6 +726,7 @@ func _test_family_out_round_end() -> void:
 	check(main.draws_checked > 0 and main.draw_mismatches.is_empty(),
 		"every move named the family card its own play chain drew (" + str(main.draws_checked)
 		+ " pairings, " + str(main.draw_mismatches.size()) + " mismatches)")
+	_check_left_audit(main, "TEST C (the 12-play family-out game)")
 	# the scripted deal is re-applied every round (families are re-dealt, never carried over)
 	var redeal := true
 	for p in main._players:
@@ -734,6 +736,118 @@ func _test_family_out_round_end() -> void:
 	for p in main._players:
 		p.clear_hand()
 		check(p.hand.get_child_count() == 0, "seat " + str(p.idx) + " hand cleared")
+	main.queue_free()
+	await await_frames(2)
+
+
+# ----------------------------------------------------------------------------------------
+# TEST C2 (todo step 17): the continuous `_left` audit on the REAL deck.
+#
+# TEST C and every fixture after it run on `FakeDeckScript`, whose `_left` is a hand-written SHAPE
+# (its `deal_card()` decrements `_left.find(true)`, the type with most left, not the type it hands
+# out). The audit's per-type identity
+#     _left[t] == (supply as dealt for this round) - (cards of type t discarded in it)
+# is a statement about the REAL deck's accounting - `Main.discard()` is the ONLY decrement, `Deck.pop`
+# decrements nothing, `Deck._build_deck()` resets the supply every round - so on those fixtures the
+# audit skips and their own end-of-round checks are the gate. This fixture is the counterpart: the
+# real 16-card supply (`Deck.card_count`), four level-1 seats, seed fixed so the shuffle is
+# reproducible. The plays are NOT scripted, so eliminations, Prince hits, reveals and family-out ends
+# land wherever the cards fall - which is the point: the identity has to hold at EVERY audit point
+# (turn start, pre-decision state, decision, both sides of every effect), continuously, not only at
+# the round-end snapshot the smoke suite reads.
+# ----------------------------------------------------------------------------------------
+func _test_left_audit_real_deck() -> void:
+	print("\n########## TEST C2: the continuous `_left` audit on the real 16-card supply (step 17) ##########")
+	var main = MainScene.instantiate()
+	var card_scene: PackedScene = main.card_scene  # set_script resets exported vars
+	main.set_script(load(CountingMainScript))
+	main.card_scene = card_scene
+	var deck = main.get_node("Table/Deck")
+	add_child(main)  # the real Deck script STAYS on: no set_script here, the audit audits real accounting
+	main.noble_family = true
+	for i in 4:
+		main._players[i].ai_level = Player.AI_Level.Level_1  # deterministic seat policy, seat 0 is not human
+		main._players[i].move_chosen.connect(_count_c_play.bind(i))
+	await main.init_players(SEED)
+	await await_until(func() -> bool:
+		var ready := true
+		for p in main._players:
+			ready = ready and p.hand.get_child_count() == 1 and p.family_size() == Deck.NOBLE_FAMILY_SIZE[4]
+		return ready)
+
+	check(main.audit_applies(), "the fixture runs the REAL `Deck` script, so `_left` is counted (the"
+		+ " other fixtures script it and the audit skips there)")
+	var supply: int = 0
+	var dealt: Array[int] = []
+	for t in deck._left.size():
+		supply += int(deck._left[t])
+		dealt.append(int(Deck.card_count[t]))
+	check(supply == TOTAL_CARDS, "the supply at the first turn is " + str(supply) + " cards, the real"
+		+ " 16 (`Deck.card_count`: 4p burns 0, 4 first-hand, 12 family, 0 leftovers) - the audit"
+		+ " measures the DEAL, not the main pile, which the variant never draws from")
+	var base: Array[int] = main.baseline_left()
+	var base_ok: bool = base.size() == dealt.size()
+	for t in dealt.size():
+		base_ok = base_ok and int(base[t]) == int(dealt[t])
+	check(base_ok, "the round's baseline `_left` == " + str(base) + " == `Deck.card_count` " + str(dealt)
+		+ ": the deck is reset at the round start with NOTHING discarded, and the baseline is taken at"
+		+ " the first turn, when every card of the supply has exactly one home")
+	var base_kinds: Array[int] = main.baseline_kinds()
+	var kinds_zero: bool = true
+	for k in base_kinds.size():
+		kinds_zero = kinds_zero and int(base_kinds[k]) == 0
+	check(kinds_zero, "the baseline discard counters are all zero (" + str(base_kinds)
+		+ "): the deal itself discards nothing, so every card the round accounts for is a card that"
+		+ " left play")
+
+	var seen_rounds: int = 0
+	var per_round: Array = []  # per round: [plays, discards, eliminated seats]
+	for _f in 20000:
+		if main.round_end_actor.size() > seen_rounds:
+			var rec: Dictionary = main.round_end_records[seen_rounds]
+			var tag: String = "real-deck round " + str(seen_rounds + 1)
+			seen_rounds += 1
+			var left: Array = rec["left"]
+			var b_left: Array = rec["base_left"]
+			var b_disc: Array = rec["base_discarded"]
+			var e_disc: Array = rec["discarded"]
+			var bk: Array = rec["base_kinds"]
+			var ek: Array = rec["kinds"]
+			var disc: int = 0
+			for k in 4:
+				disc += int(ek[k]) - int(bk[k])
+			var plays: int = int(ek[0]) - int(bk[0])  # cards discarded FROM the table are the plays
+			var hands: int = int(ek[1]) - int(bk[1])
+			var fams: int = int(ek[2]) - int(bk[2])
+			var other: int = int(ek[3]) - int(bk[3])
+			per_round.append([plays, disc, hands, fams, other])
+			check(bool(rec["settled"]) and bool(rec["audited"]), tag + ": the round-end snapshot is a"
+				+ " settled moment of a real-deck round, so the accounting is assertable there")
+			var b_sum: int = 0
+			var l_sum: int = 0
+			var exact: bool = true
+			for t in left.size():
+				var used: int = int(e_disc[t]) - int(b_disc[t])
+				b_sum += int(b_left[t])
+				l_sum += int(left[t])
+				exact = exact and int(left[t]) == int(b_left[t]) - used
+			check(exact, tag + ": `_left` at the round end == " + str(left) + ", and per type it is"
+				+ " exactly the dealt supply minus what left play (" + str(disc) + " discards)")
+			check(b_sum == TOTAL_CARDS, tag + ": the round was dealt a full " + str(b_sum)
+				+ "-card supply -> `Deck._build_deck()` reset `_left` at the round start, every round,"
+				+ " the families included")
+			check(l_sum == TOTAL_CARDS - disc, tag + ": sum(_left) == " + str(l_sum) + " == 16 - "
+				+ str(disc) + " discards (" + str(plays) + " plays + " + str(hands) + " hand cards + "
+				+ str(fams) + " revealed family cards + " + str(other) + " other)")
+			check(other == 0, tag + ": no card left play through an unknown container")
+		if seen_rounds >= 3:
+			break
+		await get_tree().process_frame
+
+	check(seen_rounds >= 3, str(seen_rounds) + " real-deck rounds ran with the audit live")
+	_check_left_audit(main, "TEST C2 (the real 16-card supply)")
+	print("INFO  TEST C2 per round [plays, discards, hand cards, revealed family cards, other]: "
+		+ str(per_round))
 	main.queue_free()
 	await await_frames(2)
 
@@ -1247,6 +1361,36 @@ func _check_pairings(main) -> void:
 	check(main.draws_checked > 0 and main.draw_mismatches.is_empty(),
 		"every move named the family card its own play chain drew (" + str(main.draws_checked)
 		+ " pairings, " + str(main.draw_mismatches.size()) + " mismatches)")
+	_check_left_audit(main, "scripted game")
+
+
+# Todo step 17 in the scripted fixtures: the CONTINUOUS accounting audit that `CountingMain` runs at
+# every turn start, at every pre-decision state, at every decision (the moment the seat commits its
+# (draw, play, target) triple) and at both sides of every effect. The per-type identity
+#   _left[t] == (supply as dealt for this round) - (cards of type t discarded in it)
+# holds at every one of those points (`Deck.pop()` decrements nothing, `Main.discard()` is the only
+# decrement, `Deck._build_deck()` resets the supply every round), and with it the two things the
+# whole accounting of the variant rests on: a family draw decrements nothing, and an eliminated
+# seat's revealed family is discarded exactly once. On the REAL deck the numbers are exact, so a
+# violation is a hard failure. A fixture on `FakeDeckScript` is a scripted fiction (`deal_card()`
+# decrements `_left.find(true)`, the type with most left, not the type handed out; the supply is an
+# arbitrary multiset), so the audit skips there and the fixture keeps its own exact per-type end
+# checks written against that shape (`END_LEFT`, `NOBLE_ROUND_END_LEFT`, ...).
+func _check_left_audit(main, tag: String = "scripted game") -> void:
+	var applies: bool = main.audit_applies()
+	check(main.left_audits > 0 or not applies, tag + ": the continuous `_left` audit ran "
+		+ str(main.left_audits) + " time(s), " + str(main.left_skips) + " skipped - the accounting is"
+		+ " checked at every boundary, not at round ends only")
+	if not applies:
+		print("INFO  " + tag + ": a `FakeDeckScript` fixture - its `_left` is a hand-written SHAPE, not"
+			+ " a counted supply, so the audit skipped. The fixture's own per-type end checks are the"
+			+ " accounting gate here")
+	var first: Array[String] = []
+	for i in mini(4, main.left_violations.size()):
+		first.append(str(main.left_violations[i]))
+	check(main.left_violations.is_empty(), tag + ": 0 accounting violation(s) over "
+		+ str(main.left_audits) + " audit point(s)" + ("" if first.is_empty() else ", first: " + str(first)))
+	main.clear_left_violations()
 
 
 func family_str(p: Player) -> String:
@@ -1511,6 +1655,11 @@ func _check_no_family_leak(main, tag: String) -> void:
 				leaked += " seat " + str(p.idx)
 	check(leaked.is_empty(), tag + ": no reveal container survives the round (" + leaked + ") - the container and its"
 		+ " cards are queue_free()d together, a leak would render a ghost family in the next round")
+	# todo step 17: the same continuous accounting audit the scripted C/D fixtures get via
+	# `_check_pairings`; the E fixtures (seats eliminated mid-chain) are exactly where a double
+	# decrement of the revealed hand + family would show up, and the audit ran on both sides of every
+	# effect of these games
+	_check_left_audit(main, tag)
 
 
 func _check_e_basics(recs: Array, main, tag: String) -> void:

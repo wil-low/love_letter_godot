@@ -40,7 +40,19 @@ extends Node2D
 # - when a family-out round had no elimination AND no Prince play (a "clean" round), its length is
 #   exact: `plays == seats x family size`, `turns == plays + 1` (the round ends ON the turn that
 #   found the empty family) and the seat that ends it is the seat that opened it;
-# - every live seat holds exactly 1 card at round end (the invariant the whole design rests on).
+# - every live seat holds exactly 1 card at round end (the invariant the whole design rests on);
+# - the step 17 accounting gate, from the snapshots `CountingMain` takes INSIDE `round_over()`:
+#   per type `_left[t] == (supply as dealt for this round) - (cards of type t discarded in it)`,
+#   `sum(_left) == dealt - discards`, and the discards split by the container they left from
+#   (played cards / hand cards / revealed families) must match the round's own counters.
+#
+# And continuously, not only at round ends: `CountingMain.audit_left()` runs both accounting
+# identities at EVERY turn start, at every pre-decision state, at every decision (the moment the
+# seat commits its (draw, play, target) triple) and at both sides of every effect, and reports the
+# audit / skip / violation counts. A snapshot taken inside a `discard()` animation is skipped on
+# purpose - `_left` is decremented card by card at the START of each card's animation while the
+# card node is still a child of its container - and every skip is counted, so the suite can tell
+# "audited and clean" from "never looked".
 # Suite-level: the requested round count is reached, at least 1 elimination happens, at least
 # 1 round runs all the way to the family-out end.
 
@@ -74,6 +86,10 @@ var _eliminations: int = 0
 var _plays_total: int = 0
 var _max_plays: int = 0
 var _failures: int = 0
+var _unsettled_rounds: int = 0  # round ends that caught a discard/reveal animation in flight
+var _boundary_devs: int = 0  # piece-count deviations of exactly 1 (the abandoned play chain)
+var _left_violations: int = 0  # step 17: continuous audit violations reported by CountingMain
+const KIND_NAMES: Array[String] = ["played card (table)", "hand card", "revealed family", "other container"]
 
 
 func _ready() -> void:
@@ -136,9 +152,11 @@ func _ready() -> void:
 			var first_hand_round: int = main.first_hand_deals - first_hand_seen
 			pile_seen = main.pile_draws
 			first_hand_seen = main.first_hand_deals
+			var rec: Dictionary = main.round_end_records[r_idx]
 			check_round(main, count, fam, plays, fam_round, prince_plays, elim, actor_idx,
-				turns_round, start_actor, pile_round, first_hand_round, eliminated_this)
+				turns_round, start_actor, pile_round, first_hand_round, eliminated_this, rec)
 			check_draw_pairing(main)
+			collect_left_violations(main)
 			for i in 4:
 				plays[i] = 0
 			prince_plays = 0
@@ -160,6 +178,15 @@ func _ready() -> void:
 	print("family size per seat: " + str(fam) + ", scores: " + scores_str(main))
 	print("move/draw pairings verified: " + str(main.draws_checked) +
 		" - every move naming family card f drew family card f, checked inside its own play chain")
+	var kinds: Array = main.discards_by_kind
+	print("_left audit (step 17): " + str(main.left_audits) + " audits ran at every turn start, every"
+		+ " pre-decision state, every decision and every effect boundary, " + str(main.left_skips)
+		+ " skipped because a discard/reveal animation was in flight, " + str(main.left_violations.size())
+		+ " violation(s)")
+	print("cards that left play, by container: played " + str(int(kinds[0])) + ", hand "
+		+ str(int(kinds[1])) + ", revealed families " + str(int(kinds[2])) + ", other "
+		+ str(int(kinds[3])) + " (" + str(_unsettled_rounds) + " round end(s) caught an animation in"
+		+ " flight, " + str(_boundary_devs) + " boundary-chain deviation(s) of 1)")
 
 	var ok: bool = true
 	if _rounds < target_rounds:
@@ -173,6 +200,16 @@ func _ready() -> void:
 		ok = false
 	if main.draws_checked == 0:
 		fail("no (draw, play) pairing was verified - CountingMain._on_move_chosen never ran")
+		ok = false
+	if main.left_audits == 0:
+		fail("no _left audit ran - the accounting is not verified continuously (step 17)")
+		ok = false
+	if main.left_audits <= main.left_skips:
+		fail(str(main.left_skips) + " audits skipped vs " + str(main.left_audits)
+			+ " run - the audit is being skipped more than it runs, so it proves nothing")
+		ok = false
+	if _left_violations > 0:
+		fail(str(_left_violations) + " continuous _left accounting violation(s) (see the lines above)")
 		ok = false
 	if _failures > 0:
 		fail(str(_failures) + " per-round rule check(s) failed")
@@ -205,7 +242,7 @@ func count_card_play(c: Card, seat: int) -> void:
 # `turns` is the number of `new_turn()` calls the round took, `start_actor` the seat that opened it.
 func check_round(main, count: int, fam: int, plays: Array[int], fam_draws: Array[int],
 	princes: int, elim: int, actor_idx: int, turns: int, start_actor: int,
-	pile_drawn: int, first_hand: int, eliminated_this: Array) -> void:
+	pile_drawn: int, first_hand: int, eliminated_this: Array, rec: Dictionary) -> void:
 	var total: int = 0
 	for j in count:
 		total += plays[j]
@@ -262,13 +299,9 @@ func check_round(main, count: int, fam: int, plays: Array[int], fam_draws: Array
 				str(start_actor) + ": with " + str(count) + " seats and " + str(fam) +
 				" family cards each and no Prince redraw, the " + str(count * fam + 1) + "th turn belongs " +
 				"to the seat that took the 1st turn, and that is the seat the family-out rule stops")
-		var left := 0
-		for i in main._deck._left.size():
-			left += main._deck._left[i]
-		if left != 16 - total - princes:
-			fail("sum(_left) == " + str(left) + " at round end, expected 16 - " + str(total) +
-				" plays - " + str(princes) + " Prince discards (family draws must not decrement _left)")
-		if family_out and fam_draws[actor_idx] == fam and left == 16 - total - princes:
+		var accounting: bool = check_left_accounting(rec, total, princes, elim, fam, fam_draws,
+			eliminated_this)
+		if family_out and fam_draws[actor_idx] == fam and accounting:
 			_family_out_ends += 1
 	else:
 		_elim_rounds += 1
@@ -278,6 +311,124 @@ func check_round(main, count: int, fam: int, plays: Array[int], fam_draws: Array
 		var n: int = p.hand.get_child_count()
 		if p.is_active() and n != 1:
 			fail("seat " + str(j) + " holds " + str(n) + " cards at round end, expected exactly 1")
+
+
+# The step 17 gate: the card accounting of ONE finished round, from the snapshots CountingMain
+# takes INSIDE `round_over()` (`_new_round()` re-deals and overwrites `_deck._left` a frame or two
+# after the round ended, so the live array is not the round's accounting any more when the harness
+# sees the round end). Three checks:
+#
+#   per type  `_left[t] == (supply as dealt for this round) - (cards of type t discarded in it)`
+#             for all 8 types. `Deck.pop()` decrements nothing; `Main.discard()` is the ONLY
+#             decrement in the game, and `Deck._build_deck()` resets `_left` every round - so the
+#             supply shrinks exactly as fast as cards leave play, never faster, never slower. Per
+#             type is the point: a double decrement of Guard plus a missed decrement of Priest
+#             cancels out in a sum check and is invisible there. It also asserts the deck was reset
+#             cleanly at the round start (used == 0 => `_left == the dealt supply`).
+#   sum       `sum(_left) == dealt - discards`. The todo's `16 - plays` is NOT the invariant: every
+#             Prince hit discards the target's hand card on top of the plays, and every elimination
+#             discards the revealed hand + the revealed family (step 16).
+#   pieces    the discards classified by the container they were discarded FROM: played cards (the
+#             table) + hand cards (Prince victims and revealed out seats) + revealed family cards.
+#             `sum == 16 - played - prince - revealed-family` is what the whole design rests on.
+#
+# The piece counts may deviate by ONE play: the play chain a round end abandons fires its
+# `move_chosen` (so its play is counted in THIS round) and finishes its discards after the next
+# round's baseline is taken (so they land in the NEXT round's window). Such a deviation is an INFO
+# line, counted and reported; 2 or more in one round is a failure. The exact identities are
+# unaffected: they bracket the round with the discard counter itself, not with play counts.
+func check_left_accounting(rec: Dictionary, total: int, princes: int, elim: int, fam: int,
+		fam_round: Array[int], eliminated_this: Array) -> bool:
+	var tag: String = "round " + str(_rounds) + " accounting"
+	if not bool(rec["settled"]) or not bool(rec["audited"]):
+		# `settled`: a discard()/reveal animation was in flight at the round end - `_left` is decremented
+		# card by card at the START of each card's animation while the card node is still in its
+		# container, so the round-end snapshot is transient. `audited`: the suite runs a scripted
+		# FakeDeck whose `_left` is a hand-written shape, not a counted supply (CountingMain.audit_applies).
+		# Either way the round is counted and the continuous audit covered what it can.
+		_unsettled_rounds += 1
+		return true
+	var base_left: Array = rec["base_left"]
+	var base_disc: Array = rec["base_discarded"]
+	var end_disc: Array = rec["discarded"]
+	var base_kinds: Array = rec["base_kinds"]
+	var end_kinds: Array = rec["kinds"]
+	var left: Array = rec["left"]
+	var ok: bool = true
+	var used_sum: int = 0
+	for t in left.size():
+		var used: int = int(end_disc[t]) - int(base_disc[t])
+		used_sum += used
+		var want: int = int(base_left[t]) - used
+		if int(left[t]) != want:
+			ok = false
+			fail(tag + ": " + Deck.card_names[t] + " ends the round at _left == " + str(int(left[t]))
+				+ ", expected " + str(want) + " (dealt " + str(int(base_left[t])) + " minus " + str(used)
+				+ " discarded - `Deck.pop()` decrements NOTHING, `discard()` is the only decrement in the"
+				+ " game, so the supply shrinks exactly as fast as cards leave play). Cards of one type"
+				+ " counted twice and cards of another type counted none cancel in a sum, so the check"
+				+ " is per type")
+	var dealt: int = 0
+	var left_sum: int = 0
+	for t in left.size():
+		dealt += int(base_left[t])
+		left_sum += int(left[t])
+	if left_sum != dealt - used_sum:
+		ok = false
+		fail(tag + ": sum(_left) == " + str(left_sum) + " at the round end, expected " + str(dealt)
+			+ " dealt - " + str(used_sum) + " discarded (every play discards 1 card, every Prince hit"
+			+ " discards the target's hand card, every elimination discards the revealed hand and the"
+			+ " revealed family - the todo's `16 - plays` counts only the first of these; and a family"
+			+ " draw decrements nothing, which is what makes the supply shrink exactly as fast as cards"
+			+ " leave play)")
+	var pieces: Array[int] = []
+	for k in end_kinds.size():
+		pieces.append(int(end_kinds[k]) - int(base_kinds[k]))
+	if pieces[0] + pieces[1] + pieces[2] + pieces[3] != used_sum:
+		ok = false
+		fail(tag + ": " + str(used_sum) + " cards left play by the discard counter, the container "
+			+ "classification adds up to " + str(pieces))
+	var fam_expected: int = 0
+	for seat in eliminated_this:
+		# an out seat takes his WHOLE remaining family with him (step 16): family size - what he drew.
+		# This is the UPPER bound: a seat eliminated mid-chain by a King/Princess/Countess that the
+		# round end interrupted is revealed and discarded after the round ended (the next round's
+		# window), so such a reveal is not in this round's count. `Main.eliminate()`'s reveal is
+		# awaited, so the direct eliminations ARE in it.
+		fam_expected += fam - int(fam_round[int(seat)])
+	var want: Array[int] = [total, princes + elim, fam_expected, 0]
+	for k in 4:
+		var dev: int = pieces[k] - want[k]
+		if dev == 0:
+			continue
+		if k == 2 and dev < 0:
+			_boundary_devs += 1  # fewer reveals than the bound: chains the round end interrupted
+			print("INFO  " + tag + ": " + str(pieces[k]) + " revealed-family discard(s), at most "
+				+ str(want[k]) + " predicted - a seat eliminated mid-chain by a King/Princess/Countess"
+				+ " the round end interrupted is revealed and discarded in the next round's window")
+			continue
+		if abs(dev) > 1:
+			ok = false
+			fail(tag + ": " + str(pieces[k]) + " " + KIND_NAMES[k] + " discard(s), the round's own"
+				+ " counters predict " + str(want[k]) + " (" + str(total) + " plays, " + str(princes)
+				+ " Prince target cards + " + str(elim) + " revealed hands, at most " + str(fam_expected)
+				+ " revealed family cards of the seats that went out, 0 unknown containers)")
+		else:
+			_boundary_devs += 1
+			print("INFO  " + tag + ": " + str(pieces[k]) + " " + KIND_NAMES[k] + " discard(s) vs the"
+				+ " predicted " + str(want[k]) + " - the play chain a round end abandons fires"
+				+ " move_chosen in this round and discards in the next round's window")
+	return ok
+
+
+# The continuous audit's findings (step 17): CountingMain runs the two identities at every turn
+# start, at every pre-decision state, at every decision and at both sides of every effect. Read
+# them per round, so a violation is attributed to the round that produced it.
+func collect_left_violations(main) -> void:
+	for msg in main.left_violations:
+		_left_violations += 1
+		fail("_left audit: " + str(msg))
+	main.clear_left_violations()
 
 
 # The (draw, play, target) gate (step 11/12): `CountingMain._on_move_chosen` pairs every move that

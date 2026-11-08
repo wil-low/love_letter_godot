@@ -51,9 +51,225 @@ var reveal_calls: int = 0  # every call, empty families included
 # Every card that left play through `Main.discard()` - the ONLY `_left` decrement in the game.
 # Summing it and comparing with the scripted supply minus `_left` is what proves a card is counted
 # exactly once (the "no double decrement" gate) - `_left` alone cannot show it.
-var discard_log: Array = []  # per discard() call that had cards: {container, cards: [{type, faceup}]}
+var discard_log: Array = []  # per discard() call that had cards: {container, cards: [{type, faceup}], kind}
 var discarded: Array[int] = [0, 0, 0, 0, 0, 0, 0, 0]  # per CardType, cumulative
 var debug_discards: bool = false  # per-call `_left` trace, for a fixture that needs to SEE the decrements
+
+# ─── Step 17: the continuous `_left` audit ─────────────────────────────────────────────────
+# The accounting rule the whole variant rests on, stated as something a harness can check at ANY
+# moment (the todo's `sum(_left) == 16 - played` is only true on a round with no Prince hit and no
+# elimination, so it is not the invariant - see the derivation below):
+#
+#   1. `Main.discard()` is the ONLY decrement of `Deck._left` in the game (`Deck.pop()` hands a card
+#      out of the main pile / the widow and decrements NOTHING, and a family pop touches the Deck
+#      not at all), and `Deck._build_deck()` resets `_left` to the full 16-card supply at the start
+#      of every round, so for every type t, at every settled moment of a round:
+#          _left[t] == supply_at_round_deal[t] - (cards of type t discarded since that deal)
+#      Per TYPE, not just as a sum: a double decrement of Guard and a missed decrement of Priest
+#      cancel out in a sum check and are invisible there. `discarded[]` (above) is the discard side.
+#      The identity is exactly todo step 4's "a family draw decrements nothing" plus step 16's "a
+#      revealed family is discarded through `discard()`, exactly once": the supply shrinks exactly as
+#      fast as cards leave play, never faster, never slower.
+#   2. Every card counted in `_left` sits in exactly ONE home, and every home holds exactly one
+#      `_left` card:
+#          sum(_left) == main pile + widow + every family + every hand + the table + cards in flight
+#      Family cards ARE in `_left` (a family draw pops the data and touches nothing in the Deck);
+#      a played card stays in `_left` until its `discard()` runs. So this identity catches a card
+#      that left the supply without being discarded (an invented card) and a card that vanished
+#      (a family pop that materialized no node), which identity 1 alone cannot see.
+#
+# The supply baseline is read from `_deck._left` at the running round's FIRST TURN (the state
+# `_new_round()` leaves behind: deck rebuilt, families dealt, one first-hand card per seat, the
+# previous round's table and hands discarded) and the cumulative counters are snapshotted at the
+# same moment, so the identity is measured per round and holds at every audit point in between.
+#
+# Why the audit skips: inside `discard()` the decrement happens card by card at the START of each
+# card's animation while the card node is still a child of its container, and
+# `reveal_out_family()` materializes nodes for cards that are still in `p.family` - so both views
+# double-count for a moment. An audit taken there would be a false positive, so the audit is
+# skipped while a `discard()` / `reveal_out_family()` call is in flight and `left_skips` counts
+# those skips (a suite that reports 0 audits, or a huge skip count, is not auditing anything).
+#
+# Two more deliberate skips, both counted: (a) BETWEEN the rounds - `_new_round()` is mid-flight
+# (discarding the table and the live hands, re-dealing, animating the first-hand cards), so there is
+# no settled supply to measure and a baseline taken there would capture a half-dealt state; only
+# `new_turn()` opens a round; (b) on a SCRIPTED deck - the `FakeDeckScript` of
+# `tests/noble_family_rules.gd` is a hand-written fiction whose `_left` is a SHAPE its fixtures
+# assert: its `deal_card()` decrements `_left.find(true)` (the type with the most left, NOT the type
+# it hands out) and its supply is an arbitrary multiset. Identity 1 is a statement about the REAL
+# deck's accounting, so on a scripted deck the audit skips; those fixtures keep their own exact
+# per-type end checks (`NOBLE_ROUND_END_LEFT`, `END_LEFT`, ...), written against that shape.
+var left_violations: Array[String] = []  # every failed identity, with the audit point's tag
+var left_audits: int = 0  # audits that ran the identities to completion
+var left_skips: int = 0  # audits skipped because a discard / reveal animation was in flight
+var discards_by_kind: Array[int] = [0, 0, 0, 0]  # cumulative, per discard() container: 0 = table (played cards), 1 = a seat's hand, 2 = a revealed family, 3 = anything else
+var round_end_records: Array = []  # per round end: {left, discarded, kinds, base_left, base_discarded, base_kinds, audited, settled, pile_draws, left_sum, base_sum}
+var _base_left: Array[int] = []  # `_left` as dealt at the running round's first turn
+var _base_discarded: Array[int] = []  # `discarded` at that same moment
+var _base_kinds: Array[int] = []  # `discards_by_kind` at that same moment
+var _round_open: bool = false  # the running round has a baseline
+var discard_depth: int = 0  # >0: a discard() animation is in flight (transient double view)
+var reveal_depth: int = 0  # >0: revealed family nodes exist next to the family data
+
+
+func _copy_ints(src) -> Array[int]:
+	# elementwise copy: the source is often a Variant Array read from a snapshot
+	var out: Array[int] = []
+	for v in src:
+		out.append(int(v))
+	return out
+
+
+func _count_cards(node: Node) -> int:
+	var n: int = 0
+	if node == null:
+		return 0
+	for ch in node.get_children():
+		if ch is Card:
+			n += 1
+	return n
+
+
+func _discard_kind(from: Node2D) -> int:
+	if from == _table:
+		return 0  # the played card(s) on the table
+	if str(from.name) == "FamilyReveal":
+		return 2  # step 16's revealed family pile
+	for p in _players:
+		if from == p.hand:
+			return 1  # a Prince victim's hand card, a revealed (out) seat's hand card
+	return 3  # anything else: a harness container (the fixtures discard hand nodes of their own)
+
+
+# The baseline is the state the round's supply starts from: `_left` as the deck dealt it, plus the
+# cumulative discard counters. Taken at the round's FIRST turn, i.e. after `_build_deck()` and after
+# `_new_round()`'s own discards of the previous round's table/hands (which land in the cumulative
+# counters and are therefore subtracted out by this baseline).
+func _take_left_baseline() -> void:
+	_base_left = _copy_ints(_deck._left)
+	_base_discarded = _copy_ints(discarded)
+	_base_kinds = _copy_ints(discards_by_kind)
+	_round_open = true
+
+
+# The audit is a statement about the REAL deck's accounting (see the header). A fixture that runs
+# `FakeDeckScript` has a `_left` that is scripted rather than counted, so there is nothing to audit.
+func audit_applies() -> bool:
+	return _deck.get_script() == load("res://deck/deck.gd")
+
+
+func audit_left(tag: String) -> void:
+	if discard_depth > 0 or reveal_depth > 0:
+		left_skips += 1
+		return
+	if not audit_applies():
+		left_skips += 1
+		return
+	if not _round_open:
+		# between the rounds: `_new_round()` is mid-flight (it discards the table and the live hands,
+		# re-deals the families and animates the first-hand cards), so there is no supply to measure
+		# against and a baseline taken here would capture a half-dealt state. Only `new_turn()` opens
+		# a round, and it is the first thing that runs after the deal settled.
+		left_skips += 1
+		return
+	left_audits += 1
+	var bad: Array[String] = []
+	var supply: int = 0
+	for t in _deck._left.size():
+		var used: int = int(discarded[t]) - int(_base_discarded[t])
+		var want: int = int(_base_left[t]) - used
+		supply += int(_deck._left[t])
+		if used < 0:
+			bad.append("more cards of type " + Deck.card_names[t] + " discarded (" + str(used)
+				+ ") inside the running round than the baseline records: the discard counter moved"
+				+ " backwards")
+		if int(_deck._left[t]) != want:
+			bad.append(Deck.card_names[t] + ": _left == " + str(_deck._left[t]) + ", expected "
+				+ str(want) + " (dealt " + str(_base_left[t]) + " - " + str(used)
+				+ " discarded). Per-type is the point: a double decrement of one type and a missed one"
+				+ " of another cancel in a sum")
+		if int(_deck._left[t]) < 0:
+			bad.append(Deck.card_names[t] + ": _left is negative (" + str(_deck._left[t]) + ")")
+	# identity 2: every `_left` card has exactly one home right now
+	var main_pile: int = _deck._cards.size()
+	var widow: int = _deck._widow_cards.size()
+	var fams: int = 0
+	var hands: int = 0
+	for p in _players:
+		fams += p.family_size()
+		hands += p.hand.get_child_count()
+	var on_table: int = _count_cards(_table)
+	var inflight: int = _count_cards(_animation_layer)
+	var homes: int = main_pile + widow + fams + hands + on_table + inflight
+	if supply != homes:
+		bad.append("sum(_left) == " + str(supply) + " but the supply has " + str(homes)
+			+ " card(s): main pile " + str(main_pile) + ", widow " + str(widow) + ", families "
+			+ str(fams) + ", hands " + str(hands) + ", table " + str(on_table) + ", in flight "
+			+ str(inflight) + " - a card was counted into _left twice, destroyed twice, or"
+			+ " materialized out of nowhere")
+	for msg in bad:
+		left_violations.append("[" + tag + "] " + msg)
+
+
+# The per-round-end record the harness needs to make the same two identities assertable AFTER the
+# round (the live `_deck._left` is already re-dealt by then): the supply at the round's deal, the
+# cumulative discard counters at the round end, and whether a discard/reveal animation made the
+# moment transient (then the harness skips the accounting checks for that round and counts it).
+func _record_round_end() -> void:
+	var left: Array[int] = _copy_ints(_deck._left)
+	var left_sum: int = 0
+	for v in left:
+		left_sum += int(v)
+	var base_sum: int = 0
+	for v in _base_left:
+		base_sum += int(v)
+	round_end_records.append({
+		"left": left,
+		"discarded": _copy_ints(discarded),
+		"kinds": _copy_ints(discards_by_kind),
+		"base_left": _copy_ints(_base_left),
+		"base_discarded": _copy_ints(_base_discarded),
+		"base_kinds": _copy_ints(_base_kinds),
+		"audited": audit_applies(),
+		"pile_draws": pile_draws,
+		"settled": discard_depth == 0 and reveal_depth == 0,
+		"left_sum": left_sum,
+		"base_sum": base_sum,
+	})
+	# the round is over: the NEXT round's first turn takes the next baseline (after `_new_round()`
+	# discarded the table + hands and `_build_deck()` reset `_left`)
+	_round_open = false
+
+
+# The baseline the running round's accounting is measured against (`audit_left` takes it at the
+# round's first turn). A fixture reads it to assert that the baseline IS the deal: on the real deck
+# that is `Deck.card_count`, the 16-card supply, with nothing discarded yet.
+func baseline_left() -> Array[int]:
+	return _base_left
+
+
+func baseline_kinds() -> Array[int]:
+	return _base_kinds
+
+
+func clear_left_violations() -> void:
+	# TYPED, like `draw_mismatches`: a harness must not assign [] to it (see clear_draw_mismatches)
+	left_violations.clear()
+
+
+func reset_audit() -> void:
+	left_audits = 0
+	left_skips = 0
+	clear_left_violations()
+	discard_depth = 0
+	reveal_depth = 0
+	_round_open = false
+	for i in discards_by_kind.size():
+		discards_by_kind[i] = 0
+	round_end_records = []
+	_base_left = []
+	_base_discarded = []
+	_base_kinds = []
 
 
 func set_inactive(p: Player, reveal_hand: bool = true) -> void:
@@ -66,7 +282,9 @@ func set_inactive(p: Player, reveal_hand: bool = true) -> void:
 
 func reveal_out_family(p: Player, show: bool = true) -> Node2D:
 	var family_size: int = p.family_size()
+	reveal_depth += 1  # the materialized nodes sit NEXT TO the family data until the caller discards
 	var root: Node2D = await super(p, show)
+	reveal_depth -= 1
 	reveal_calls += 1
 	var rec := {
 		"seat": p.idx,
@@ -110,13 +328,17 @@ func discard(from: Node2D) -> void:
 			cards.append({"type": int(ch.type), "faceup": bool(ch.faceup)})
 			types.append(int(ch.type))
 			discarded[int(ch.type)] += 1
+	var kind: int = _discard_kind(from)
+	discards_by_kind[kind] += cards.size()
+	discard_depth += 1  # from here the cards are decremented in _left AND still children of `from`
 	var before: Array = _deck._left.duplicate(true)
 	await super(from)
+	discard_depth -= 1
 	if debug_discards:
 		print("  [discard] " + str(from.name) + " types=" + str(types) + " left " + str(before) + " -> "
 			+ str(_deck._left))
 	if !cards.is_empty():
-		discard_log.append({"container": from.name, "cards": cards})
+		discard_log.append({"container": from.name, "cards": cards, "kind": kind})
 
 
 func reset_step16() -> void:
@@ -143,6 +365,7 @@ func round_over() -> void:
 		hands.append(p.hand.get_child_count())
 	round_end_families.append(fams)
 	round_end_hands.append(hands)
+	_record_round_end()  # the step 17 accounting snapshot of THIS round end (see audit_left)
 	var left: Array = []
 	for n in _deck._left.size():
 		left.append(_deck._left[n])
@@ -156,6 +379,7 @@ func round_over() -> void:
 # animated deal path without popping anything), so it is counted separately.
 func resolve_effect() -> void:
 	var before := _snapshot()
+	audit_left("effect #" + str(effect_log.size() + 1) + " before (the played card is on the table)")
 	var played: int = _played_card
 	var target: int = _target_player
 	# `_target_type` must be read BEFORE super(): `resolve_effect()` ends with `new_turn()`, which resets
@@ -163,6 +387,7 @@ func resolve_effect() -> void:
 	# that call - reading it after super() reports the NEXT turn's value, not this play's declaration.
 	var target_type: int = _target_type
 	await super()
+	audit_left("effect #" + str(effect_log.size() + 1) + " after (the effect settled, next seat chosen)")
 	var after := _snapshot()
 	var hits := 0
 	for r in effect_log:
@@ -238,7 +463,23 @@ func new_turn():
 	if _round_start < 0:
 		_round_start = _cur_player
 	_turn_counts[_cur_player] += 1
+	if not _round_open:
+		# the FIRST turn of a round: `_new_round()` has dealt the supply and discarded the previous
+		# round's cards, so this is the baseline the whole round's accounting is measured against
+		_take_left_baseline()
+	# every turn starts with a decision, so this is the "at every decision" hook the todo asks for:
+	# the state the deciding seat reads (hand, family, `_left`) before it draws or plays anything
+	audit_left("turn start, seat " + str(_cur_player))
 	super()
+
+
+# The pre-decision state: `find_valid_moves()` / `eval_moves()` / `ai_move()` all run inside this
+# call, on exactly this board (for an AI seat in the variant the hand is 1 card and the family is
+# the draw menu, and `_deck._left` is what `eval_moves` scores Guard guesses against).
+func _begin_play_selection(p: Player) -> void:
+	audit_left("pre-decision, seat " + str(p.idx) + " (hand " + str(p.hand.get_child_count())
+		+ " cards, family " + str(p.family_size()) + ")")
+	super(p)
 
 
 func deal_from_family(p: Player, family_idx: int) -> void:
@@ -260,6 +501,9 @@ func _on_move_chosen(move: Move) -> void:
 	var seat: int = _cur_player
 	var named: int = move._drawn_family_idx
 	var pos: int = family_draw_idx[seat].size()
+	# the moment the seat COMMITS its (draw, play, target) triple, before the chain draws anything
+	audit_left("decision, seat " + str(seat) + " plays " + Deck.card_names[int(move.played_type())]
+		+ " and draws family #" + str(named))
 	await super(move)
 	if named < 0:  # a classic Move (the eliminated seat's forced resign play) draws no family card
 		return
