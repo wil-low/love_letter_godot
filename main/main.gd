@@ -132,18 +132,40 @@ func _new_round() -> void:
 	discard(_table)
 	for p in _players:
 		await discard(p.hand)
-	_deck.prepare(_player_count)
-	for p in _players:
-		if p.is_active():
-			await deal_card(p)
+	if noble_family:
+		# Noble Family: burn 3/1/0, one first-hand card per seat (animated, through the
+		# regular deal path so the round looks identical to classic), then the private
+		# families, dealt instantly - they are never animated, they are just data + a
+		# face-up stack for the human seat (rendering lands in step 18).
+		var families: Array = _deck.prepare_noble(_player_count)
+		var seat := 0
+		for p in _players:
+			if p.is_active():
+				await deal_card(p, false, _deck.first_hand[seat])
+				p.family = families[seat]
+				seat += 1
+			else:
+				p.clear_family()
+	else:
+		_deck.prepare(_player_count)
+		for p in _players:
+			if p.is_active():
+				await deal_card(p)
 	new_turn()
 
 
-func deal_card(p: Player, allow_widow: bool = false) -> void:
+# When `card_type` is given, deal that exact card instead of popping the top of the deck:
+# the Noble Family first-hand cards are pre-dealt by Deck.prepare_noble(). Nothing is
+# popped and `_left` is untouched - a first-hand card leaves the supply only when it is played.
+func deal_card(p: Player, allow_widow: bool = false, card_type: Deck.CardType = Deck.CardType.Unknown) -> void:
 	_deal_audio_player.play()
-	var result := _deck.pop(allow_widow)
-	var card_type = result["type"]
-	var src = result["src"]
+	var src: Sprite2D
+	if card_type == Deck.CardType.Unknown:
+		var result := _deck.pop(allow_widow)
+		card_type = result["type"]
+		src = result["src"]
+	else:
+		src = _deck._main
 	var is_faceup = p.idx == 0
 	var c = card_scene.instantiate()
 	_animation_layer.add_child(c)
@@ -164,6 +186,11 @@ func new_turn():
 			p.print_memory()
 		for i in _deck._left.size():
 			print("Left " + Deck.card_names[i] + ": " + str(_deck._left[i]))
+		if noble_family:
+			var fams := "Families: "
+			for pl in _players:
+				fams += str(pl.idx) + "=" + str(pl.family_size()) + " "
+			print(fams)
 	var p = _players[_cur_player]
 	p.protected = false
 	_other_protected = true
