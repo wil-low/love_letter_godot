@@ -113,14 +113,29 @@ func _snapshot() -> Dictionary:
 	for n in _deck._left.size():
 		left.append(_deck._left[n])
 		left_sum += int(_deck._left[n])
+	var fam_sum: int = 0
+	var hand_sum: int = 0
+	for i in fams.size():
+		fam_sum += int(fams[i])
+		hand_sum += int(hands[i])
+	# A played card sits on the table until `discard(_table)` runs, and `Deck.discard()` is the ONLY
+	# thing that decrements `_left`, so:
+	#   _left == main pile + widow + every family + every hand + the cards on the table
+	# which is what makes the main pile size (that Deck exposes no accessor for) derivable.
+	var on_table := 0
+	for ch in _table.get_children():
+		if ch is Card:
+			on_table += 1
 	return {
 		"fams": fams,
 		"hands": hands,
 		"active": active,
 		"widow": _deck._widow_cards.size(),
 		"widow_visible": _deck._widow.visible,
+		"on_table": on_table,
 		"left": left,
 		"left_sum": left_sum,
+		"main_pile": left_sum - _deck._widow_cards.size() - fam_sum - hand_sum - on_table,
 	}
 
 

@@ -411,44 +411,68 @@ with 1 family card left, `_left == [5,0,0,0,0,0,3,0]`); adding the placeholder t
 AI seats -> **23 FAILs**, the family empties in half a round and the game degenerates
 (`pop_family` past the end), so the invariant is pinned from both sides.
 
-### TEST D — the Prince chain: family draw, widow fallback, elimination (step 15)
+### TEST D — the Prince chain: family draw, main-pile / widow fallback, elimination (step 15)
 
-Two scripted 4-player / 3-player rounds in which the **only** interesting event is a Prince play.
+Four scripted rounds in which the **only** interesting event is a Prince play - one per player
+count that can produce a distinct branch (3p and 4p need two rounds each, see the table).
 Every seat is level 1, so each round is deterministic; the Prince hits are *forced* by Handmaids:
 an acting seat is always unprotected at his turn start (`new_turn()` resets it) and the Prince
 target list is scanned in seat-index order, so the target is the lowest-index live unprotected
-seat - protecting seats 0/1 aims seat 3's Prince at seat 2.
+seat.
 
-| fixture | deal | Prince plays | what they find |
+| fixture | deal | Prince plays (all derived, all matched) | what the hits find |
 |---|---|---|---|
-| 4p | `H,H,G,P` + families `H,[H,G,G]` `H,[H,G,G]` `G,[G,G,G]` `P,[P,G,G]`; **no widow** (4p burns 0), main pile 0 | 4th, 8th, both on seat 2 | family 2 -> 1; then family **0** and no widow -> seat 2 **eliminated** |
-| 3p | widow 1 Guard, `G,P,P` + families `G x4`, `P,[P,G,G,G]`, `P,[P,G,G,G]` | 2nd, 3rd, 5th, 6th, all on seat 0 | family 3 -> 2; family 2 -> 1; family **0** + widow 1 -> draws **the widow**; family **0** + widow **0** -> seat 0 **eliminated** |
+| 4p | families `H,[H,G,G]` `H,[H,G,G]` `G,[G,G,G]` `P,[P,G,G]`; **no widow** (4p burns 0), main pile 0 | 4th, 8th, both on seat 2 | family 2 -> 1; then family **0**, no widow, no main pile -> seat 2 **eliminated** |
+| 3p | widow 1 Guard, families `G x4`, `P,[P,G,G,G]`, `P,[P,G,G,G]` | 2nd, 3rd, 5th, 6th, all on seat 0 | family 3 -> 2; 2 -> 1; family **0** + widow 1 -> draws **the widow**; family **0** + widow **0** -> seat 0 **eliminated** |
+| 3p #2 | widow 1 Guard; seat 0 plays Handmaids, seat 1 is the victim (family 4 Guards), seat 2 plays Princes on turns 3 and 6 | 3rd, 6th, both on seat 1 | family 3 -> 2; family **1 -> 0** - the target's **last** family card, widow untouched, no elimination |
+| 2p | widow 3 Guards + **1 main-pile leftover**; seat 0 (victim) plays Guards, seat 1 plays Princes on turns 2, 4, 6 | 2nd, 4th, 6th, all on seat 0 | family 4 -> 3; 2 -> 1; family **0** -> draws **the main pile**, not the widow |
+
+The last two rows exist because the first two cannot produce those states: in 4p the hits land on
+seats' turns 4 and 8 with the victim's own draw on turn 7 in between, so his family is 2 then 0 at
+the hits; in the plain 3p round seat 0 is hit on his neighbours' turns 2, 3, 5, 6, i.e. at family
+3, 2, 0, 0. A victim's family is only ever at an **even** size at a hit in those arrangements, so
+`if tp.family.size() >= 2` in the Prince branch passes them all - fixture 3p #2 (hit at family
+exactly 1) and fixture 2p (the main-pile leftover in front of the widow) close that gap.
 
 `CountingMain.resolve_effect()` runs exactly once per play, so it snapshots the whole board
 **before** and **after** every effect (`effect_log`): family sizes, hand sizes, `is_active()`,
-widow size + sprite, and `_left`. "The target's family size AT THE HIT" is unreadable by polling
-(the whole chain resolves in a few frames at `_speed = 0`), which is why the hook is a
-`resolve_effect()` override. `before` is taken after the played card reached the table and before
-`discard(_table)`, so each record shows exactly the state the Prince acts on.
+widow size + sprite, cards on the table, and `_left`. "The target's family size AT THE HIT" is
+unreadable by polling (the whole chain resolves in a few frames at `_speed = 0`), which is why the
+hook is a `resolve_effect()` override. `before` is taken after the played card reached the table
+and before `discard(_table)`, so each record shows exactly the state the Prince acts on.
 
-Asserted per round: the outcome of each hit is decided by the family size and the widow size at
-the hit (family first, widow as fallback, elimination only when both are empty) - never by
-anything else; the hand is exactly 1 card for every live seat at **every** effect boundary; the
-eliminated seat has 0 hand cards and is out; `sum(_left) == 16 - plays - prince_hits` at every
-play (each play discards 1 card, each Prince hit discards the target's hand card, family/widow
-drawing discards nothing - the formula holds here only because every elimination in these
-fixtures is Prince-caused, a Guard/Baron/Princess elimination would add one more decrement);
-`pile_draws == 0` in 4p and `== 1` in 3p, and that single pile draw **is** the widow fallback, so
-the widow is never touched at a turn start; the widow sprite is hidden in 4p for the whole round
-and hidden in 3p once its 1 card is spent; every family draw used index 0; 11 plays / 12 turns /
-actor 0 in 4p and 10 plays / 11 turns / actor 1 in 3p (the elimination does **not** end the round -
-the family-out rule does); round-end `_left == [3,0,0,0,0,0,0,0]` (4p, 16 - 11 - 2) and
-`[2,0,0,0,0,0,0,0]` (3p, 16 - 10 - 4); and 0 move/draw pairing mismatches.
+`_left` is derived, not measured: `Deck.discard()` is the only decrement, so
 
-Harness sanity: swapping the family test for the widow test in the Prince branch (widow first) ->
-**12 FAILs** in the 3p round (the widow is spent on play 2, so the family draws, the widow
-fallback and the elimination all move), 4p unchanged (4p has no widow) - the *order* of the
-cascade is what is pinned.
+    sum(_left) == main pile + widow + every family + every hand + cards on the table
+
+which is how the snapshot reports the main-pile size (the Deck has no accessor for it) and how the
+suite checks accounting at **every** play: `sum(_left) == 16 - plays - prince_hits` (a play
+discards 1 card, a Prince hit discards the target's hand card, family/widow drawing discards
+nothing - the formula holds on these fixtures only because every elimination here is
+Prince-caused; a Guard/Baron/Princess elimination would add one more decrement).
+
+Asserted per round: the outcome of each hit is decided by the family size at the hit and nothing
+else (family card -> main pile -> widow -> elimination, in that order); the hand is exactly 1 card
+for every live seat at **every** effect boundary (a Disabled seat is excluded via `is_active()`);
+the eliminated seat has 0 hand cards and is out; no derived pile size is ever negative; the pile
+draws are `0` in 4p, `0` in 3p #2, `1` in 3p (the widow) and `1` in 2p (the main pile) and each one
+is the fallback of a specific hit, never a turn-start draw; the widow sprite is hidden in 4p, stays
+visible in 3p #2, and goes hidden in 3p when its card is spent and in 2p when the main pile empties;
+every family draw used index 0; plays/turns/ending seat are the derived ones (4p 11/12/seat 0, 3p
+10/11/seat 1, 3p #2 7/8/seat 1, 2p 6/7/seat 0) and in every fixture the round ends on the **seat to
+act** having family 0 - the elimination never ends a round; the fixtures with live seats that still
+hold family cards (3p #2: `[1, 0, 2, 0]`) assert that the ending condition is about the seat to act,
+not about every family being empty; and 0 move/draw pairing mismatches in all four.
+
+2p is the only count with a main-pile leftover (`16 - 3 burn - 2 first-hand - 2 x 5 family = 1`),
+and the empty-family window is **one turn** long (between the draw that empties a family and that
+seat's own turn-start family check), so that 1 card absorbs the round's only empty-family hit: in 2p
+the 3-card widow is inert, and no seat can be eliminated by a Prince.
+
+Harness sanity (sabotage, then `git checkout -- main/main.gd`): drawing from the widow before the
+family -> **20 FAILs** across all four fixtures; `if tp.family.size() >= 2` instead of
+`not is_empty()` -> **7 FAILs**, all in fixture 3p #2 (the other three are untouched by it, which is
+exactly why fixture 3p #2 exists).
 
 ## tests/noble_family_smoke.tscn — Noble Family variant, whole games on the AI (steps 7, 11, 14)
 

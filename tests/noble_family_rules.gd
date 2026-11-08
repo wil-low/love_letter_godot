@@ -85,6 +85,36 @@ const NOBLE_3P_PRINCE: Array[Deck.CardType] = [
 const NOBLE_3P_PRINCE_LEFT: Array[int] = [12, 0, 0, 0, 4, 0, 0, 0]  # 12 Guard, 4 Prince
 const NOBLE_3P_PRINCE_END_LEFT: Array[int] = [2, 0, 0, 0, 0, 0, 0, 0]  # 16 - 10 plays - 4 hits
 
+# TEST D, 3p fixture 2 - a hit that finds the target's LAST family card. Seat 1 is the victim (the
+# only seat whose family a Prince can reach at size 1: seat 2 plays Princes on turns 3 and 6, seat 1
+# draws on his own turns 2 and 5), seats 0 / 1 play Handmaids so seat 2's Princes skip seat 0 and
+# hit seat 1. Seat 0's Handmaids protect him on turns 2, 3, 5 and 6. No family is ever empty at a
+# hit, so the 1-card widow is never touched and nobody dies: the round ends on the family-out rule.
+const NOBLE_3P_PRINCE_LAST: Array[Deck.CardType] = [
+	Deck.CardType.Guard, Deck.CardType.Handmaid, Deck.CardType.Guard, Deck.CardType.Prince,
+	Deck.CardType.Handmaid, Deck.CardType.Guard, Deck.CardType.Prince, Deck.CardType.Guard,
+	Deck.CardType.Guard, Deck.CardType.Guard, Deck.CardType.Guard, Deck.CardType.Guard,
+	Deck.CardType.Guard, Deck.CardType.Guard, Deck.CardType.Guard, Deck.CardType.Guard,
+]
+const NOBLE_3P_PRINCE_LAST_LEFT: Array[int] = [12, 0, 0, 2, 2, 0, 0, 0]  # 12 Guard, 2 Handmaid, 2 Prince
+const NOBLE_3P_PRINCE_LAST_END_LEFT: Array[int] = [7, 0, 0, 0, 0, 0, 0, 0]  # 16 - 7 plays - 2 hits
+
+# TEST D, 2p fixture - the fallback pile order with a main-pile leftover in front of the widow.
+# 2p burns 3 (widow = 3 cards) and leaves 1 card in the MAIN pile, and `Deck.pop(true)` pops the
+# main pile before the widow. Seat 1 holds three Princes in a row (first-hand + family[0] +
+# family[1]) and hits seat 0 on turns 2, 4 and 6; seat 0 only plays Guards, so he is never
+# protected and is always the target. Seat 0's family (5) is drained by 3 own draws + 2 hits, so
+# the 6th turn's hit is the one and only empty-family hit this round can produce - and it takes the
+# MAIN pile card, not a widow card.
+const NOBLE_2P_PRINCE: Array[Deck.CardType] = [
+	Deck.CardType.Guard, Deck.CardType.Guard, Deck.CardType.Guard, Deck.CardType.Guard,
+	Deck.CardType.Prince, Deck.CardType.Guard, Deck.CardType.Prince, Deck.CardType.Guard,
+	Deck.CardType.Prince, Deck.CardType.Guard, Deck.CardType.Guard, Deck.CardType.Guard,
+	Deck.CardType.Guard, Deck.CardType.Guard, Deck.CardType.Guard, Deck.CardType.Guard,
+]
+const NOBLE_2P_PRINCE_LEFT: Array[int] = [13, 0, 0, 0, 3, 0, 0, 0]  # 13 Guard, 3 Prince
+const NOBLE_2P_PRINCE_END_LEFT: Array[int] = [7, 0, 0, 0, 0, 0, 0, 0]  # 16 - 6 plays - 3 hits
+
 var _failed: int = 0
 var _deck: Deck
 var _c_plays: Array[int] = [0, 0, 0, 0]  # TEST C: plays per seat, counted on `move_chosen`
@@ -678,6 +708,8 @@ func _test_prince_paths() -> void:
 	print("\n########## TEST D: Prince - family draw, widow fallback, elimination (step 15) ##########")
 	await _test_prince_4p()
 	await _test_prince_3p()
+	await _test_prince_last_family_card()
+	await _test_prince_2p_mainpile()
 
 
 func _test_prince_4p() -> void:
@@ -862,6 +894,178 @@ func _test_prince_3p() -> void:
 	await await_frames(2)
 
 
+# The one case the two fixtures above cannot produce: a hit that finds exactly ONE family card. In
+# 4p the hits land on turns 4 and 8 and seat 2 draws on turn 7 in between, so his family is 2 then
+# 0 at the hits; in the 3p fixture seat 0 is hit on turns 2, 3 (family 3, 2) and 5, 6 (family 0).
+# Here seat 2's Princes (turns 3 and 6) sit one turn after seat 1's own draws (turns 2 and 5), so
+# the family is 3 at the first hit and 1 at the second: the target consumes his LAST family card and
+# stays in the round. A `family.size() >= 2` test in the Prince branch passes every other fixture of
+# this suite (the 3p fixture's widow fallback then happens to land at the same play), so THIS round
+# is what pins "family first, the whole family, and the widow only when it is really empty".
+func _test_prince_last_family_card() -> void:
+	var main = _scripted_main(3, NOBLE_3P_PRINCE_LAST, NOBLE_3P_PRINCE_LAST_LEFT)
+	await _settle_deal(main)
+	check(main._deck._widow_cards.size() == 1 and main._deck._widow.visible,
+		"3p fixture 2 setup: widow 1 Guard, family 4 per seat, main pile 0 - the widow is reachable"
+		+ " but must stay untouched as long as any family card exists")
+	var recs: Array = await _run_to_first_round_end(main)
+	_check_effect_log_basics(recs, main)
+
+	check(recs.size() == 7, "3p fixture 2: " + str(recs.size()) + " plays (7 derived: seat 0 plays 3"
+		+ " times, seat 1 twice, seat 2 twice, and the 2 Prince hits are plays 3 and 6)")
+	var turns: Array = main.round_end_turns[0]
+	var turn_total: int = 0
+	for t in turns:
+		turn_total += int(t)
+	check(turn_total == 8 and int(main.round_end_actor[0]) == 1,
+		"3p fixture 2: " + str(turn_total) + " turns == 7 plays + 1, ended by seat "
+		+ str(main.round_end_actor[0]) + ": seat 1's family hit 0 on turn 6, so turn 8 is the turn"
+		+ " start that finds him out of family cards - the family-out rule, not an elimination")
+
+	var prince_plays: Array[int] = []
+	for i in recs.size():
+		if int(recs[i]["played"]) == Deck.CardType.Prince:
+			prince_plays.append(i + 1)
+	check(prince_plays == [3, 6], "3p fixture 2: the Prince plays are 3 and 6 " + str(prince_plays)
+		+ " - seat 2 plays his first-hand Prince on turn 3 and family[0] on turn 6")
+	var targets_ok := true
+	for n in prince_plays:
+		targets_ok = targets_ok and int(recs[n - 1]["target"]) == 1
+	check(targets_ok, "3p fixture 2: both Prince plays target seat 1 - seat 0 is protected by his"
+		+ " Handmaids (played on turns 1 and 4), seat 1 never plays one, and the target is the lowest"
+		+ " index live unprotected seat")
+
+	var hit1: Dictionary = recs[2]
+	check(int(hit1["before"]["fams"][1]) == 3,
+		"3p fixture 2 hit 1 (play 3): seat 1's family is 3 (his own draw on turn 2 took the 4th card)"
+		+ " -> 3 family cards left, the widow is not in the picture")
+	check(int(hit1["after"]["fams"][1]) == 2 and int(hit1["after"]["hands"][1]) == 1
+			and int(hit1["after"]["widow"]) == 1 and bool(hit1["after"]["active"][1]),
+		"3p fixture 2 hit 1: family draw 3 -> 2, hand back to 1 card, widow still 1, seat 1 in the round")
+
+	var hit2: Dictionary = recs[5]
+	check(int(hit2["before"]["fams"][1]) == 1,
+		"3p fixture 2 hit 2 (play 6): seat 1's family is exactly 1 (turn 5 was his own last draw) -"
+		+ " THE case: the target holds one family card, and it is the last one")
+	check(int(hit2["after"]["fams"][1]) == 0 and int(hit2["after"]["hands"][1]) == 1
+			and int(hit2["after"]["widow"]) == 1 and bool(hit2["after"]["active"][1]),
+		"3p fixture 2 hit 2: the Prince takes the LAST family card (family 1 -> 0), NOT the widow"
+		+ " (widow 1 -> 1, hand == 1 card, seat 1 is still in the round) - an empty family is what"
+		+ " opens the fallback, not a small family")
+
+	check(main.pile_draws == 0, "3p fixture 2: " + str(main.pile_draws) + " draws from a pile the"
+		+ " whole round - the widow sprite stayed visible and its 1 card was never touched")
+	check(main.eliminations == 0 and main.eliminated_seats.is_empty(),
+		"3p fixture 2: no elimination (" + str(main.eliminated_seats) + ") - every hit found a family"
+		+ " card, and the Guard probes all declare Priest against Guard hands")
+	check(main.family_draws[0] == 3 and main.family_draws[1] == 4 and main.family_draws[2] == 2,
+		"3p fixture 2: family draws per seat " + str(main.family_draws) + " - seat 1's 4 family cards"
+		+ " are 2 own draws + 2 hits, seat 0's 3rd draw (turn 7) takes his last family card, seat 2"
+		+ " played and drew twice")
+	var fams_at_end: Array = main.round_end_families[0]
+	check(int(fams_at_end[1]) == 0,
+		"3p fixture 2: the seat that ended the round (seat 1) has family 0 - the family-out rule"
+		+ " fired on the seat to act, nothing else")
+	check(int(fams_at_end[0]) == 1 and int(fams_at_end[2]) == 2,
+		"3p fixture 2: the other live seats still hold family cards (" + str(fams_at_end)
+		+ " per seat): the round ends on the SEAT TO ACT being out, not on every family being empty")
+	_check_left_end(recs, NOBLE_3P_PRINCE_LAST_END_LEFT, "3p fixture 2")
+	_check_pairings(main)
+	main.queue_free()
+	await await_frames(2)
+
+
+# 2p is the only player count with a main-pile leftover (16 - 3 burn - 2 first-hand - 2 x 5 family
+# = 1), and `Deck.pop(true)` pops the main pile before the widow - so the 2p Prince fallback is
+# main pile first, widow second. It also shows the consequence: the empty-family window is ONE turn
+# (between the draw that empties a family and that seat's own turn-start check), so that single 1-card
+# main pile absorbs the round's only empty-family hit and the 3-card widow stays inert.
+func _test_prince_2p_mainpile() -> void:
+	var main = _scripted_main(2, NOBLE_2P_PRINCE, NOBLE_2P_PRINCE_LEFT)
+	await _settle_deal(main)
+	var deck: Deck = main._deck
+	check(deck._widow_cards.size() == 3 and main._deck._widow.visible,
+		"2p setup: burn 3 -> the widow holds 3 cards and is visible")
+	var main_pile := 0
+	# `_left` is every card not in the discard pile: main pile + widow + every family + every hand
+	# (`Deck.discard()` is the only decrement), so the main pile size falls out of the deal
+	for n in deck._left.size():
+		main_pile += int(deck._left[n])
+	main_pile -= deck._widow_cards.size()
+	for p in main._players:
+		if p.is_active():
+			main_pile -= p.family_size()
+			main_pile -= p.hand.get_child_count()
+	check(main_pile == 1, "2p setup: the main pile keeps 16 - 3 burn - 2 first-hand - 10 family = 1"
+		+ " card (computed from the dealt piles: " + str(main_pile) + ") - the only fallback card that"
+		+ " sits IN FRONT of the widow")
+
+	var recs: Array = await _run_to_first_round_end(main)
+	_check_effect_log_basics(recs, main)
+
+	check(recs.size() == 6, "2p: " + str(recs.size()) + " plays (6 derived: seat 0 plays 3 times"
+		+ " (turns 1, 3, 5), seat 1 three times (turns 2, 4, 6), and seats 2/3 are disabled)")
+	var turns: Array = main.round_end_turns[0]
+	var turn_total: int = 0
+	for t in turns:
+		turn_total += int(t)
+	check(turn_total == 7 and int(main.round_end_actor[0]) == 0,
+		"2p: " + str(turn_total) + " turns == 6 plays + 1, ended by seat 0 - seat 0's own draw on turn"
+		+ " 5 took his 5th family card (3 own + 2 hits), so turn 7 finds his family empty")
+
+	var prince_plays: Array[int] = []
+	for i in recs.size():
+		if int(recs[i]["played"]) == Deck.CardType.Prince:
+			prince_plays.append(i + 1)
+	var all_on_zero := true
+	for n in prince_plays:
+		all_on_zero = all_on_zero and int(recs[n - 1]["target"]) == 0
+	check(prince_plays == [2, 4, 6] and all_on_zero,
+		"2p: the Prince plays are 2, 4, 6 " + str(prince_plays) + ", all on seat 0 - seat 1 plays"
+		+ " first-hand Prince, then the family[0] / family[1] Princes the previous hit handed him, and"
+		+ " seat 0 never plays a Handmaid so he is always the target")
+
+	var hit1: Dictionary = recs[1]
+	check(int(hit1["before"]["fams"][0]) == 4 and int(hit1["after"]["fams"][0]) == 3
+			and int(hit1["after"]["widow"]) == 3 and int(hit1["after"]["main_pile"]) == 1,
+		"2p hit 1 (play 2): family 4 -> 3 (seat 0's own draw on turn 1 took one of his 5 family cards),"
+		+ " the widow (3) and the 1-card main pile are untouched")
+	var hit2: Dictionary = recs[3]
+	check(int(hit2["before"]["fams"][0]) == 2 and int(hit2["after"]["fams"][0]) == 1
+			and int(hit2["after"]["widow"]) == 3,
+		"2p hit 2 (play 4): family 2 -> 1 (seat 0 drew on turns 1 and 3, so 2 cards were left) - the"
+		+ " widow is still untouched, the family still has a card")
+
+	var hit3: Dictionary = recs[5]
+	var main_before: int = int(hit3["before"]["main_pile"])
+	var main_after: int = int(hit3["after"]["main_pile"])
+	check(int(hit3["before"]["fams"][0]) == 0 and main_before == 1 and int(hit3["before"]["widow"]) == 3
+			and int(hit3["before"]["on_table"]) == 1,
+		"2p hit 3 (play 6): the family is empty, the main pile holds its 1 leftover card, the widow"
+		+ " its 3 - the full fallback chain is in play at once (the 1 card the snapshot counts on the"
+		+ " table is the played Prince itself, which `discard()` has not counted yet)")
+	check(main_after == 0 and int(hit3["after"]["widow"]) == 3 and int(hit3["after"]["hands"][0]) == 1
+			and bool(hit3["after"]["active"][0]),
+		"2p hit 3: seat 0 drew THE MAIN PILE leftover (main pile 1 -> 0), NOT a widow card (widow"
+		+ " 3 -> 3): `Deck.pop(true)` pops the main pile first, so the fallback order is family ->"
+		+ " main pile -> widow")
+	check(!deck._main.visible, "2p hit 3: the main pile sprite is hidden once its leftover is spent"
+		+ " (update_piles() keeps it in sync)")
+	check(main.pile_draws == 1, "2p: exactly " + str(main.pile_draws) + " draw from a pile the whole"
+		+ " round - the empty-family window is one turn long, so 1 is all a 2p round can produce, and"
+		+ " the 1-card main pile absorbs it: in 2p the widow is never drawn")
+	check(main.eliminations == 0 and main.eliminated_seats.is_empty(),
+		"2p: no elimination (" + str(main.eliminated_seats) + ") - the main pile absorbed the only"
+		+ " empty-family hit, so nothing was left undrawable")
+	check(main.family_draws[0] == 5 and main.family_draws[1] == 3,
+		"2p: family draws per seat " + str(main.family_draws) + " - seat 0's 5 family cards are 3 own"
+		+ " draws + 2 hits (the 3rd hit found 0 and drew none), seat 1 draws on his own 3 turns")
+	_check_left_end(recs, NOBLE_2P_PRINCE_END_LEFT, "2p")
+	_check_pairings(main)
+	main.queue_free()
+	await await_frames(2)
+
+
 # Start a whole game on a scripted deal: the fake deck replays the scripted supply through the
 # production Noble deal table, and the counting Main records the events a harness cannot poll.
 func _scripted_main(count: int, scripted: Array[Deck.CardType], scripted_left: Array[int]):
@@ -919,6 +1123,7 @@ func _check_effect_log_basics(recs: Array, main) -> void:
 	var offenders: Array = []
 	var left_ok := true
 	var min_left := true
+	var piles_ok := true
 	for r in recs:
 		var after: Dictionary = r["after"]
 		for i in 4:
@@ -935,6 +1140,12 @@ func _check_effect_log_basics(recs: Array, main) -> void:
 		left_ok = left_ok and int(after["left_sum"]) == expected
 		for n in after["left"]:
 			min_left = min_left and int(n) >= 0
+		# the derived main-pile size must never go negative, before or after the effect resolved
+		for side in ["before", "after"]:
+			var s: Dictionary = r[side]
+			piles_ok = piles_ok and int(s["main_pile"]) >= 0 and int(s["widow"]) >= 0
+			for n in s["left"]:
+				min_left = min_left and int(n) >= 0
 	for o in offenders:
 		print("  (offender) " + str(o))
 	check(one_card, "every play left exactly 1 hand card in every live seat (the invariant the whole"
@@ -943,7 +1154,11 @@ func _check_effect_log_basics(recs: Array, main) -> void:
 	check(left_ok, "sum(_left) == 16 - plays - Prince plays at EVERY play of the round: cards leave"
 		+ " play on a play (1) and on a Prince hit (the target's hand card, 1), and family / widow"
 		+ " dealing decrements nothing")
-	check(min_left, "no `_left` counter ever went negative (discard()'s assert would have fired)")
+	check(min_left, "no `_left` counter ever went negative, in the BEFORE and the AFTER snapshot"
+		+ " (discard()'s assert would have fired)")
+	check(piles_ok, "the derived pile sizes (main pile = `_left` total - widow - families - hands -"
+		+ " cards on the table) never went negative either - the identity the harness derives them"
+		+ " from holds at every snapshot")
 
 
 func _check_left_end(recs: Array, expected: Array[int], tag: String) -> void:
