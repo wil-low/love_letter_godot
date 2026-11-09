@@ -304,8 +304,9 @@ beliefs and 1 750 self-eliminations - the number that made section 1 read as sev
 
 Step 4 pins the **deal table** of `Deck.prepare_noble()`; later steps append scripted cases to
 the same file (step 14 round end, step 15 Prince family/widow/elimination, step 16 elimination
-reveal + discard accounting, step 17 the continuous `_left` audit on the real deck, step 31 joint move
-legality and L1 determinism). TEST A needs no
+reveal + discard accounting, step 17 the continuous `_left` audit on the real deck, step 18 the
+seat's own family stack node, step 19 the family draw modal, step 31 joint move legality and L1
+determinism). TEST A needs no
 `Main` scene - it drives the real `Deck` scene directly, 200 seeded deals per player count.
 
 | player count | burn / widow | first-hand | family per seat | main pile leftovers |
@@ -553,6 +554,86 @@ FAILED` line of `tests/noble_family_rules.tscn`, 531 checks on the shipped code,
 | render **every** seat's family (`is_human()` gate removed) | **67** | F1 3, F2 16, F3 13, E1 13, E2 12, E3 9, TEST C2 1 — a public AI family is counted twice by the supply census (family data + rendered nodes), so the step-17 audit catches it |
 | connect `input_event` on stack cards | **16** | F1 4, F2 5, F3 4 ("the stack connects NO input_event") + E1/E2/E3 1 each (the reveal record) |
 | `set_inactive()` frees the stack node after the reveal | **stall** | `SCRIPT ERROR: Cannot call method 'get_children' on a previously freed instance` in `Player.clear_family_nodes`, then TEST C2 reports accounting violations and the run never settles (killed at 300 s) — the node has to live on: it is the seat's menu, reveal surface and next round's re-deal |
+
+
+### TEST G — the family draw modal: a tap reports the family INDEX, exactly once (step 19)
+
+`family_selector/family_selector.{gd,tscn}` is the modal a human seat uses for the **mandatory**
+family draw. It is the `type_selector` shape — a `Node2D` of `Card` children plus the one selection
+sprite — with three differences: the row is **rebuilt from the family data** on every `open()` (a
+family is 0..5 cards, not the fixed 11 types), a tap **commits** (there is no confirm step and no
+cancel control anywhere, because the draw is not optional), and it reports an **index**: `Main` pops
+`p.family[idx]`. That last point is why the panel is a *view* of the seat's data — `open()` takes
+the array, `duplicate()`s it, and the panel can never invent, add, remove, reorder, hide, sort or
+count a card the seat does not own.
+
+`open()` lays the family out as ONE row per the todo (`x = 12 + i*12`, `y = 22`), capped at
+`MAX_CARDS = 5`, which **is** the deal table's biggest family, so a full family is one row:
+
+| players | family size | row x | row spans (of the 84x48 board) |
+|---|---|---|---|
+| 2 | 5 | 12, 24, 36, 48, 60 | 12..71 |
+| 3 | 4 | 12, 24, 36, 48 | 12..59 |
+| 4 | 3 | 12, 24, 36 | 12..47 |
+
+The 12 px pitch on 11 px cards leaves a 1 px gap, so five 11x17 tap targets (88x136 px at scale 8)
+can never merge into one zone. 49 checks:
+
+- **G1, the row** — starts with exactly the one sprite node (no widgets, no Control node); the row
+  is `x = 12 + i*12, y = 22` in **as-dealt order** at 3, 4 and 5 cards; every card is face-up (the
+  family is the seat's own face-up half-deal); every card carries exactly **one** `input_event`
+  connection (tappability is the whole UI, and a double connection is a double commit);
+  `MAX_CARDS == NOBLE_FAMILY_SIZE.max() == 5` with a 5-card family open, the last card lands at
+  x 60..71, i.e. the modal fits the board it is centred over — **no paging is needed for the
+  biggest family the deal table can produce**; re-`open()`ing with a different size rebuilds the
+  row exactly (one panel serves every turn start and every Prince redraw); `open()` on an EMPTY
+  family refuses to open **and closes the row it was showing** (an empty family means the round is
+  over at turn start, or the target is out for Prince — a modal with no card to tap is a deadlocked
+  turn, and a modal left open on its previous row is a family the seat no longer owns); and
+  `set_selection(2)` dims the other cards and moves the type-selector's sprite onto the chosen
+  card, while `set_selection(-1)` clears both.
+- **G2, the tap -> index contract** — a synthetic tap (`Area2D.input_event` with a mouse-press
+  event at the card's centre, the event `Card.pressed()` consumes) on the cards at index **2, 0, 4**
+  of a 3-card row and a 4-card row emits **exactly that index**, once (`draws == [2]` … `[4]`), and
+  closes the panel (hidden, disarmed). The mapping is index -> card, not position -> order: a panel
+  that sorted its row, reported the tap's x, or re-read the family at commit time would still show
+  a plausible row of face-up cards and hand `Main` the **wrong** card. A second tap on the same
+  index is refused (no second emission), an out-of-row index is refused, and a CLOSED panel commits
+  nothing — the draw is mandatory, so the panel must be armable only (`open()`), closable only
+  (`close()`), and never self-armed. `close()` alone does not re-arm: re-`open()`ing does, so a
+  panel that re-armed itself on close would emit twice per turn start.
+- **G3, a view, never an owner** — popping a card out of the family array **while the modal is
+  open** cannot retype the row (the panel shows a copy: the row keeps its 5 cards, the caller's
+  array is 4); `open()` never pops, and `close()` leaves the family array elementwise intact — the
+  destructive half is what matters, because an untyped local (`var types = family`) shares the
+  seat's array, so the panel's own `close()` would empty the seat's family (the reference-sharing
+  trap step 17 hit, with a hand as the victim); a cancel/BACK control is never created at any point
+  of the lifecycle, and after `close()` the panel is back to the bare sprite node — a row that
+  survives its modal keeps live `Area2D` zones over the board.
+
+`godot --headless --path . family_selector/family_selector.tscn` runs the panel as a persistent
+`Node2D` until the timeout kills it, with no `SCRIPT ERROR`; the todo's debug run (open it with a
+fake family of 5 types, tap it, watch the index + the row) is scripted as G1/G2, which open a
+5-card fake family and tap it.
+
+| sabotage | detected by | measured FAILs |
+|---|---|---|
+| the panel reports index 0 whatever the tap (`emit(0)`) | G2 (the taps at 2 and 4) | 5 |
+| a tap does not close the modal | G2 (hidden, closed-panel commit, re-arm) | 3 |
+| cards are not tappable (`input_event` never connected) | G1 (connections) + G2 (taps emit nothing) | 3 |
+| the row is sorted before building it | G1 (as-dealt order) + G2 (index->card map) + G3 (names) | 5 |
+| `close()` keeps the row on screen | G1 (close drops the row) + G3 (back to the bare sprite) | 3 |
+| a `Button "BACK"` node added to the scene | G1 (no control at start / after open+close) + G3 | 6 |
+| the family is kept **by reference** (untyped local, so `close()` clears the seat's array) | G3 (the family survives `close()` intact) | 1 |
+| close keeps row + data and leaves the panel armed (double commits) | G1 (2) + G2 (4: 2nd tap refused, closed panel commits nothing, exactly one emission) + G3 (1) | 7 |
+| `MAX_CARDS = 4` (a 2p family clips) | G1 (cap == deal table) + G1 (the 5-card row fits the board) | 2 |
+| the row reuses the CARD column (`x = 30 + i*22`) | G1 (geometry) + G1 (the 5-card row ends past 84 px) | 2 |
+| `open([])` warns and returns, leaving the previous row on screen | G1 (an empty family closes the stale row) | 1 |
+
+One sabotage was measured as **not** detectable, and is worth stating: deleting only the
+`_armed = false` line in `select()` leaves every check PASS, because `close()` disarms and empties
+the panel's copy — the commit gate that G2 pins is the row's contents, and a closed panel cannot
+name a card it no longer shows.
 
 
 ## tests/noble_family_smoke.tscn — Noble Family variant, whole games on the AI (steps 7, 11, 14)

@@ -2606,6 +2606,12 @@ func _test_fs_copy() -> void:
 		+ " Main does the pop, so a panel that also popped would delete a card the seat never played"
 		+ " and desync the `_left` accounting (a family card leaves play only when it is played)")
 	sel.close()
+	var kept: Array = _ftypes(untouched)
+	check(kept == before_types, tag + ": and `close()` leaves the family array alone TOO (" + str(kept)
+		+ " == " + str(before_types) + ") - the destructive half is the one that matters: a panel that"
+		+ " keeps the family BY REFERENCE (an untyped `var types = family` shares the seat's array, the"
+		+ " trap step 17 hit) would EMPTY the seat's family in its own close(): the seat loses cards he"
+		+ " never played, his draw is skipped and the `_left` census desyncs")
 	await await_frames(2)
 	check(_fs_controls(sel).is_empty(), tag + ": closing and re-opening never CREATES a control ("
 		+ str(_fs_controls(sel)) + ") - the modal has no cancel/BACK at any point of a game, not"
