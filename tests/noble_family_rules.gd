@@ -46,6 +46,7 @@ const DeckScene := preload("res://deck/deck.tscn")
 const MainScene := preload("res://main/main.tscn")
 const PlayerScene := preload("res://player/player.tscn")
 const FakeDeckScript := preload("res://tests/fake_deck.gd")
+const FamilySelectorScene := preload("res://family_selector/family_selector.tscn")
 const CountingMainScript := "res://tests/counting_main.gd"  # load()ed at runtime: preload() of a
 # script that extends Main is a cyclic dependency (this harness preloads main.tscn)
 
@@ -236,6 +237,7 @@ func _ready() -> void:
 	await _test_prince_paths()
 	await _test_elimination_reveal()
 	await _test_family_stack()
+	await _test_family_selector()
 	await await_frames(1)
 
 	print("\n==========================")
@@ -2267,4 +2269,349 @@ func _test_stack_4p() -> void:
 		+ " `_new_round()` calls `init_discard_pile(_player_count)`, which re-enables every seat, and the seat that"
 		+ " was out is re-dealt a family the human cannot see")
 	main.queue_free()
+	await await_frames(2)
+
+
+# ----------------------------------------------------------------------------------------
+# TEST G (todo step 19): the family draw MODAL (`family_selector/family_selector.tscn`)
+#
+# TEST F's stack is the human's VIEW of his family; the modal is where he CHOOSES. Pinned here:
+#  1. `open(family)` REBUILDS one row of face-up cards from the family data - as-dealt order,
+#     12 px pitch at y 22, up to 5 cards, the 5-card row centred on the Table inside 84 x 48;
+#  2. a tap reports the FAMILY INDEX (`draw_selected(family_idx)`): Main pops `family[idx]`, so the
+#     panel reports WHICH of his cards he picked and can never invent a card or rename one;
+#  3. exactly ONE emission per `open()`, the panel closes itself on the tap (no modal leak), a tap
+#     after the choice commits nothing, and a tap outside the row does nothing;
+#  4. NO cancel/BACK control exists (the draw is mandatory): the panel contains no Control node at
+#     all, so the only tappable nodes are the family cards;
+#  5. the row is a COPY of the family data and the panel never touches the seat: a family pop while
+#     the modal is open cannot retype a card on screen, and `open()`/`close()` pop nothing.
+#
+# A headless "tap" is: `Input.action_press("left_click")` - `InputEvent.is_action_pressed()` reads
+# the Input singleton's ACTION STATE, not the event - then fire the `Area2D.input_event` signal the
+# panel connected, then release the action.
+# ----------------------------------------------------------------------------------------
+const FS_ORIGIN := Vector2(12, 22)
+const FS_PITCH: int = 12
+const FS_MAX: int = 5
+
+
+func _test_family_selector() -> void:
+	print("--- TEST G1 (unit): open() rebuilds the family as ONE tappable row of face-up cards ---")
+	await _test_fs_open()
+	print("--- TEST G2: a tap reports the family INDEX, exactly once, and closes the modal ---")
+	await _test_fs_tap()
+	print("--- TEST G3: a copy of the data, no cancel control, close() drops the row ---")
+	await _test_fs_copy()
+
+
+func _fs_panel():
+	var sel = FamilySelectorScene.instantiate()
+	add_child(sel)
+	return sel
+
+
+# The panel's row, in tree order == family order (the same dict shape `_rn` / `_xs` / `_faceups`
+# read, plus the node, so a harness can fire the card's own `input_event` signal)
+func _fs_cards(sel) -> Array:
+	var out: Array = []
+	for ch in sel.get_children():
+		if ch is Card:
+			out.append({
+				"type": int(ch.type),
+				"faceup": bool(ch.faceup),
+				"x": int(ch.position.x),
+				"y": int(ch.position.y),
+				"conns": int(ch.input_event.get_connections().size()),
+				"mod": int(int(ch.modulate.a * 100)),
+				"node": ch,
+			})
+	return out
+
+
+func _fs_tap(card: Node) -> void:
+	var ev := InputEventMouseButton.new()
+	ev.button_index = MOUSE_BUTTON_LEFT
+	ev.pressed = true
+	Input.action_press("left_click")
+	card.emit_signal("input_event", null, ev, 0)
+	Input.action_release("left_click")
+
+
+func _fs_ys(cards: Array) -> Array:
+	var out: Array = []
+	for c in cards:
+		out.append(int(c["y"]))
+	return out
+
+
+func _fs_mods(cards: Array) -> Array:
+	var out: Array = []
+	for c in cards:
+		out.append(int(c["mod"]))
+	return out
+
+
+# Every Control node under the panel, at any depth: a Button is a way to leave the modal without
+# drawing, which the variant rules forbid (the turn-start draw and a Prince redraw are mandatory)
+func _fs_controls(sel: Node) -> Array:
+	var out: Array = []
+	for ch in sel.get_children():
+		if ch is Control:
+			out.append(str(ch.get_class()) + ":" + str(ch.name))
+		out.append_array(_fs_controls(ch))
+	return out
+
+
+# A DESCENDING family of distinct, real-deal-legal types: a sort of the row is visible in the order
+# (and a sort would break the index -> card mapping, which is what G2 pins)
+func _fs_family(size: int) -> Array[Deck.CardType]:
+	var all: Array[Deck.CardType] = [
+		Deck.CardType.Princess, Deck.CardType.Countess, Deck.CardType.King, Deck.CardType.Prince,
+		Deck.CardType.Handmaid]
+	var out: Array[Deck.CardType] = []
+	for i in size:
+		out.append(all[i])
+	return out
+
+
+func _fs_family_names(size: int) -> Array:
+	var all: Array = ["Princess", "Countess", "King", "Prince", "Handmaid"]
+	var out: Array = []
+	for i in size:
+		out.append(all[i])
+	return out
+
+
+func _fs_max_family() -> int:
+	var m: int = 0
+	for n in Deck.NOBLE_FAMILY_SIZE.size():
+		m = max(m, int(Deck.NOBLE_FAMILY_SIZE[n]))
+	return m
+
+
+func _fs_inside(cards: Array) -> bool:
+	var inside: bool = true
+	for c in cards:
+		inside = inside and int(c["x"]) >= 0 and int(c["x"]) + 11 <= 84 \
+			and int(c["y"]) >= 0 and int(c["y"]) + 17 <= 48
+	return inside
+
+
+func _fs_rects(cards: Array) -> Array:
+	var out: Array = []
+	for c in cards:
+		out.append("[" + str(int(c["x"])) + "," + str(int(c["y"])) + "]-"
+			+ "[" + str(int(c["x"]) + 11) + "," + str(int(c["y"]) + 17) + "]")
+	return out
+
+
+# G1: the row itself - geometry, order, visibility, tappability, the 5-card cap, the rebuild
+func _test_fs_open() -> void:
+	var tag := "G1"
+	var sel = _fs_panel()
+	await await_frames(1)
+	check(!sel.visible and !sel.is_open(), tag + ": the panel is CLOSED at scene setup (visible "
+		+ str(sel.visible) + ", armed " + str(sel.is_open()) + ") - a panel open at startup eats taps"
+		+ " before a family exists, and step 20 shows it through `open()` only")
+	check(int(sel.get_child_count()) == 1, tag + ": an empty panel is ONE node (the selection sprite) -"
+		+ " the row is BUILT FROM DATA on every open, so a panel that kept the previous family's cards"
+		+ " would show a family the seat does not own")
+	check(_fs_max_family() == FS_MAX, tag + ": the panel's " + str(FS_MAX) + "-card cap IS the deal"
+		+ " table's biggest family (`Deck.NOBLE_FAMILY_SIZE` max " + str(_fs_max_family()) + ", 2p)"
+		+ " - a full family fits in one row, so the human chooses among ALL of it, with no paging and"
+		+ " no hidden card")
+
+	var fam: Array[Deck.CardType] = _fs_family(FS_MAX)
+	sel.open(fam)
+	var cards: Array = _fs_cards(sel)
+	check(sel.visible and sel.is_open(), tag + ": `open()` OPENS the panel (visible " + str(sel.visible)
+		+ ", armed " + str(sel.is_open()) + ")")
+	check(cards.size() == FS_MAX, tag + ": a 5-card family renders 5 cards (" + str(cards.size())
+		+ ") - 1 node per family card, like the seat's stack")
+	check(_rn(cards) == _fs_family_names(FS_MAX), tag + ": the row is the family in AS-DEALT order ("
+		+ str(_rn(cards)) + " expected " + str(_fs_family_names(FS_MAX)) + ") - never sorted: the row"
+		+ " order IS the index order Main pops, so a sorted row draws a card other than the one tapped")
+	check(_xs(cards) == [12, 24, 36, 48, 60], tag + ": the row is x " + str(FS_ORIGIN.x) + " + i *"
+		+ str(FS_PITCH) + " (" + str(_xs(cards)) + ") - a 12 px pitch on 11 px cards leaves a 1 px gap,"
+		+ " so 5 tap targets of 11 x 17 px (88 x 136 px on screen at scale 8) never merge into one")
+	check(_fs_ys(cards) == [22, 22, 22, 22, 22], tag + ": every card sits at y " + str(FS_ORIGIN.y)
+		+ " (" + str(_fs_ys(cards)) + ") - ONE row, centred over the Table: below the top seat row"
+		+ " (y 0..17) and above the target-selection labels (y 36+)")
+	var ups: bool = true
+	for c in cards:
+		ups = ups and bool(c["faceup"])
+	check(ups, tag + ": every card of the row is FACE-UP (" + str(_faceups(cards))
+		+ ") - these are the human's OWN private family cards, he is allowed to see them; the panel is"
+		+ " the one place a family is face-up on a screen that never publishes an AI family")
+	var conns: int = 0
+	for c in cards:
+		conns += int(c["conns"])
+	check(conns == cards.size() and _fs_cards(sel).size() == cards.size(), tag + ": every card connects"
+		+ " EXACTLY ONE input_event (" + str(conns) + " connections, " + str(cards.size())
+		+ " cards) - the row is tappable (the stack of step 18 connects ZERO: it is a view, this is the"
+		+ " control) and a card with 2 connections would emit the draw twice per tap")
+	check(_fs_inside(cards), tag + ": the whole row is INSIDE the 84 x 48 viewport ("
+		+ str(_fs_rects(cards)) + ") - no scroll, no zoom, no second row on a phone")
+	var last: Card = cards[FS_MAX - 1]["node"]
+	check(int(FS_ORIGIN.x) == 12 and int(last.position.x) + 11 == 71, tag + ": a full row spans x"
+		+ " 12..71, i.e. centred on the 84 px board (centre 41.5 vs the board's 42) - the modal is"
+		+ " 'centred over the Table', and 12 px of pitch x 5 cards is the widest row that stays centred")
+	check(_fs_controls(sel).is_empty(), tag + ": the panel contains NO Control/Button node ("
+		+ str(_fs_controls(sel)) + ") - there is no cancel, no BACK, no 'draw the last card' shortcut:"
+		+ " the draw is MANDATORY, so the only way out of the modal is a family card")
+
+	# a re-open is a REBUILD from the new data, not an append to the old row
+	sel.open(_fs_family(3))
+	var three: Array = _fs_cards(sel)
+	check(three.size() == 3, tag + ": re-opening with a 3-card family renders 3 cards ("
+		+ str(three.size()) + "), not 5 + 3 - the modal shows the family the seat has NOW (a Prince"
+		+ " redraw is asked from a family that already lost cards, and a 4p family is 3, never 5)")
+	check(_xs(three) == [12, 24, 36] and _rn(three) == _fs_family_names(3), tag + ": the 3-card row"
+		+ " starts at the same x " + str(FS_ORIGIN.x) + " (" + str(_xs(three)) + ") - the row is left-"
+		+ " anchored on the same slot, so the family's first card is always under the same finger")
+	check(_fs_inside(three), tag + ": the 3-card row is inside the viewport (" + str(_fs_rects(three))
+		+ ") - 3p and 4p families (4 and 3 cards) fit the same row the 2p family of 5 fits")
+
+	# an empty family never opens a panel: the row would have no tap target and the turn would stick
+	var fam0: Array[Deck.CardType] = []
+	sel.open(fam0)
+	check(!sel.visible and !sel.is_open() and int(sel.get_child_count()) == 1, tag + ": `open()` on an"
+		+ " EMPTY family refuses to open AND closes the 3-card row it was showing (visible "
+		+ str(sel.visible) + ", cards " + str(int(sel.get_child_count()) - 1) + ") - an empty family"
+		+ " means the round is over (turn start) or the target is out (Prince); a modal with no card to"
+		+ " tap is a deadlocked turn, and a modal that stayed open on its previous row is a family the"
+		+ " seat no longer owns")
+
+	# the selection sprite: the tapped card flashes, the rest fade (no confirm step exists, so this
+	# is the choice flash, not a confirmation widget)
+	sel.open(_fs_family(4))
+	sel.set_selection(2)
+	var four: Array = _fs_cards(sel)
+	check(four.size() == 4 and _fs_mods(four) == [25, 25, 100, 25], tag + ": `set_selection(2)` dims"
+		+ " every card but the chosen one (" + str(_fs_mods(four)) + ") - the human sees which card his"
+		+ " tap committed, at 672 x 384 with 11 px cards and no hover state")
+	var spr: Sprite2D = sel.get_node("FamilySelection") as Sprite2D
+	check(bool(spr.visible) and int(spr.position.x) == int(four[2]["x"]) and int(spr.position.y)
+		== int(four[2]["y"]), tag + ": the selection sprite moves ONTO the chosen card at ("
+		+ str(int(spr.position.x)) + ", " + str(int(spr.position.y)) + ") - the SAME selection sprite"
+		+ " the type selector uses, so the tap feedback is the one the player already knows")
+	sel.set_selection(-1)
+	check(!bool(spr.visible) and _fs_mods(_fs_cards(sel)) == [100, 100, 100, 100],
+		tag + ": `set_selection(-1)` clears the sprite and the dimming - a panel that stayed dimmed"
+		+ " would look like a card was already picked, i.e. like the draw is done")
+	sel.close()
+	check(!sel.visible and !sel.is_open(), tag + ": `close()` closes the panel (visible "
+		+ str(sel.visible) + ", armed " + str(sel.is_open()) + ")")
+	await await_frames(2)
+	check(int(sel.get_child_count()) == 1, tag + ": `close()` drops the ROW (children "
+		+ str(int(sel.get_child_count())) + " = the sprite only) - a closed panel that keeps its cards"
+		+ " keeps tappable Area2D zones over the board and a copy of a family that no longer exists")
+	sel.queue_free()
+	await await_frames(2)
+
+
+# G2: the tap -> index contract, the one step 20 awaits on
+func _test_fs_tap() -> void:
+	var tag := "G2"
+	var sel = _fs_panel()
+	await await_frames(1)
+	var draws: Array[int] = []
+	sel.draw_selected.connect(func(i: int) -> void: draws.append(i))
+	# the MIDDLE card is tapped first, then the first, then the last: a panel that hardcodes index 0
+	# (the step 7 placeholder draw) passes "tap card 0" and fails here
+	for i in [2, 0, 4]:
+		var fam: Array[Deck.CardType] = _fs_family(FS_MAX)
+		sel.open(fam)
+		var cards: Array = _fs_cards(sel)
+		draws.clear()
+		_fs_tap(cards[i]["node"])
+		check(draws.size() == 1, tag + ": tapping family card " + str(i) + " emitted EXACTLY ONE choice"
+			+ " (" + str(draws.size()) + " emissions) - the tap IS the draw: no confirm step to await,"
+			+ " no second emission for Main to consume")
+		check(draws.size() == 1 and draws[0] == i, tag + ": the emitted family index IS the tapped"
+			+ " card's index in the as-dealt family (got " + str(draws) + ", tapped " + str(i)
+			+ ") - the panel reports an index, not a type, so Main pops `family[idx]`"
+			+ " (a panel that reported the FIRST index would be the step 7 placeholder, i.e. the human"
+			+ " would never get to choose)")
+		check(draws.size() == 1 and int(fam[draws[0]]) == int(cards[i]["type"]), tag + ": the emitted"
+			+ " index names the card he tapped (" + Deck.card_names[int(fam[draws[0]])].strip_edges()
+			+ " at family index " + str(draws[0]) + ", tapped "
+			+ Deck.card_names[int(cards[i]["type"])].strip_edges() + ") - index and card agree, so the"
+			+ " card that leaves the family is the card that flies to his hand")
+		check(!sel.visible and !sel.is_open(), tag + ": the panel closed ITSELF on the tap (visible "
+			+ str(sel.visible) + ", armed " + str(sel.is_open()) + ") - Main awaits one signal, and a"
+			+ " panel left open after it is the stuck overlay step 22 guards against")
+		var refused: bool = sel.select(i)
+		check(!refused and draws.size() == 1, tag + ": a SECOND tap on the same index (a real double"
+			+ " tap on a 11 px target) is refused (" + str(refused) + ", emissions " + str(draws.size())
+			+ ") - one emission per `open()`, so a double tap cannot pop two family cards and cannot"
+			+ " break the 1-hand-card invariant the whole design rests on")
+		await await_frames(2)
+
+	# taps that are not a choice: out of the row, a negative index, a closed panel
+	sel.open(_fs_family(3))
+	draws.clear()
+	check(!sel.select(3) and draws.is_empty() and sel.is_open(), tag + ": index 3 of a 3-card row is"
+		+ " refused (emissions " + str(draws.size()) + ") and the panel STAYS OPEN (" + str(sel.is_open())
+		+ ") - a tap outside the cards does nothing, the human still has to draw")
+	check(!sel.select(-1) and draws.is_empty() and sel.is_open(), tag + ": index -1 is refused ("
+		+ str(draws.size()) + " emissions) - no 'nothing' option exists, the draw is mandatory")
+	check(!sel.select(99) and draws.is_empty() and sel.is_open(), tag + ": an out-of-range index is"
+		+ " refused (" + str(draws.size()) + " emissions) - the panel cannot name a family card that"
+		+ " does not exist, so Main's `pop_family(idx)` is always in range")
+	sel.close()
+	draws.clear()
+	check(!sel.select(0) and draws.is_empty() and !sel.is_open(), tag + ": a CLOSED panel commits"
+		+ " nothing (" + str(draws.size()) + " emissions) - the guard is the panel's own arm flag, not"
+		+ " the node's visibility, so a stale connected card from a previous row cannot fire a draw"
+		+ " into the next `await`")
+	# re-arming: the same panel serves every turn of a game
+	sel.open(_fs_family(4))
+	draws.clear()
+	_fs_tap(_fs_cards(sel)[3]["node"])
+	check(draws.size() == 1 and draws[0] == 3, tag + ": re-opening the SAME panel arms it again (emitted"
+		+ " " + str(draws) + ") - one panel node serves every turn start and every Prince redraw of a"
+		+ " game, so a one-shot connection would strand the human's next turn")
+	sel.queue_free()
+	await await_frames(2)
+
+
+# G3: the panel is a VIEW of the data, never its owner
+func _test_fs_copy() -> void:
+	var tag := "G3"
+	var sel = _fs_panel()
+	await await_frames(1)
+	var fam: Array[Deck.CardType] = _fs_family(FS_MAX)
+	var shown: Array = _rn(_fs_cards(sel))
+	sel.open(fam)
+	var row: Array = _rn(_fs_cards(sel))
+	check(row == _fs_family_names(FS_MAX) and shown.is_empty(), tag + ": `open()` is what builds the"
+		+ " row (before: " + str(shown) + ", after: " + str(row) + ") - the panel renders nothing on"
+		+ " construction, so it can be a permanently-allocated node of `main.tscn` (step 20)")
+	# the seat's family can only change through Main; the panel must not retype what the human sees
+	fam.pop_at(0)
+	check(_rn(_fs_cards(sel)) == row, tag + ": a family pop WHILE the modal is open does not retype the"
+		+ " row (" + str(_rn(_fs_cards(sel))) + " == " + str(row) + ") - the row is a COPY, so the"
+		+ " human always chooses among the cards he was shown; Main's exclusivity (step 22: nothing"
+		+ " draws from a family while its modal is open) is what keeps the index aligned")
+	check(int(fam.size()) == FS_MAX - 1, tag + ": the seat's family really shrank (" + str(fam.size())
+		+ " of " + str(FS_MAX) + ") - the panel copied the types, it did not take over the array")
+	var untouched: Array[Deck.CardType] = _fs_family(FS_MAX)
+	var before_types: Array = _ftypes(untouched)
+	sel.close()
+	sel.open(untouched)
+	check(_ftypes(untouched) == before_types, tag + ": `open()` NEVER pops the family it shows ("
+		+ str(_ftypes(untouched)) + " == " + str(before_types) + ") - the panel reports an index and"
+		+ " Main does the pop, so a panel that also popped would delete a card the seat never played"
+		+ " and desync the `_left` accounting (a family card leaves play only when it is played)")
+	sel.close()
+	await await_frames(2)
+	check(_fs_controls(sel).is_empty(), tag + ": closing and re-opening never CREATES a control ("
+		+ str(_fs_controls(sel)) + ") - the modal has no cancel/BACK at any point of a game, not"
+		+ " just on the first open")
+	check(int(sel.get_child_count()) == 1, tag + ": after `close()` the panel is back to the bare"
+		+ " sprite node (children " + str(int(sel.get_child_count())) + ") - a row that survives its"
+		+ " modal is a ghost family a tap can still hit")
+	sel.queue_free()
 	await await_frames(2)
