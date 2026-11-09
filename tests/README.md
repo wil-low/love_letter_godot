@@ -505,6 +505,56 @@ family -> **20 FAILs** across all four fixtures; `if tp.family.size() >= 2` inst
 `not is_empty()` -> **7 FAILs**, all in fixture 3p #2 (the other three are untouched by it, which is
 exactly why fixture 3p #2 exists).
 
+### TEST F — the family stack: 1 node per family card, in the seat, private (step 18)
+
+`Player.render_family(faceup, force)` rebuilds the seat's `$Family` node from the `family` data: one
+`Card` node per card at `x = family_cascade_step() * i`, a cascade of 2 px slivers on 11 px cards.
+The stack is the **seat's own child** (added in `player/player.tscn`, positioned in `Player._ready()`),
+so it follows the seat's position, its scale and its fade; `Main` never renders cards for a seat.
+
+| seat | stack origin (seat-local) | cards cascade | global rect (4 cards) |
+|---|---|---|---|
+| 0 (5, 31), 1 (5, 0) | (26, 0) | right, +9 | x 31..69, y 31..48 (seat 0) |
+| 2 (68, 0), 3 (68, 31) — `right_score` | (-11, 0) | left, -9 | x 30..68, y 31..48 (seat 3) |
+
+What the three fixtures pin:
+
+- **F1, a unit probe on bare seats** (no game loop, so every branch of `render_family()` is reachable):
+  the origin and the mirrored cascade step; a seat with no family renders an empty stack; the stack is
+  the family in **as-dealt order** (a deliberately descending family with two Kings is rendered as
+  dealt, never sorted); the cascade always starts at x 0, so after `pop_family(0)` the top-left card is
+  the next card the seat would draw; 3 re-renders of one family stay 4 nodes (the render is a
+  **rebuild**, a leak would grow one ghost card per draw); the widths (2 hand cards end at seat-local
+  x 24, the stack starts at 26 — 2 px apart on one row; a 5-card stack ends at global x 77 of 84);
+  **an AI seat renders NOTHING** from a 3-card family (0 nodes, family 3), `force` renders it
+  face-DOWN (that is the reveal), and the menu render takes it back to 0 nodes; `clear_family()`
+  clears data **and** nodes, and frees the cards, **not** the stack node.
+- **F2, a whole scripted 2p round** (family 5 per seat, no Priest anywhere): the stack is sampled after
+  each of the human's 5 plays and is his family minus the draws he made — 4, 3, 2, 1, 0 nodes, names
+  `Guard Guard Guard Countess → … → []`, `family_root.get_child_count() == family_size()` at every
+  sample; the hand's right edge (global 29) and the stack's left edge (31) never overlap; the round is
+  11 turns / 10 plays / **0 eliminations / 0 main-pile draws**, so it ends purely on the family-empty
+  rule; the AI seat renders 0 nodes at family 5 and again in round 2 (the re-deal refills the human's
+  stack in the same node, the AI's family stays pixels-free).
+- **F3, the E3 Baron position**: seat 1 holds a full 3-card family and renders 0 nodes before the human's
+  Baron (the human cannot see the cards he is about to publish); the reveal record shows ONE call that
+  rendered into **the seat's own stack node** (not a throwaway container) all 3 cards in as-dealt order;
+  after the discard his stack is 0 nodes and his family data is 0 cards; the human's stack tracks his
+  own draws through plays 2 and 3 (2 → 1 → 0 nodes); at the round end no seat renders a ghost family;
+  in round 2 the seat that was out is back with a fresh invisible family and the human's stack is
+  refilled in the same node.
+
+Sabotage (then `git checkout -- main/main.gd player/player.gd`; the counts are the `N CHECK(S)
+FAILED` line of `tests/noble_family_rules.tscn`, 531 checks on the shipped code, exit 0):
+
+| sabotage | FAILs | where |
+|---|---|---|
+| render the family **sorted** (`family.sort()` before the cascade) | **15** | F1 5, F3 10, F2 0 — and F3's round ends on seat 1, not seat 0: a sort changes the DRAW order, so it changes the game, not just the pixels. F2 is blind to it (its scripted 2p family is ascending already), which is why F1 uses a descending family with two identical Kings |
+| render **every** seat's family (`is_human()` gate removed) | **67** | F1 3, F2 16, F3 13, E1 13, E2 12, E3 9, TEST C2 1 — a public AI family is counted twice by the supply census (family data + rendered nodes), so the step-17 audit catches it |
+| connect `input_event` on stack cards | **16** | F1 4, F2 5, F3 4 ("the stack connects NO input_event") + E1/E2/E3 1 each (the reveal record) |
+| `set_inactive()` frees the stack node after the reveal | **stall** | `SCRIPT ERROR: Cannot call method 'get_children' on a previously freed instance` in `Player.clear_family_nodes`, then TEST C2 reports accounting violations and the run never settles (killed at 300 s) — the node has to live on: it is the seat's menu, reveal surface and next round's re-deal |
+
+
 ## tests/noble_family_smoke.tscn — Noble Family variant, whole games on the AI (steps 7, 11, 14)
 
 Variant games (`main.noble_family = true`) with every seat on the AI (levels 4/4/3/2), animations

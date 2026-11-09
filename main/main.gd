@@ -10,12 +10,12 @@ signal save_stats
 
 const max_games: int = 1000
 
-# Noble Family geometry: the private family stack of a seat, origin + cascade.
-# Seat 0 sits at (5, 31), so the origin is global (31, 31): the free bottom strip x 31..78, y 31..48,
-# right of his 2 hand cards. Cards are 11 px wide, a 9 px cascade leaves 2 px slivers.
-const FAMILY_STACK_ORIGIN := Vector2(26, 0)
-const FAMILY_STACK_MIRROR := Vector2(-11, 0)  # right_score seats (x 68): cards at 57 - 9*i, on the board
-const FAMILY_CASCADE_STEP: int = 9
+# Noble Family geometry lives with the seat (`player/player.gd`: the stack is part of the seat scene,
+# it has to follow the seat's position, scale and fade). These aliases keep the harness references
+# `Main.FAMILY_*` working.
+const FAMILY_STACK_ORIGIN := Player.FAMILY_STACK_ORIGIN
+const FAMILY_STACK_MIRROR := Player.FAMILY_STACK_MIRROR
+const FAMILY_CASCADE_STEP := Player.FAMILY_CASCADE_STEP
 
 var _random_seed: int = 0
 
@@ -151,6 +151,9 @@ func _new_round() -> void:
 			if p.is_active():
 				await deal_card(p, false, _deck.first_hand[seat])
 				p.family = families[seat]
+				# the human seat's private stack, refilled for the new round (instant, no animation -
+				# render_family() renders nothing on an AI seat, his family stays invisible)
+				p.render_family()
 				seat += 1
 			else:
 				p.clear_family()
@@ -199,12 +202,15 @@ func deal_card(p: Player, allow_widow: bool = false, card_type: Deck.CardType = 
 func deal_from_family(p: Player, family_idx: int) -> void:
 	_deal_audio_player.play()
 	var card_type: Deck.CardType = p.pop_family(family_idx)
+	# the stack is a view of the data, so it shrinks with the pop - before the card starts to fly,
+	# so what is left in the stack is exactly what the seat still holds
+	p.render_family()
 	var c = card_scene.instantiate()
 	_animation_layer.add_child(c)
 	c.type = card_type
 	c.faceup = p.idx == 0
-	# The family lives at the seat (the human stack is rendered there, step 18), so the card
-	# flies from the seat to the hand slot, exactly like a deal from a pile.
+	# The family lives in the seat's own stack (`$Family`, rendered by `Player.render_family()`), so the
+	# card flies from the seat to the hand slot, exactly like a deal from a pile.
 	c.global_position = p.global_position
 	var dst := p.drawn_card_position()
 	await Animator.move_card(c, dst)
@@ -414,51 +420,42 @@ func set_inactive(p: Player, reveal_hand: bool = true):
 		var family_pile: Node2D = await reveal_out_family(p, reveal_hand)
 		if family_pile != null:
 			# `discard()` is the ONLY `_left` decrement in the game, and each revealed card is a Card
-			# node under `family_pile` exactly once, so family cards are counted exactly once here
+			# node under the stack exactly once, so family cards are counted exactly once here
 			# (a family draw never decremented `_left`, they are still in the supply).
 			await discard(family_pile)
-			family_pile.queue_free()
+			# NO queue_free(): the stack is the seat's own scene node (step 18) - the human's private
+			# menu all round and the reveal surface at elimination. `discard()` already removed and
+			# freed the Card children, `clear_family()` below drops the data; the empty node lives on.
 		p.clear_family()
 	discard(p.hand)
 	p._inactive.visible = true
 	await Animator.delay(1)
 
 
-# Noble Family, step 16: materialize the out seat's family at his seat, cascade-style, face-up when
-# `show` (his hand is revealed too). Returns the container the cards sit in (null when the family is
+# Noble Family, steps 16 + 18: materialize the out seat's family IN HIS OWN STACK
+# (`Player.family_root`, the node the human seat looks at all round), cascade-style, face-up when
+# `show` (his hand is revealed too). Returns the stack node the cards sit in (null when the family is
 # empty), so the caller discards those exact nodes through the regular discard path - that discard is
 # what counts the family cards into `_left`.
 #
-# Inline nodes for now: step 18 puts the permanent stack (`Player.render_family()` on the seat's
-# $Family node) in place and this function reuses its geometry - same origin, same cascade step.
-# Right-handed seats (2 and 3, `right_score`) mirror the stack, because their seat sits at x 68 and
-# a right-growing 5-card stack would leave the 84 px board.
+# `force` is what makes a stack appear on a seat that never shows one: the family is private, so an
+# AI seat renders NOTHING (his `family_size()` cards are data only) until he leaves the round. The
+# cascade direction mirrors on the `right_score` seats (2 and 3, x 68), whose stack starts at
+# FAMILY_STACK_MIRROR and grows left, because a right-growing 5-card stack would leave the 84 px board.
 func reveal_out_family(p: Player, show: bool = true) -> Node2D:
 	if p.family.is_empty():
 		return null
 	# snapshot of the as-dealt order: the data is cleared by the caller, the nodes are what a
 	# harness can assert on (type, faceup, cascade positions)
 	var types: Array[Deck.CardType] = p.family.duplicate()
-	var root := Node2D.new()
-	root.name = "FamilyReveal"
-	var step: int = FAMILY_CASCADE_STEP
-	if p.right_score:
-		root.position = FAMILY_STACK_MIRROR
-		step = -step
-	else:
-		root.position = FAMILY_STACK_ORIGIN
-	p.add_child(root)
-	for i in types.size():
-		var c: Card = card_scene.instantiate()
-		# in the tree BEFORE type/faceup are set - both setters touch `_sprite.frame`, and Card._ready()
-		# turns the card face up, so the flip below is the visible reveal
-		root.add_child(c)
-		c.position = Vector2(step * i, 0)
-		c.type = types[i]
-		c.faceup = false
-		if show:
-			await Animator.flip(c, true)  # the visible reveal
+	# the stack renders `p.family`, and the data is cleared only by the caller, so the render is the
+	# whole materialization: same origin, same cascade step, one node per card, in as-dealt order.
+	# FACE-DOWN first - the flip below IS the visible reveal.
+	p.render_family(false, true)
+	var root: Node2D = p.family_root
 	if show:
+		for i in types.size():
+			await Animator.flip(root.get_child(i) as Card, true)
 		await Animator.delay(1)  # let the player read the revealed family
 	return root
 

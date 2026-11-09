@@ -42,10 +42,12 @@ var _turn_counts: Array[int] = [0, 0, 0, 0]  # per seat, cumulative
 # effect chain resolves inside a few frames at `Animator._speed = 0`.
 var effect_log: Array = []  # per play: {played, target, target_type, before, after, plays, prince_hits}
 # Step 16 (elimination reveal) recorders. `Main.reveal_out_family()` materializes the out seat's
-# family as Card nodes, so the only way to see them is from INSIDE the call: production discards and
-# frees those exact nodes right after it returns, and at `_speed = 0` the whole reveal+discard+free
-# chain can settle within one frame. One record per CALL (an empty family records 0 cards), which is
-# also the proof that the reveal is called exactly once per elimination.
+# family as Card nodes IN HIS OWN STACK (`Player.family_root`, the node step 18 makes the human seat's
+# private menu), so the only way to see them is from INSIDE the call: production discards those exact
+# nodes right after it returns, and at `_speed = 0` the whole reveal + discard chain can settle within
+# one frame (the stack NODE lives on - it is part of the seat scene). One record per CALL (an empty
+# family records 0 cards), which is also the proof that the reveal is called exactly once per
+# elimination.
 var reveal_log: Array = []  # per reveal call: {seat, shown, family_size, container, pos, parent_is_seat, cards}
 var reveal_calls: int = 0  # every call, empty families included
 # Every card that left play through `Main.discard()` - the ONLY `_left` decrement in the game.
@@ -133,9 +135,9 @@ func _count_cards(node: Node) -> int:
 func _discard_kind(from: Node2D) -> int:
 	if from == _table:
 		return 0  # the played card(s) on the table
-	if str(from.name) == "FamilyReveal":
-		return 2  # step 16's revealed family pile
 	for p in _players:
+		if from == p.family_root:
+			return 2  # the revealed family stack (step 16) - the seat's own $Family node (step 18)
 		if from == p.hand:
 			return 1  # a Prince victim's hand card, a revealed (out) seat's hand card
 	return 3  # anything else: a harness container (the fixtures discard hand nodes of their own)
@@ -301,6 +303,7 @@ func reveal_out_family(p: Player, show: bool = true) -> Node2D:
 		rec["container"] = root.name
 		rec["pos"] = root.position
 		rec["parent_is_seat"] = root.get_parent() == p
+		rec["is_seat_stack"] = root == p.family_root  # step 18: the reveal renders INTO the seat's own stack
 		for c in root.get_children():
 			if c is Card:
 				if bool(c.faceup):

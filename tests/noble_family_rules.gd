@@ -31,6 +31,11 @@ extends Node2D
 # Later steps append to this file: step 16 (elimination reveal + discard accounting),
 # step 31 (joint move legality, L1 determinism). Those cases use the `tests/fake_deck.gd`
 # scripted-deal technique;
+# TEST F (todo step 18) pins the family STACK: a private, display-only cascade of Card nodes in the
+# seat's own `$Family` node - 1 node per family card, in as-dealt order, 9 px cascade, mirrored on
+# the right-handed seats, inside the 84 x 48 viewport, zero input connections, rendered ONLY for the
+# human seat (an AI family is data, never pixels), shrunk by every draw and refilled by every re-deal.
+#
 # TEST A deliberately needs no Main scene at all, so the deal table is pinned
 # independently of the game loop.
 #
@@ -39,6 +44,7 @@ extends Node2D
 
 const DeckScene := preload("res://deck/deck.tscn")
 const MainScene := preload("res://main/main.tscn")
+const PlayerScene := preload("res://player/player.tscn")
 const FakeDeckScript := preload("res://tests/fake_deck.gd")
 const CountingMainScript := "res://tests/counting_main.gd"  # load()ed at runtime: preload() of a
 # script that extends Main is a cyclic dependency (this harness preloads main.tscn)
@@ -187,6 +193,23 @@ const NOBLE_4P_BARON_HUMAN_DROP: Array[int] = [0, 1, 1, 0, 0, 1, 1, 1]  # played
 const NOBLE_4P_BARON_HUMAN_AFTER1: Array[int] = [10, 0, 0, 0, 0, 1, 0, 0]
 const NOBLE_4P_BARON_HUMAN_END_LEFT: Array[int] = [3, 0, 0, 0, 0, 0, 0, 0]
 
+# TEST F (todo step 18) fixtures. 2p: burn 3 (widow 3), 1 first-hand per seat, family 5 per seat,
+# 1 main-pile leftover, NO Prince and NO Priest anywhere -> no seat can ever be eliminated, so the
+# whole round is a clean family-out round and the human seat's stack can be sampled 5 times.
+# Deal order: burn 0..2, first-hand 3 (seat 0) / 4 (seat 1), family columns 5..14 (seat 0, seat 1),
+# main pile 15.
+#   seat 0: Guard + [Guard, Guard, Guard, Guard, COUNTRESS]   (his 5th card is never played: he
+#   plays the ACTIVE card every turn, so the Countess is the card he keeps at the round end)
+#   seat 1: Guard + [Guard, Guard, Guard, Guard, Handmaid]
+# Every Guard probe declares Priest and no seat ever holds a Priest -> 10 plays, 11 turns, 0 kills.
+const NOBLE_2P_STACK: Array[Deck.CardType] = [
+	Deck.CardType.Guard, Deck.CardType.Guard, Deck.CardType.Guard, Deck.CardType.Guard,
+	Deck.CardType.Guard, Deck.CardType.Guard, Deck.CardType.Guard, Deck.CardType.Guard,
+	Deck.CardType.Guard, Deck.CardType.Guard, Deck.CardType.Guard, Deck.CardType.Guard,
+	Deck.CardType.Guard, Deck.CardType.Countess, Deck.CardType.Handmaid, Deck.CardType.Handmaid,
+]
+const NOBLE_2P_STACK_LEFT: Array[int] = [13, 0, 0, 2, 0, 0, 1, 0]  # 13 Guard, 2 Handmaid, 1 Countess
+
 var _failed: int = 0
 var _deck: Deck
 var _c_plays: Array[int] = [0, 0, 0, 0]  # TEST C: plays per seat, counted on `move_chosen`
@@ -212,6 +235,7 @@ func _ready() -> void:
 	await _test_left_audit_real_deck()
 	await _test_prince_paths()
 	await _test_elimination_reveal()
+	await _test_family_stack()
 	await await_frames(1)
 
 	print("\n==========================")
@@ -1484,9 +1508,10 @@ func _check_reveal(main, tag: String, seat: int, shown: bool, fam_size: int, nam
 	check(int(rec.get("faceups", -1)) == (names.size() if shown else 0), tag + ": " + str(rec.get("faceups", -1))
 		+ " of " + str(names.size()) + " revealed cards ended face-up, expected "
 		+ str(names.size() if shown else 0) + " - face-down when reveal_hand is false")
-	check(str(rec.get("container", "")) == "FamilyReveal", tag + ": the revealed cards sit in ONE container named"
-		+ " FamilyReveal (" + str(rec.get("container", "")) + ") - the 44 px seat has room for a 3-card cascade below"
-		+ " the badge row, the hand row has not (it holds 2 cards at decision time)")
+	check(str(rec.get("container", "")) == "Family", tag + ": the revealed cards sit in ONE container named"
+		+ " Family - the seat's own $Family stack node (step 18), not a throwaway (" + str(rec.get("container", ""))
+		+ ") - the 44 px seat has room for a 3-card cascade below the badge row, the hand row has not (it holds 2"
+		+ " cards at decision time)")
 	check(bool(rec.get("parent_is_seat")), tag + ": the container is a CHILD OF THE SEAT, so the stack follows the"
 		+ " seat's position, its scale and its fade (a seat fades at 0.6, a card only at 0.3)")
 	check(rec.get("pos") == origin, tag + ": the stack starts at the seat-local " + str(origin) + " (recorded "
@@ -1521,11 +1546,11 @@ func _check_family_discard(main, tag: String, names: Array, faceup: bool, hand_n
 	# The revealed cards must leave play through the ONE path that decrements `_left`.
 	var idx: int = -1
 	for i in main.discard_log.size():
-		if str(main.discard_log[i]["container"]) == "FamilyReveal":
+		if str(main.discard_log[i]["container"]) == "Family":
 			idx = i
 			break
 	check(idx >= 0, tag + ": the revealed family left play through `Main.discard()` (" + str(main.discard_log.size())
-		+ " discard() calls recorded, none on the reveal container) - only `discard()` decrements `_left`, so a family"
+		+ " discard() calls recorded, none on the stack container) - only `discard()` decrements `_left`, so a family"
 		+ " that leaves any other way is invisible to the supply")
 	if idx < 0:
 		return
@@ -1648,13 +1673,23 @@ func _check_round_end(recs: Array, main, tag: String, turn_counts: Array, actor:
 
 
 func _check_no_family_leak(main, tag: String) -> void:
+	# Step 18: the stack is the seat's OWN scene node, so it SURVIVES the reveal by design - what must
+	# not survive is a CARD in it. A revealed family that stayed rendered is a ghost family: it shows
+	# cards that are already in the discard pile, and it hides the next round's re-deal.
 	var leaked: String = ""
 	for p in main._players:
-		for ch in p.get_children():
-			if str(ch.name) == "FamilyReveal":
-				leaked += " seat " + str(p.idx)
-	check(leaked.is_empty(), tag + ": no reveal container survives the round (" + leaked + ") - the container and its"
-		+ " cards are queue_free()d together, a leak would render a ghost family in the next round")
+		for ch in p.family_root.get_children():
+			if ch is Card:
+				leaked += " seat " + str(p.idx) + "=" + Deck.card_names[int(ch.type)].strip_edges()
+	check(leaked.is_empty(), tag + ": no family card survives the round in any seat's stack (" + leaked + ") - the"
+		+ " reveal discards the stack's cards through `discard()` and `clear_family()` drops the data, so a"
+		+ " stack renders exactly `family_size()` cards and never more")
+	var stacks: int = 0
+	for p in main._players:
+		stacks += 1 if p.family_root.get_parent() == p else 0
+	check(stacks == 4, tag + ": every seat owns exactly ONE $Family node as its own child (" + str(stacks)
+		+ " of 4) - one stack per seat, the human's menu and the reveal surface, so a reveal never needs a"
+		+ " throwaway container that a later round would have to clean up")
 	# todo step 17: the same continuous accounting audit the scripted C/D fixtures get via
 	# `_check_pairings`; the E fixtures (seats eliminated mid-chain) are exactly where a double
 	# decrement of the revealed hand + family would show up, and the audit ran on both sides of every
@@ -1870,5 +1905,366 @@ func _test_elim_baron_hidden() -> void:
 	_check_round_end(recs, main, tag, [4, 0, 3, 3], 0, [1], [1, 0, 1, 1], [0, 0, 0, 0],
 		NOBLE_4P_BARON_HUMAN_END_LEFT)
 	_check_discard_totals(main, tag, NOBLE_4P_BARON_HUMAN_LEFT, NOBLE_4P_BARON_HUMAN_END_LEFT)
+	main.queue_free()
+	await await_frames(2)
+
+
+# ----------------------------------------------------------------------------------------
+# TEST F (todo step 18): the family stack - a private, display-only cascade in the seat's own node
+#
+# The rule the gate asks for is "look at your noble family at any time", with NO extra widget: the
+# family is rendered as 1 Card node per family card, in the seat's own `$Family` node, cascading by
+# 9 px in the seat's free bottom strip. Four things are pinned here, because every one of them is a
+# rule a later step depends on:
+#   1. ORDER - the stack is `family` in as-dealt order, never sorted, rebuilt (not appended) on every
+#      change, so the top-left card is always the family card the seat would draw next.
+#   2. VISIBILITY - a family is PRIVATE: the human seat renders, an AI seat renders NOTHING (his
+#      family is data only). `force` is the elimination reveal, the one moment a family becomes public.
+#   3. GEOMETRY - one node per card at 9 px, mirrored on the `right_score` seats, fully inside the
+#      84 x 48 viewport, in the strip to the RIGHT of the 2 hand cards (they never overlap).
+#   4. NO INPUT - the stack cards connect no `input_event`: Card's Area2D covers the whole 11 x 17
+#      rect, so a connected stack card would steal the hand's tap.
+# ----------------------------------------------------------------------------------------
+const VIEWPORT := Rect2(0, 0, 84, 48)  # 672 x 384 window at window scale 8
+
+
+func _test_family_stack() -> void:
+	print("--- TEST F1 (unit): render_family() - order, cascade, mirror, visibility, clearing ---")
+	await _test_stack_unit()
+	print("--- TEST F2 (2p, family 5): the human's stack IS his family, 5 cards inside 84x48, AI shows nothing ---")
+	await _test_stack_2p()
+	print("--- TEST F3 (4p, family 3): the stack follows every draw; an out seat's stack leaves with him ---")
+	await _test_stack_4p()
+
+
+func _stack_nodes(p: Player) -> Array:
+	# the live stack, in tree order == cascade order == family order
+	var out: Array = []
+	for ch in p.family_root.get_children():
+		if ch is Card:
+			out.append({
+				"type": int(ch.type),
+				"faceup": bool(ch.faceup),
+				"x": int(ch.position.x),
+				"global_x": int(ch.global_position.x),
+				"global_y": int(ch.global_position.y),
+				"conns": int(ch.input_event.get_connections().size()),
+			})
+	return out
+
+
+func _rects(nodes: Array) -> Array:
+	var out: Array = []
+	for n in nodes:
+		out.append("[" + str(int(n["global_x"])) + "," + str(int(n["global_y"])) + "]-"
+			+ "[" + str(int(n["global_x"]) + 11) + "," + str(int(n["global_y"]) + 17) + "]")
+	return out
+
+
+# The whole stack contract, readable from any Player (a unit probe, a live seat, an out seat).
+func _check_stack_p(tag: String, p: Player, names: Array, xs: Array, faceup: bool = true) -> void:
+	var nodes: Array = _stack_nodes(p)
+	check(p.family_root.get_parent() == p and str(p.family_root.name) == "Family", tag + ": seat "
+		+ str(p.idx) + "'s stack is his OWN $Family child (" + str(p.family_root.get_parent())
+		+ ") - the stack is part of the seat, so it follows the seat's position, its scale and its fade")
+	check(int(p.family_root.get_child_count()) == p.family_size(), tag + ": seat " + str(p.idx)
+		+ " renders EXACTLY one node per family card (" + str(p.family_root.get_child_count())
+		+ " nodes, family " + str(p.family_size()) + ") - the stack is a VIEW of the data: a rebuild that"
+		+ " appends would grow a ghost card every draw, a rebuild that forgets one hides a card the seat owns")
+	check(_rn(nodes) == names, tag + ": seat " + str(p.idx) + "'s stack is his family in AS-DEALT order ("
+		+ str(_rn(nodes)) + " expected " + str(names) + ") - never sorted: the order is the level 1"
+		+ " determinism and the Prince's `family[0]` draw")
+	check(_xs(nodes) == xs, tag + ": the cascade is x " + str(xs) + " (" + str(_xs(nodes))
+		+ ") - 9 px steps leave 2 px visible slivers on 11 px cards")
+	var ups := true
+	var conns := 0
+	for n in nodes:
+		ups = ups and bool(n["faceup"]) == faceup
+		conns += int(n["conns"])
+	check(ups, tag + ": every stack card is face-" + ("UP" if faceup else "DOWN") + " ("
+		+ str(_faceups(nodes)) + ") - the human reads his own family, a reveal is face-DOWN when the hand"
+		+ " is not published")
+	check(conns == 0, tag + ": the stack connects NO input_event (" + str(conns)
+		+ ") - a stack card covers a full 11 x 17 Area2D, so a connected one would steal the hand's tap")
+	var inside := true
+	for n in nodes:
+		inside = inside and int(n["global_x"]) >= int(VIEWPORT.position.x) \
+			and int(n["global_x"]) + 11 <= int(VIEWPORT.position.x) + int(VIEWPORT.size.x) \
+			and int(n["global_y"]) >= int(VIEWPORT.position.y) \
+			and int(n["global_y"]) + 17 <= int(VIEWPORT.position.y) + int(VIEWPORT.size.y)
+	check(inside, tag + ": every stack card is fully INSIDE the " + str(VIEWPORT.size)
+		+ " viewport (" + str(_rects(nodes)) + ") - a family stack may not need a scroll, a zoom or a widget")
+
+
+# F1: the rendering contract on bare seats - no game loop, so every branch of `render_family()` is
+# reached directly (a live game only ever exercises the human branch + the reveal branch).
+func _test_stack_unit() -> void:
+	var tag := "F1"
+	var p = PlayerScene.instantiate()
+	p.ai_level = Player.AI_Level.Human
+	add_child(p)
+	await await_frames(1)
+	p.position = Vector2(5, 31)  # seat 0 on the real board
+	var pr = PlayerScene.instantiate()
+	pr.right_score = true
+	pr.ai_level = Player.AI_Level.Human
+	add_child(pr)
+	await await_frames(1)
+	pr.position = Vector2(68, 31)  # seat 3 on the real board (x 68, right-handed)
+	var ai = PlayerScene.instantiate()
+	ai.ai_level = Player.AI_Level.Level_3
+	ai.right_score = true  # a right-handed seat, x 68 - the stack must mirror onto the board
+	add_child(ai)
+	await await_frames(1)
+	ai.position = Vector2(68, 0)
+
+	check(p.family_root.position == Player.FAMILY_STACK_ORIGIN and int(p.family_root.position.x) == 26, tag
+		+ ": the stack starts at seat-local (26, 0) = global (31, 31) on seat 0 - right of his 2 hand cards"
+		+ " (x 0..24), in the free bottom strip, below the badge row and the score label")
+	check(pr.family_root.position == Player.FAMILY_STACK_MIRROR, tag + ": a `right_score` seat's stack starts at ("
+		+ str(pr.family_root.position) + ") == FAMILY_STACK_MIRROR - the seat sits at x 68, so the stack grows LEFT"
+		+ " (its `_ready()` mirrors it, the cascade step is negated)")
+	check(pr.family_cascade_step() == -Player.FAMILY_CASCADE_STEP, tag + ": the cascade mirrors too ("
+		+ str(pr.family_cascade_step()) + ") - a mirrored origin with a right-growing cascade walks off the board")
+	check(int(p.family_root.get_child_count()) == 0, tag + ": a seat with no family renders an EMPTY stack ("
+		+ str(p.family_root.get_child_count()) + " nodes) - the empty family is the round-end signal, not a widget")
+
+	# DESCENDING types + two identical cards: a sort would be visible in the order AND in the cascade
+	var fam: Array[Deck.CardType] = [
+		Deck.CardType.Princess, Deck.CardType.King, Deck.CardType.Guard, Deck.CardType.King]
+	p.family = fam
+	p.render_family()
+	_check_stack_p(tag, p, ["Princess", "King", "Guard", "King"], [0, 9, 18, 27])
+	check(int(p.family_root.get_global_position().x) == 31, tag + ": the strip's first card is at global x 31 ("
+		+ str(int(p.family_root.get_global_position().x)) + ") - the free strip the todo pins at x 31..78, y 31..48")
+	var last: Card = p.family_root.get_child(3)
+	check(int(last.global_position.x) + 11 == 69, tag + ": 4 stack cards end at global x 69 ("
+		+ str(int(last.global_position.x) + 11) + ") = 31 + 9*3 + 11 - so the 2p row of 5 family cards ends at 77"
+		+ " (31 + 36 + 11), 7 px inside the 84 px viewport; 9 px is the BIGGEST step that fits 5 cards, because the"
+		+ " 2 hand cards take global x 5..29 (13 px pitch) and the stack takes 31..77")
+	# `Main.drawn_card_position(i) = (13*i, 31)` at scale 1: 2 hand cards take seat-local x 0..24
+	var hand_right: int = 13 + 11
+	check(hand_right == 24 and 24 <= int(Player.FAMILY_STACK_ORIGIN.x), tag + ": seat 0's 2nd hand card ends at"
+		+ " seat-local x 24 (" + str(hand_right) + ") and the stack starts at 26 - the family row is RIGHT of the"
+		+ " hand row, 2 px apart, so a stack card can never cover the card the human has to tap")
+	check(int(p.family_root.get_child_count()) == 4, tag + ": the same 4-card family renders 4 nodes ("
+		+ str(p.family_root.get_child_count()) + ") - 2 Kings in one family is legal (2 copies in the deck) and the"
+		+ " stack keeps them as 2 separate slivers, in the order they were dealt")
+
+	# the render is a REBUILD: re-render 3x and the node count must not grow
+	p.render_family()
+	p.render_family()
+	p.render_family()
+	check(int(p.family_root.get_child_count()) == 4, tag + ": 3 re-renders of the same family still give 4 nodes ("
+		+ str(p.family_root.get_child_count()) + ") - every family change re-renders, so a leak here would pile up"
+		+ " one ghost card per draw")
+
+	# a draw pops the data and the stack re-renders from the NEW first card (x always starts at 0)
+	var drawn: Deck.CardType = p.pop_family(0)
+	p.render_family()
+	_check_stack_p(tag, p, ["King", "Guard", "King"], [0, 9, 18])
+	check(drawn == Deck.CardType.Princess, tag + ": the popped card is family index 0 ("
+		+ Deck.card_names[int(drawn)].strip_edges() + ") and the stack now starts with the NEXT as-dealt card - the"
+		+ " cascade always shows what is left, starting at x 0")
+
+	# the visibility rule, on a seat that is NOT human: data yes, pixels no
+	var afam: Array[Deck.CardType] = [Deck.CardType.King, Deck.CardType.Countess, Deck.CardType.Prince]
+	ai.family = afam
+	ai.render_family()
+	check(int(ai.family_root.get_child_count()) == 0 and ai.family_size() == 3, tag + ": an AI seat renders"
+		+ " NOTHING from a 3-card family (" + str(ai.family_root.get_child_count()) + " nodes, family "
+		+ str(ai.family_size()) + ") - the family is PRIVATE: `render_family()` without `force` is the menu"
+		+ " render and a menu only exists for the human seat")
+	ai.render_family(false, true)
+	check(int(ai.family_root.get_child_count()) == 3, tag + ": `force` renders an AI family ("
+		+ str(ai.family_root.get_child_count()) + " nodes) - that is the elimination reveal, the one moment a"
+		+ " private family becomes public (`reveal_out_family` is its only caller)")
+	_check_stack_p(tag, ai, ["King", "Countess", "Prince"], [0, -9, -18], false)
+	ai.render_family()
+	check(int(ai.family_root.get_child_count()) == 0, tag + ": the menu render takes an AI stack back to 0 nodes ("
+		+ str(ai.family_root.get_child_count()) + ") - a revealed family never stays rendered after its owner's round")
+
+	# clearing the data clears the nodes (and the NODE lives on: it is part of the seat scene)
+	p.clear_family()
+	check(p.family_size() == 0 and int(p.family_root.get_child_count()) == 0, tag + ": `clear_family()` clears the"
+		+ " data AND the stack (" + str(p.family_root.get_child_count()) + " nodes) - a stack that outlives its data"
+		+ " renders a ghost family in the next round")
+	check(p.family_root.get_parent() == p and p.family_root.name == "Family", tag + ": clearing frees the CARDS, not"
+		+ " the stack node (" + str(p.family_root.get_parent()) + ") - the same node serves the reveal, the menu and"
+		+ " the next round's re-deal, so `set_inactive()` must NOT free it")
+	# typed-array assignment is a REFERENCE (`p.family = fam` shared `fam` with the seat, and the
+	# `clear_family()` above emptied it), so a probe hands its own copy to every seat
+	var fam2: Array[Deck.CardType] = [
+		Deck.CardType.Princess, Deck.CardType.King, Deck.CardType.Guard, Deck.CardType.King]
+	pr.family = fam2
+	pr.render_family()
+	_check_stack_p(tag, pr, ["Princess", "King", "Guard", "King"], [0, -9, -18, -27])
+	var prlast: Card = pr.family_root.get_child(3)
+	check(int(prlast.global_position.x) >= 21 and int(prlast.global_position.x) + 11 <= 84, tag + ": a mirrored"
+		+ " 4-card stack stays on the board (x " + str(int(prlast.global_position.x)) + ".."
+		+ str(int(prlast.global_position.x) + 11) + ") - 68 - 11 - 27 = 30, the left edge a 5-card stack reaches is 21")
+	pr.clear_family()
+	p.queue_free()
+	pr.queue_free()
+	ai.queue_free()
+	await await_frames(2)
+
+
+# settle a re-deal WITHOUT re-initializing the players (`init_players` would reset the seats and
+# their AI levels, which is exactly what a round-2 re-deal must not do). The human seat is the only
+# seat with a guaranteed state at the settle moment: an AI seat's family depends on how many turns
+# he already had, which depends on which seat the round starts at (`round_over()` picks a winner).
+func _settle_redeal(main, fam: int) -> void:
+	var frames: int = 0
+	while frames < 400:
+		if main._players[0].hand.get_child_count() == 2 and main._players[0].family_size() == fam - 1:
+			return
+		await get_tree().process_frame
+		frames += 1
+
+
+# F2: a whole 2p round played by the human - family 5 per seat, 11 turns, 10 plays, NO elimination
+# (no Priest anywhere). The stack is sampled after every one of the human's 5 plays: the rule is
+# "the stack renders `family`", so the sample is the family minus the draws the seat already made,
+# in as-dealt order. The AI seat is sampled at the same 6 moments: 0 nodes every time.
+func _test_stack_2p() -> void:
+	var main = _scripted_main_human(2, NOBLE_2P_STACK, NOBLE_2P_STACK_LEFT)
+	await _settle_deal_human(main)
+	var tag := "F2"
+	var p0 = main._players[0]
+	var p1 = main._players[1]
+	check(int(p0.family_root.get_global_position().x) == 31 and int(p0.family_root.get_global_position().y) == 31, tag
+		+ ": seat 0's stack origin is global (31, 31) on the REAL board (seat at (5, 31), stack at seat-local (26, 0))"
+		+ " - the free bottom strip, right of his hand cards, below the badge row")
+	for i in [2, 3]:
+		check(main._players[i].family_root.position == Main.FAMILY_STACK_MIRROR, tag + ": the x 68 seat " + str(i)
+			+ " mirrors its stack to (" + str(main._players[i].family_root.position) + ") - Disabled in a 2p game and"
+			+ " rendered at all, the mirror is the geometry its reveal would use in a 4p game")
+	_check_stack_p(tag + " after the deal", p0, ["Guard", "Guard", "Guard", "Countess"], [0, 9, 18, 27])
+	check(p0.family_size() == 4 and p0.hand.get_child_count() == 2, tag + ": the human holds the 2-card hand AND 4"
+		+ " family cards at his first decision (family 5 - the turn-start draw) - the 5th family card is the Countess"
+		+ " he will still own at the round end")
+	var hand_right := 0
+	for ch in p0.hand.get_children():
+		hand_right = max(hand_right, int(ch.global_position.x) + 11)
+	var stack_left: int = 999
+	for n in _stack_nodes(p0):
+		stack_left = min(stack_left, int(n["global_x"]))
+	check(hand_right == 29 and stack_left == 31, tag + ": the human's 2 hand cards end at global x 29 and his stack"
+		+ " starts at 31 (" + str(hand_right) + " / " + str(stack_left) + ") - 2 px apart on one 48 px-high row, so"
+		+ " the family never covers a card he has to tap and never needs a second row")
+	check(int(p1.family_root.get_child_count()) == 0 and p1.family_size() == 5, tag + ": seat 1 (AI) holds a FULL 5"
+		+ "-card family and renders 0 nodes - the family is private, so the human sees NO pixels of what the AI seat"
+		+ " is about to draw")
+	var steps: Array = [
+		[["Guard", "Guard", "Guard", "Countess"], [0, 9, 18, 27]],
+		[["Guard", "Guard", "Countess"], [0, 9, 18]],
+		[["Guard", "Countess"], [0, 9]],
+		[["Countess"], [0]],
+		[[], []],
+	]
+	for k in 5:
+		await _human_play(main, 1, Deck.CardType.Priest)
+		_check_stack_p(tag + " after the human's play " + str(k + 1), main._players[0], steps[k][0], steps[k][1])
+		check(int(main._players[1].family_root.get_child_count()) == 0, tag + ": the AI seat's stack is still empty"
+			+ " after play " + str(k + 1) + " (" + str(main._players[1].family_root.get_child_count())
+			+ " nodes, family " + str(main._players[1].family_size()) + ")")
+	var settle: int = 0
+	while main.round_end_actor.size() == 0 and settle < 400:
+		await get_tree().process_frame
+		settle += 1
+	check(main.round_end_actor.size() > 0, tag + ": the 2p round settled at its 11th turn (" + str(main.turns_log.size())
+		+ " turn-starts, " + str(main.effect_log.size()) + " plays)")
+	check(main.eliminations == 0, tag + ": 0 seats left the round - a Guard probe declares Priest and no seat ever"
+		+ " held one, so the round ends PURELY on the family-empty rule")
+	check(main.pile_draws == 0, tag + ": 0 main-pile draws - 2p keeps 1 card in the pile and no Prince was played, so"
+		+ " the widow stays a fallback the whole round")
+	_check_stack_p(tag + " at the round end", main._players[0], [], [])
+	_check_stack_p(tag + " at the round end", main._players[1], [], [])
+	check(main._players[0].family_size() == 0 and main._players[1].family_size() == 0, tag + ": both families are"
+		+ " empty at the round end (" + str(main._players[0].family_size()) + ", "
+		+ str(main._players[1].family_size()) + ") - 10 plays for 10 family cards, and the 11th turn-start finds an"
+		+ " empty family: the actor is seat " + str(main.round_end_actor[0]))
+	# the round-2 re-deal: families are PRIVATE, PER-SEAT and re-dealt EVERY round
+	await main._on_round_over_pressed()
+	await _settle_redeal(main, Deck.NOBLE_FAMILY_SIZE[2])
+	_check_stack_p(tag + " round 2", main._players[0], ["Guard", "Guard", "Guard", "Countess"], [0, 9, 18, 27])
+	check(int(main._players[1].family_root.get_child_count()) == 0 and main._players[1].family_size() >= 4
+		and main._players[1].family_size() <= 5, tag + " round 2: the AI family is re-dealt INVISIBLE (0 nodes,"
+		+ " family " + str(main._players[1].family_size()) + ") - a re-deal renders nothing on an AI seat and refills"
+		+ " the human's stack in the SAME node, so the family menu survives every round")
+	main.queue_free()
+	await await_frames(2)
+
+
+# F3: the 4p E3 position, seen from the stack. Seat 0 (human) plays a Baron on seat 1 at play 1: seat 1
+# leaves the round with 3 family cards he never touched. His stack must be empty BEFORE (private) and
+# empty AFTER (revealed, discarded, cleared) - the 3 cards are visible in exactly one moment.
+func _test_stack_4p() -> void:
+	var main = _scripted_main_human(4, NOBLE_4P_BARON_HUMAN, NOBLE_4P_BARON_HUMAN_LEFT)
+	await _settle_deal_human(main)
+	var tag := "F3"
+	var p0 = main._players[0]
+	var p1 = main._players[1]
+	_check_stack_p(tag + " after the deal", p0, ["Guard", "Guard"], [0, 9])
+	check(p0.family_size() == 2, tag + ": the human's family is down to 2 (family 3 - the King he drew at the first"
+		+ " turn start) - the stack starts at the card that is LEFT, so what he sees is exactly what he can draw")
+	check(int(p1.family_root.get_child_count()) == 0 and p1.family_size() == 3, tag + ": seat 1 holds a FULL 3-card"
+		+ " family (King, Countess, Princess) and renders 0 nodes - the human cannot see the cards he is about to"
+		+ " publish with his Baron, so the family is a private resource the opponent keeps from him")
+	for i in [2, 3]:
+		check(int(main._players[i].family_root.get_child_count()) == 0, tag + ": seat " + str(i)
+			+ " (AI) renders NOTHING at family size " + str(main._players[i].family_size()) + " ("
+			+ str(main._players[i].family_root.get_child_count())
+			+ " nodes) - an AI seat renders nothing at family 3, at family 0 and at every size between: his family is"
+			+ " data, and the human cannot see what an opponent draws out of")
+	await _human_play(main, 1, Deck.CardType.Priest)  # the Baron on seat 1 -> seat 1 is out
+	check(main.reveal_log.size() == 1, tag + ": ONE reveal call for the elimination (" + str(main.reveal_log.size())
+		+ ") - the family is published once, not once per card and not once per effect")
+	var rec: Dictionary = main.reveal_log[0]
+	check(bool(rec.get("is_seat_stack", false)), tag + ": the reveal renders INTO the seat's own `$Family` node ("
+		+ str(rec.get("container", "")) + ") - not a throwaway container: the stack is the seat's surface for the menu,"
+		+ " the reveal and the next round's re-deal")
+	check(int(rec.get("cards", []).size()) == 3, tag + ": the reveal published all 3 of seat 1's family cards ("
+		+ str(rec.get("cards", []).size()) + " nodes) - the whole family, in as-dealt order, not the 1 card he would"
+		+ " have drawn next")
+	_check_stack_p(tag + " seat 1 after his reveal", main._players[1], [], [])
+	check(p1.family_size() == 0, tag + ": seat 1's family data is cleared with his cards (" + str(p1.family_size())
+		+ " cards, " + str(int(p1.family_root.get_child_count())) + " nodes) - an out seat has no family to draw, and"
+		+ " a stack that kept his cards would render them in every later round")
+	_check_stack_p(tag + " after the elimination", main._players[0], ["Guard", "Guard"], [0, 9])
+	await _human_play(main, 2, Deck.CardType.Priest)  # T4: the King, the family[1] Guard is now the leftover
+	_check_stack_p(tag + " after the human's play 2", main._players[0], ["Guard"], [0])
+	await _human_play(main, 2, Deck.CardType.Priest)  # T7: the Guard
+	_check_stack_p(tag + " after the human's play 3", main._players[0], [], [])
+	var settle: int = 0
+	while main.round_end_actor.size() == 0 and settle < 400:
+		await get_tree().process_frame
+		settle += 1
+	check(main.round_end_actor.size() > 0 and int(main.round_end_actor[0]) == 0, tag + ": the round settled on seat"
+		+ " 0's turn start with an empty family (actor " + str(main.round_end_actor) + ") - 11 turns, 9 plays, the"
+		+ " seat 1 elimination at play 1")
+	for i in [1, 2, 3]:
+		check(int(main._players[i].family_root.get_child_count()) == 0, tag + ": at the round end seat " + str(i)
+			+ " renders an empty stack (" + str(main._players[i].family_root.get_child_count()) + " nodes, family "
+			+ str(main._players[i].family_size()) + ") - no ghost family on an out seat, none on an AI seat")
+	await main._on_round_over_pressed()
+	await _settle_redeal(main, Deck.NOBLE_FAMILY_SIZE[4])
+	_check_stack_p(tag + " round 2", main._players[0], ["Guard", "Guard"], [0, 9])
+	check(int(main._players[0].family_size()) == 2 and p0.hand.get_child_count() == 2, tag + " round 2: the re-deal"
+		+ " refilled 3 family cards and the first turn start already spent the King (family 2, hand 2) - the stack is"
+		+ " refilled in the SAME node every round, no new widget, no leftover card from round 1")
+	# an elimination lasts ONE round: `_new_round()` calls `init_discard_pile(_player_count)`, which
+	# re-enables every seat, so the out seat returns to a fresh, invisible family in the next round
+	check(int(main._players[1].family_root.get_child_count()) == 0 and main._players[1].family_size() >= 3, tag
+		+ " round 2: seat 1 is back in the round with a FULL 3-card family and 0 rendered nodes (family "
+		+ str(main._players[1].family_size()) + ") - his revealed family is gone (round 1), a new private one is dealt"
+		+ " to him, and the human sees none of it")
+	check(int(main._players[3].family_root.get_child_count()) == 0
+		and main._players[3].family_size() >= 2 and main._players[3].family_size() <= 3, tag
+		+ " round 2: seat 3 is BACK in the round (level " + str(main._players[3].ai_level) + ", family "
+		+ str(main._players[3].family_size()) + " of 3) and renders 0 nodes - an elimination lasts ONE round:"
+		+ " `_new_round()` calls `init_discard_pile(_player_count)`, which re-enables every seat, and the seat that"
+		+ " was out is re-dealt a family the human cannot see")
 	main.queue_free()
 	await await_frames(2)

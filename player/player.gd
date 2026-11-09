@@ -25,9 +25,22 @@ enum State {
 
 var _state: State = State.IDLE
 
+# Noble Family geometry: the private family stack of a seat - origin (seat-local) + cascade step.
+# Seat 0 sits at (5, 31), so his stack starts at global (31, 31): the free bottom strip
+# x 31..78, y 31..48, right of his 2 hand cards (x 0..24). Cards are 11 px wide, so a 9 px cascade
+# leaves 2 px visible slivers, and 9 px is the biggest step that keeps a 5-card stack (2p) on the
+# 84 px board: 26 + 9*4 + 11 == 73 seat-local == 78 global. The `right_score` seats sit at x 68, so
+# their stack mirrors and grows LEFT (57 - 9*4 - 11 == 21, on the board).
+const FAMILY_STACK_ORIGIN := Vector2(26, 0)
+const FAMILY_STACK_MIRROR := Vector2(-11, 0)
+const FAMILY_CASCADE_STEP: int = 9
+
+const CARD_SCENE: PackedScene = preload("res://card/card.tscn")
+
 @export var idx: int = 0
 @export var right_score: bool = false
 @onready var hand: Node2D = $Hand
+@onready var family_root: Node2D = $Family
 @onready var _shield: Sprite2D = $Shield
 @onready var _inactive: Sprite2D = $Inactive
 @onready var _score_digit: Label = $Score
@@ -79,6 +92,8 @@ func _ready() -> void:
 		_score_digit.position.x = 12
 		current_mark.position.x = 12
 		_badge.position.x = 12
+	# the stack mirrors for the right-handed seats (see FAMILY_STACK_MIRROR)
+	family_root.position = FAMILY_STACK_MIRROR if right_score else FAMILY_STACK_ORIGIN
 
 
 func drawn_card_position() -> Vector2:
@@ -117,9 +132,49 @@ func pop_family(family_idx: int) -> Deck.CardType:
 	return family.pop_at(family_idx)
 
 
+# Data + stack: `render_family()` renders exactly the family data, so clearing the data clears
+# the stack with it - a stale stack would render a ghost family in the next round.
 func clear_family() -> void:
-	# Data only; visual clearing is added with Player.render_family() (step 18).
 	family.clear()
+	clear_family_nodes()
+
+
+# The cascade direction of this seat's stack: right-handed seats grow LEFT (see FAMILY_STACK_MIRROR).
+func family_cascade_step() -> int:
+	return FAMILY_CASCADE_STEP if !right_score else -FAMILY_CASCADE_STEP
+
+
+# Free the stack's Card nodes. Public because `Main.reveal_out_family()` discards them through the
+# regular `Main.discard()` path, which already removes them from this node and frees them - by the
+# time the family data is cleared the stack is empty and this is a no-op.
+func clear_family_nodes() -> void:
+	for ch in family_root.get_children():
+		family_root.remove_child(ch)
+		ch.queue_free()
+
+
+# Rebuild this seat's family stack from the `family` data, in AS-DEALT order, one Card node per card
+# at `x = family_cascade_step() * i` (a cascade of 2 px slivers).
+#
+# Visibility rule: the family is PRIVATE, so only the human seat's stack is ever rendered ("look at
+# your noble family at any time" - it is display-only, no widget, no modal). An AI seat renders
+# NOTHING: `family_size()` cards of data, zero nodes on screen. The one exception is `force`, the
+# elimination reveal (`Main.reveal_out_family()`), where an out seat's family becomes public.
+#
+# The nodes connect NO `input_event`: Card's Area2D covers the whole 11 x 17 rect, so a connected
+# stack card would steal the tap from the hand (Player.add_card() is the only place that connects it).
+func render_family(faceup: bool = true, force: bool = false) -> void:
+	clear_family_nodes()
+	if family.is_empty() or !(is_human() or force):
+		return
+	var step: int = family_cascade_step()
+	for i in family.size():
+		var c: Card = CARD_SCENE.instantiate()
+		# IN THE TREE before type/faceup are set: both setters touch `_sprite.frame`, which _ready() sets
+		family_root.add_child(c)
+		c.position = Vector2(step * i, 0)
+		c.type = family[i]
+		c.faceup = faceup
 
 
 func print_memory() -> void:
