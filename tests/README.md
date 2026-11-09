@@ -305,8 +305,8 @@ beliefs and 1 750 self-eliminations - the number that made section 1 read as sev
 Step 4 pins the **deal table** of `Deck.prepare_noble()`; later steps append scripted cases to
 the same file (step 14 round end, step 15 Prince family/widow/elimination, step 16 elimination
 reveal + discard accounting, step 17 the continuous `_left` audit on the real deck, step 18 the
-seat's own family stack node, step 19 the family draw modal, step 31 joint move legality and L1
-determinism). TEST A needs no
+seat's own family stack node, step 19 the family draw modal, step 20 the human's turn-start draw
+through that modal, step 31 joint move legality and L1 determinism). TEST A needs no
 `Main` scene - it drives the real `Deck` scene directly, 200 seeded deals per player count.
 
 | player count | burn / widow | first-hand | family per seat | main pile leftovers |
@@ -534,9 +534,12 @@ What the three fixtures pin:
   each of the human's 5 plays and is his family minus the draws he made — 4, 3, 2, 1, 0 nodes, names
   `Guard Guard Guard Countess → … → []`, `family_root.get_child_count() == family_size()` at every
   sample; the hand's right edge (global 29) and the stack's left edge (31) never overlap; the round is
-  11 turns / 10 plays / **0 eliminations / 0 main-pile draws**, so it ends purely on the family-empty
-  rule; the AI seat renders 0 nodes at family 5 and again in round 2 (the re-deal refills the human's
-  stack in the same node, the AI's family stays pixels-free).
+  11 turns / 10 plays / **0 eliminations / 0 main-pile draws** (turn-starts per seat `[6, 5]`), so it
+  ends purely on the family-empty rule; the AI seat renders 0 nodes at family 5 and again in round 2
+  (the re-deal refills the human's stack in the same node, the AI's family stays pixels-free). Every
+  human turn start of the round, the first one and the round-2 re-deal included, is tapped through the
+  family modal (`_human_draw()` / `_settle_deal_human()` / `_settle_redeal()`, TEST H), because
+  production has no auto-pick for a human seat.
 - **F3, the E3 Baron position**: seat 1 holds a full 3-card family and renders 0 nodes before the human's
   Baron (the human cannot see the cards he is about to publish); the reveal record shows ONE call that
   rendered into **the seat's own stack node** (not a throwaway container) all 3 cards in as-dealt order;
@@ -546,7 +549,7 @@ What the three fixtures pin:
   refilled in the same node.
 
 Sabotage (then `git checkout -- main/main.gd player/player.gd`; the counts are the `N CHECK(S)
-FAILED` line of `tests/noble_family_rules.tscn`, 531 checks on the shipped code, exit 0):
+FAILED` line of `tests/noble_family_rules.tscn`, 656 checks on the shipped code, exit 0):
 
 | sabotage | FAILs | where |
 |---|---|---|
@@ -634,6 +637,57 @@ One sabotage was measured as **not** detectable, and is worth stating: deleting 
 `_armed = false` line in `select()` leaves every check PASS, because `close()` disarms and empties
 the panel's copy — the commit gate that G2 pins is the row's contents, and a closed panel cannot
 name a card it no longer shows.
+
+
+### TEST H — the human's turn start DRAWS through the modal (step 20)
+
+Step 19 built the panel; **step 20 puts it in production**: `main.tscn` carries it as a sibling of
+`TypeSelector` at `z_index = 10`, `visible = false` (the modal is allocated ONCE, like the other
+selectors, and serves every turn start of every round), and `Main.human_draw_from_family()` hides the
+Table, `open()`s the panel on **the seat to act's** family, `await`s the tapped index, `close()`s it,
+shows the Table and pops `p.family[idx]`. `new_turn()` calls it only for a human seat, AFTER the
+family-empty round-end check, and `_begin_play_selection()` comes after the draw. The step 7
+placeholder (`await deal_from_family(p, 0)`) is gone: **no path auto-picks a family card for a human
+seat.** 52 checks in three tests, on fixtures with seat 0 human (`Player.make_human()`, the shape the
+old `tests/smoke_games.tscn` manual build used).
+
+A harness tap is the production click path: `dispatch_event` is swallowed by Godot in headless, so
+`_fs_tap()` fires the card's `input_event` signal with a mouse-press `InputMouseButtonEvent` at the
+card's centre — the event `Card.pressed()` consumes (TEST G). Reading the panel is geometry plus one
+watcher coroutine (`_watch_modal()`) that counts **rising edges** of `is_open()` and records the seat
+that was acting, its row, and whether the Table/any other selector was visible at that frame.
+
+- **H1, the gate (4p)** — at the human's turn start the panel IS open, and NOTHING has been drawn: 1
+  hand card, the family untouched (3), `family_draws == 0` with an empty index list, `pile_draws == 0`,
+  the Table hidden, no other selector surface visible, the play selection not open, the row is his own
+  family in as-dealt order on one line (`x [12, 24, 36]`, `y [22, 22, 22]`), one `input_event` per
+  card, one card per family card, every other seat at a full private family and 0 rendered nodes; the
+  panel is `Main`'s node and sits at z 10 after the type selector in the tree (same z, so tree order
+  decides the tap). **200 frames with no tap and nothing happens** — the draw has no timer, no fallback
+  and no auto-pick.
+- **H2, the tap (4p, E3's fixture)** — a tap on index **1** is honoured: `family_draw_idx == [1]`, the
+  SECOND hand slot holds family[1], his stack reads `[King, Guard]` (an index-0 draw would have left
+  `[Guard, Guard]` and put the **King** in his hand), the family shrank by exactly one, the widow is
+  untouched, `_left` is unchanged by the draw, the panel closed itself and the Table came back, the row
+  is gone, and the play selection resumed. Then the choice decides the game: he plays the Baron with
+  the Guard he tapped, **Guard is rank 0** so he LOSES it to seat 1's Priest and **he** is the seat
+  that leaves the round (tapping index 0, the King, would have won); his published family is
+  `[King, Guard]` — the two cards he did *not* draw — and an eliminated seat never opens the modal
+  again (200 frames, 1 family draw total).
+- **H3, a whole round (2p)** — a frame watcher counts **5 openings for 5 turn starts, every one on
+  seat 0, 0 on the AI seat**, 0 openings with the Table visible, 0 with another selector open; the
+  first opening shows the FULL 5-card family and the third shows `[Guard, Guard, Guard]` (the Countess
+  he drew out of the middle is off the row: the row is the LIVE family); the drawn indices are the
+  tapped indices in order (`[0, 3, 0, 0, 0]`); 5 draws per seat (never twice at one turn start), 0
+  main-pile draws, 0 eliminations, the round ends on seat 0's empty family with 1 hand card. The 6th
+  turn start (family 0) opens NOTHING — an empty family ends the round, it never opens a panel with no
+  card to tap.
+
+| sabotage (main.gd) | measured FAILs | where |
+|---|---|---|
+| the human turn start auto-picks `family[0]` and never opens the panel (the step 7 placeholder back) | **13** + a harness abort | H1 11, H3 2; TEST H2 then dies on `SCRIPT ERROR: Out of bounds get index '1' (on base: 'Array')` — no row to tap |
+| a 1 s timeout fallback auto-picks index 0 when nobody taps | **7** | H1 1 (the 200-frame no-tap check), H2 4 (the drawn index, the drawn card, the stack, the elimination), H3 2 (drawn indices, the third row) |
+| the modal opens for EVERY seat, with a one-frame auto-pick (no `is_human()` gate) | **32** | H3's AI-actor check (`[0,0,0,0,0,1]`, AI openings 1) + E2's whole round (18) + the draw/play pairing (5) — an AI seat's family published on screen is a privacy break AND a supply break |
 
 
 ## tests/noble_family_smoke.tscn — Noble Family variant, whole games on the AI (steps 7, 11, 14)

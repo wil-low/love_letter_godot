@@ -238,6 +238,7 @@ func _ready() -> void:
 	await _test_elimination_reveal()
 	await _test_family_stack()
 	await _test_family_selector()
+	await _test_human_modal()
 	await await_frames(1)
 
 	print("\n==========================")
@@ -1731,28 +1732,63 @@ func _check_e_basics(recs: Array, main, tag: String) -> void:
 		+ " count below the cards that exist, which is how a family counted twice shows up")
 
 
+# Step 20: a human turn start STOPS at the modal. `new_turn()` no longer hands the seat a family
+# card - it opens the panel and awaits the tap - so a harness that drives the human seat has to TAP,
+# or every human turn stalls at the modal (measured: `await_until timed out`, and the whole fixture's
+# assertions cascade from a seat that never got his card). The tap is the synthetic `input_event`
+# TEST G fires, so the harness taps the SAME Area2D a finger taps in a real run.
+#
+# Returns true when it took a draw. A human turn start with an EMPTY family never opens a panel (the
+# round ends there), and a seat that is already in his play selection has already drawn - both cases
+# must return, not stall: 4p burns nothing, so a 3-card family runs out on the 4th turn start and the
+# last human turn is a round end, not a draw.
+func _human_draw(main, idx: int, max_frames: int = 2000) -> bool:
+	var sel = main._family_selector
+	var p = main._players[0]
+	for i in max_frames:
+		if sel.is_open():
+			var cards: Array = _fs_cards(sel)
+			if idx >= 0 and idx < cards.size():
+				_fs_tap(cards[idx]["node"])
+			await await_until(func() -> bool: return !sel.is_open())
+			return true
+		if p._state == Player.State.SELECT_CARD and p.hand.get_child_count() == 2:
+			return false  # no draw to take: the seat is already choosing his play
+		await get_tree().process_frame
+	return false
+
+
 # The human seat 0 plays by tapping: `_on_card_played` is what Player emits on a card tap, and
 # `_on_target_player_selected` / `_on_target_type_selected` are what the target / type selectors emit.
 # The seat always plays his ACTIVE card (hand[0]) - the variant's real decision is which card to KEEP.
-func _human_play(main, target: int, type: Deck.CardType) -> void:
+# `draw_idx` is the family card he CHOOSES at turn start (step 20: the modal tap); a self-target play
+# (Handmaid / Countess) never opens a target selector, so the target step is state-gated.
+func _human_play(main, target: int, type: Deck.CardType, draw_idx: int = 0) -> void:
 	var p = main._players[0]
+	await _human_draw(main, draw_idx)
 	await await_until(func() -> bool:
 		return p._state == Player.State.SELECT_CARD and p.hand.get_child_count() == 2)
 	await main._on_card_played(p.hand.get_child(0))
-	await await_until(func() -> bool:
-		return p._state == Player.State.INPUT_OTHER_P)
-	await main._on_target_player_selected(target)
-	if p._state == Player.State.INPUT_T:
-		await main._on_target_type_selected(type)
+	if p._state == Player.State.INPUT_OTHER_P or p._state == Player.State.INPUT_ANY_P:
+		await await_until(func() -> bool:
+			return p._state == Player.State.INPUT_OTHER_P)
+		await main._on_target_player_selected(target)
+		if p._state == Player.State.INPUT_T:
+			await main._on_target_type_selected(type)
 	await await_until(func() -> bool:
 		return main._cur_player != 0)
 
 
-func _settle_deal_human(main) -> void:
+func _settle_deal_human(main, w: Dictionary = {}) -> void:
 	# `_settle_deal()` polls for "1 hand card + a full family" in every seat, which the HUMAN seat can
-	# never satisfy: `new_turn()` gives him the placeholder family draw (step 20) BEFORE he taps, so he
-	# is settled at 2 cards, the classic 2-card play selection.
+	# never satisfy: his turn start opens the family modal (step 20) and waits for a tap, so he is
+	# settled at 2 cards with ONE family card drawn - the harness taps index 0, the as-dealt card the
+	# scripted fixtures were written against. A caller that wants the panel WATCHED from the FIRST turn
+	# start passes the watcher dict, so it starts before that first tap.
 	await main.init_players(SEED)
+	if not w.is_empty():
+		_watch_modal(main, w)
+	await _human_draw(main, 0)
 	var fam: int = Deck.NOBLE_FAMILY_SIZE[int(main._player_count)]
 	await await_until(func() -> bool:
 		var ready := true
@@ -2117,6 +2153,8 @@ func _test_stack_unit() -> void:
 # seat with a guaranteed state at the settle moment: an AI seat's family depends on how many turns
 # he already had, which depends on which seat the round starts at (`round_over()` picks a winner).
 func _settle_redeal(main, fam: int) -> void:
+	# the re-deal's first turn start is a human turn start too, so it stops at the family modal (step 20)
+	await _human_draw(main, 0)
 	var frames: int = 0
 	while frames < 400:
 		if main._players[0].hand.get_child_count() == 2 and main._players[0].family_size() == fam - 1:
@@ -2175,8 +2213,11 @@ func _test_stack_2p() -> void:
 	while main.round_end_actor.size() == 0 and settle < 400:
 		await get_tree().process_frame
 		settle += 1
-	check(main.round_end_actor.size() > 0, tag + ": the 2p round settled at its 11th turn (" + str(main.turns_log.size())
-		+ " turn-starts, " + str(main.effect_log.size()) + " plays)")
+	check(main.round_end_actor.size() > 0 and int(main.round_end_turns[0][0]) == 6
+		and int(main.round_end_turns[0][1]) == 5, tag + ": the 2p round settled at its 11th turn ("
+		+ str(main.round_end_turns[0]) + " turn-starts per seat = 11, " + str(main.effect_log.size())
+		+ " plays, [6, 5, 0, 0] expected) - the stack test plays a FULL round, so the round-end and re-deal"
+		+ " checks below run on a real production state")
 	check(main.eliminations == 0, tag + ": 0 seats left the round - a Guard probe declares Priest and no seat ever"
 		+ " held one, so the round ends PURELY on the family-empty rule")
 	check(main.pile_draws == 0, tag + ": 0 main-pile draws - 2p keeps 1 card in the pile and no Prince was played, so"
@@ -2620,4 +2661,288 @@ func _test_fs_copy() -> void:
 		+ " sprite node (children " + str(int(sel.get_child_count())) + ") - a row that survives its"
 		+ " modal is a ghost family a tap can still hit")
 	sel.queue_free()
+	await await_frames(2)
+
+
+# ----------------------------------------------------------------------------------------
+# TEST H (todo step 20): the human's mandatory family draw goes through the MODAL
+#
+# Step 20 is a PRODUCTION change, not a fixture: `main.tscn` carries the panel (a sibling of
+# `TypeSelector`, z 10, hidden) and `Main.human_draw_from_family()` hides the Table, opens the panel
+# on the seat's family, AWAITS the tapped index, closes it, shows the Table and pops `p.family[idx]`.
+# The step 7 placeholder (auto-pick index 0) is GONE, so a human turn start now stops at the panel:
+# the modal is the only way a human seat draws a family card.
+#
+# H1 the gate: at the human's turn start the panel is open and NOTHING has been drawn - 1 hand card,
+#   the full family, the Table hidden, the play selection closed, no other surface visible, and the
+#   row is ONLY his own family, in as-dealt order. With no tap the turn just waits: no timeout, no
+#   fallback auto-pick.
+# H2 the tap: a NON-FIRST index is honoured - the card that lands in his hand, the card his stack no
+#   longer shows, the family that gets published when he leaves the round, and the recorded drawn index
+#   all name family[1], not family[0]. A Guard (rank 0) loses the Baron he plays with it, so the tap
+#   also decides WHICH seat leaves the round, and an out seat never sees the modal again.
+# H3 a whole round: 5 turn starts = 5 openings, all on seat 0, no AI turn ever opens it, the main pile
+#   is never drawn, and the round still ends on the family-empty rule (an empty family ends the round,
+#   it never opens a panel that cannot be tapped).
+# ----------------------------------------------------------------------------------------
+func _test_human_modal() -> void:
+	print("--- TEST H1 (4p, the human's turn start waits on the modal, nothing drawn) ---")
+	await _test_modal_open()
+	print("--- TEST H2 (4p, a tap on family index 1 draws family[1], and the Guard loses him his own Baron) ---")
+	await _test_modal_tap_index()
+	print("--- TEST H3 (2p, a whole round of modal draws: 5 openings, all on seat 0) ---")
+	await _test_modal_round()
+
+
+# Per-frame watcher of the panel (a coroutine, run alongside the plays): a RISING EDGE of `is_open()`
+# is one turn start that asked for a draw, so `actors` is the list of seats that had a family modal -
+# the family is PRIVATE, so a panel on an AI turn would be an AI seat's family published on screen.
+func _watch_modal(main, w: Dictionary) -> void:
+	var prev := false
+	while int(w["frames"]) < 4000 and not bool(w["stop"]):
+		w["frames"] = int(w["frames"]) + 1
+		var now: bool = main._family_selector.is_open()
+		if now and not prev:
+			w["openings"] = int(w["openings"]) + 1
+			w["actors"].append(int(main._cur_player))
+			w["rows"].append(_rn(_fs_cards(main._family_selector)))
+			if int(main._cur_player) != 0:
+				w["ai_open"] = int(w["ai_open"]) + 1
+			if main._table.visible:
+				w["table_open"] = int(w["table_open"]) + 1
+			if main._type_selector.visible or main._select_other_player.visible \
+					or main._select_any_player.visible:
+				w["crowded"] = int(w["crowded"]) + 1
+		prev = now
+		await get_tree().process_frame
+
+
+func _modal_watcher() -> Dictionary:
+	return {"frames": 0, "openings": 0, "actors": [], "rows": [], "ai_open": 0, "table_open": 0,
+		"crowded": 0, "stop": false}
+
+
+func _left_sum(main) -> int:
+	var s := 0
+	for t in main._deck._left.size():
+		s += int(main._deck._left[t])
+	return s
+
+
+func _test_modal_open() -> void:
+	var tag := "H1"
+	var main = _scripted_main_human(4, NOBLE_4P_BARON_HUMAN, NOBLE_4P_BARON_HUMAN_LEFT)
+	await main.init_players(SEED)
+	var sel = main._family_selector
+	await await_until(func() -> bool: return sel.is_open())
+	var p0 = main._players[0]
+	var row: Array = _fs_cards(sel)
+	check(sel.get_parent() == main, tag + ": the panel is MAIN's node (" + str(sel.get_parent())
+		+ "), a sibling of the selectors - the family is one seat's private DATA (the stack lives in the"
+		+ " seat, step 18), the CHOOSING is the manager's (design.md), so the modal is allocated once in"
+		+ " main.tscn and serves every turn start of every round")
+	check(int(sel.z_index) == 10 and int(sel.get_index()) > int(main._type_selector.get_index()), tag
+		+ ": the panel sits at z 10 after the type selector in the tree (" + str(int(sel.z_index))
+		+ ", index " + str(int(sel.get_index())) + " vs " + str(int(main._type_selector.get_index()))
+		+ ") - same z as the type selector, so the last one in the tree wins the tap; a family modal that"
+		+ " lost its taps to the type selector is an unopenable draw")
+	check(bool(sel.visible) and sel.is_open(), tag + ": the panel IS open at the human's turn start -"
+		+ " the mandatory draw is HIS choice, so the turn waits for him")
+	check(not main._table.visible, tag + ": the Table is hidden while the modal is open - the draw comes"
+		+ " BEFORE any play, so the played-card slot has nothing to do with the choice")
+	check(not main._type_selector.visible and not main._select_other_player.visible
+		and not main._select_any_player.visible, tag + ": no other selector surface is visible - one"
+		+ " interactive panel per human turn, so a tap is never ambiguous")
+	check(_rn(row) == ["King", "Guard", "Guard"], tag + ": the row is HIS OWN family, in as-dealt order ("
+		+ str(_rn(row)) + ") - the panel offers exactly the cards he can draw, in the order they were dealt")
+	check(_xs(row) == [12, 24, 36] and _fs_ys(row) == [22, 22, 22] and _fs_inside(row), tag
+		+ ": the row is one line at (" + str(_xs(row)) + ", " + str(_fs_ys(row)) + "), inside "
+		+ str(VIEWPORT.size) + " - the whole family is tappable at once, no paging, no scroll")
+	check(_faceups(row) == [true, true, true], tag + ": every row card is face-UP (" + str(_faceups(row))
+		+ ") - he chooses among HIS OWN cards")
+	var conns := 0
+	for c in row:
+		conns += int(c["conns"])
+	check(conns == row.size(), tag + ": exactly one `input_event` per row card (" + str(conns)
+		+ " for " + str(row.size()) + " cards) - the row is the only tappable thing in the panel")
+	check(row.size() == p0.family_size(), tag + ": the row is the family, one card per family card ("
+		+ str(row.size()) + " vs family " + str(p0.family_size()) + ") - no extra card, no hidden card")
+	check(p0.hand.get_child_count() == 1, tag + ": the human holds EXACTLY his active card while he"
+		+ " chooses - the draw has not happened, so the modal cannot be a decoration on top of a draw that"
+		+ " already took place")
+	check(p0.family_size() == 3, tag + ": the family is untouched while the panel is open ("
+		+ str(p0.family_size()) + ") - opening the modal draws nothing, only the tap does")
+	check(int(main.family_draws[0]) == 0 and int(main.family_draw_idx[0].size()) == 0, tag
+		+ ": NO family card has been drawn at the gate (" + str(main.family_draws[0]) + " draws, indices "
+		+ str(main.family_draw_idx[0]) + ") - the step 7 placeholder (auto-pick index 0) is gone: the"
+		+ " human's draw has no auto-pick, so an un-tapped panel means an undrawn family")
+	check(int(main.pile_draws) == 0 and int(main.first_hand_deals) == 4, tag + ": the variant drew"
+		+ " nothing from the main pile at a turn start (" + str(main.pile_draws) + " pile draws, "
+		+ str(main.first_hand_deals) + " first-hand deals) - the family replaces the turn-start pile draw,"
+		+ " the widow stays a Prince-only fallback")
+	check(p0._state == Player.State.IDLE and not p0.current_mark.visible, tag
+		+ ": the play selection is NOT open at the gate (state " + str(p0._state) + ", mark "
+		+ str(bool(p0.current_mark.visible)) + ") - the human chooses the DRAW first, the PLAY comes after"
+		+ " the card is in his hand, which is the whole point of the variant turn")
+	check(main.effect_log.is_empty() and int(main._cur_player) == 0, tag + ": the gate is the FIRST turn"
+		+ " start of the round, seat 0's (" + str(main.effect_log.size()) + " plays so far, actor "
+		+ str(main._cur_player) + ") - the draw gate is a turn START, not a play")
+	for i in [1, 2, 3]:
+		check(int(main._players[i].family_size()) == 3
+			and int(main._players[i].family_root.get_child_count()) == 0, tag + ": seat " + str(i)
+			+ " keeps his full private family and renders nothing while the human's panel is open ("
+			+ str(main._players[i].family_size()) + " cards, "
+			+ str(int(main._players[i].family_root.get_child_count())) + " nodes) - the panel shows ONE"
+			+ " seat's family, it is not a public family board")
+	await await_frames(200)
+	check(sel.is_open() and p0.hand.get_child_count() == 1 and p0.family_size() == 3
+		and int(main.family_draws[0]) == 0 and main.effect_log.is_empty(), tag + ": 200 frames with NO"
+		+ " tap and nothing happens (" + str(p0.hand.get_child_count()) + " hand, family "
+		+ str(p0.family_size()) + ", " + str(main.family_draws[0]) + " draws) - the draw has no timer, no"
+		+ " fallback and no auto-pick: the variant never picks a family card for a human seat")
+	main.queue_free()
+	await await_frames(2)
+
+
+func _test_modal_tap_index() -> void:
+	var tag := "H2"
+	var main = _scripted_main_human(4, NOBLE_4P_BARON_HUMAN, NOBLE_4P_BARON_HUMAN_LEFT)
+	await main.init_players(SEED)
+	var sel = main._family_selector
+	var p0 = main._players[0]
+	await await_until(func() -> bool: return sel.is_open())
+	var row: Array = _fs_cards(sel)
+	var fam_before: Array = _rn(row)
+	var left_before: int = _left_sum(main)
+	_fs_tap(row[1]["node"])
+	await await_until(func() -> bool: return not sel.is_open())
+	await await_until(func() -> bool: return p0.hand.get_child_count() == 2)
+	check(main.family_draw_idx[0] == [1], tag + ": the drawn family index is the TAPPED index (1), not 0 ("
+		+ str(main.family_draw_idx[0]) + ") - Main pops `p.family[idx]`, so the panel's index IS the draw")
+	check(int(p0.hand.get_child(1).type) == int(Deck.CardType.Guard)
+		and int(p0.hand.get_child(0).type) == int(Deck.CardType.Baron), tag + ": the drawn card landed in"
+		+ " the SECOND hand slot, on top of his active card (" + Deck.card_names[int(
+			p0.hand.get_child(1).type)].strip_edges() + " over " + Deck.card_names[int(
+				p0.hand.get_child(0).type)].strip_edges() + ") - the active card never moves, the draw is"
+				+ " added, which is what makes `the leftover is the active card` work for a human tap too")
+	check(_rn(_stack_nodes(p0)) == ["King", "Guard"], tag + ": the stack is the family MINUS the tapped"
+		+ " card (" + str(_rn(_stack_nodes(p0))) + " of " + str(fam_before) + ") - popping index 0 would"
+		+ " have left [Guard, Guard] and put the KING in his hand, so the stack names prove the tapped"
+		+ " index was honoured, not the first card")
+	check(p0.family_size() == 2, tag + ": the family shrank by exactly one (" + str(p0.family_size())
+		+ " of 3) - the tap draws ONE card, and the Countess is mandatory in both directions: the seat"
+		+ " cannot keep all 3 and cannot draw twice")
+	check(int(main._deck._widow_cards.size()) == 0, tag + ": the widow is untouched (4p burns nothing, "
+		+ str(int(main._deck._widow_cards.size())) + " cards) - a turn-start draw is a family draw, never"
+		+ " a widow draw")
+	check(_left_sum(main) == left_before, tag + ": `_left` is UNCHANGED by the family draw ("
+		+ str(_left_sum(main)) + " == " + str(left_before) + ") - a family card leaves the supply only"
+		+ " when it is played, so the draw cannot decrement the census")
+	check(sel.is_open() == false and not sel.visible and main._table.visible, tag
+		+ ": the panel closed ITSELF and the Table came back (" + str(bool(sel.visible)) + ", table "
+		+ str(main._table.visible) + ") - the modal has no cancel path, so the only way out of it is the"
+		+ " draw it asked for, and no board surface stays hidden behind it")
+	check(_fs_cards(sel).is_empty() and int(sel.get_child_count()) == 1, tag + ": the closed panel keeps"
+		+ " NO row (cards " + str(_fs_cards(sel).size()) + ", children " + str(int(sel.get_child_count()))
+		+ ") - a row that outlives its modal is a family a tap can still hit in the next turn")
+	check(p0._state == Player.State.SELECT_CARD, tag + ": the play selection resumed right after the draw"
+		+ " (state " + str(p0._state) + ") - draw, then play, in that order, on the production turn flow")
+	await main._on_card_played(p0.hand.get_child(0))
+	await await_until(func() -> bool: return p0._state == Player.State.INPUT_OTHER_P)
+	await main._on_target_player_selected(1)
+	await await_until(func() -> bool: return main.effect_log.size() > 0)
+	var play1: Dictionary = main.effect_log[0]
+	check(int(play1["played"]) == int(Deck.CardType.Baron) and int(play1["target"]) == 1, tag
+		+ ": the human's play is the Baron on seat 1 (" + Deck.card_names[int(play1["played"])].strip_edges()
+		+ " -> seat " + str(play1["target"]) + ") - the play selection is the untouched classic 2-card"
+		+ " choice, the modal only prepends the draw")
+	check(main.eliminations == 1 and main.eliminated_seats == [0], tag + ": the human HIMSELF is the seat"
+		+ " that leaves the round (" + str(main.eliminated_seats) + ") - `Guard` is rank 0, the LOWEST card"
+		+ " in the deck, so the Baron he played with the card HE TAPPED LOSES to seat 1's Priest; tapping"
+		+ " index 0 (the King, rank 5) would have won it - the choice is not cosmetic, it decides which seat"
+		+ " is out, and the modal is what a human turn starts with")
+	var settle: int = 0
+	while main.round_end_actor.size() == 0 and settle < 400:
+		await get_tree().process_frame
+		settle += 1
+	check(main.reveal_log.size() == 2 and int(main.reveal_log[0]["seat"]) == 0
+		and int(main.reveal_log[1]["seat"]) != 0, tag + ": exactly TWO family reveals in the round, the"
+		+ " human's FIRST and a Princess kill on another seat (" + str([int(main.reveal_log[0]["seat"]),
+			int(main.reveal_log[1]["seat"])]) + ") - the fixture keeps its Princess, and only the LOSER of a"
+		+ " comparison publishes his family: the Baron WINNER seat 1 is never revealed")
+	var rec: Dictionary = main.reveal_log[0]
+	check(int(rec["seat"]) == 0 and _rn(rec["cards"]) == ["King", "Guard"], tag + ": the revealed family is"
+		+ " the human's family MINUS the Guard he tapped out of it (" + str(_rn(rec["cards"])) + " of"
+		+ " [King, Guard, Guard]) - the card he chose left play, the two he did NOT draw are published, in"
+		+ " as-dealt order")
+	check(int(main._players[0].family_size()) == 0
+		and int(main._players[0].family_root.get_child_count()) == 0, tag + ": the out human's family data"
+		+ " AND his stack are both cleared (" + str(int(main._players[0].family_size())) + " cards, "
+		+ str(int(main._players[0].family_root.get_child_count())) + " nodes) - an out seat has no family to"
+		+ " draw, which is what makes the no-modal rule below testable")
+	await await_frames(200)
+	check(not main._family_selector.is_open() and int(main.family_draws[0]) == 1, tag + ": an ELIMINATED"
+		+ " human seat never opens the modal and never draws again (" + str(main.family_draws[0])
+		+ " family draws in 200 more frames) - the modal gate sits BEHIND the family-empty round-end check,"
+		+ " so an out seat never faces a panel with no card to tap")
+	check(int(main.pile_draws) == 0, tag + ": the round drew nothing from the main pile ("
+		+ str(main.pile_draws) + ") - 4p burns 3 and keeps the widow empty, and a human turn never reaches"
+		+ " for a pile card")
+	_check_left_audit(main, tag)
+	main.queue_free()
+	await await_frames(2)
+
+
+func _test_modal_round() -> void:
+	var tag := "H3"
+	var main = _scripted_main_human(2, NOBLE_2P_STACK, NOBLE_2P_STACK_LEFT)
+	var w := _modal_watcher()
+	await _settle_deal_human(main, w)
+	var p0 = main._players[0]
+	# The 2p family is [Guard, Guard, Guard, Guard, COUNTRESS]. The settle tapped index 0 (the first
+	# turn start), so plays 2..5 tap 3, 0, 0, 0: play 2 draws the COUNTRESS out of the middle of
+	# [Guard, Guard, Guard, Countess] and keeps it, plays 3..5 draw the remaining Guards. A draw of
+	# index 3 cannot be produced by any "draw the first card" path, and it changes what the seat KEEPS.
+	var taps: Array[int] = [-1, 3, 0, 0, 0]
+	for k in taps.size():
+		await _human_play(main, 1, Deck.CardType.Priest, taps[k])
+	var settle: int = 0
+	while main.round_end_actor.size() == 0 and settle < 400:
+		await get_tree().process_frame
+		settle += 1
+	w["stop"] = true
+	await await_frames(2)
+	check(int(w["openings"]) == 5, tag + ": 5 openings for 5 human turn starts (" + str(w["openings"])
+		+ ") - one panel per turn start, and the 6th turn start (family 0) opens NOTHING: a family-out"
+		+ " turn ends the round, it never opens a modal with no card to tap")
+	check(w["actors"] == [0, 0, 0, 0, 0] and int(w["ai_open"]) == 0, tag + ": every opening is on seat 0,"
+		+ " none on the AI seat (" + str(w["actors"]) + ", AI openings " + str(w["ai_open"])
+		+ ") - the family is private, so an AI's draw never puts his cards on screen")
+	check(int(w["table_open"]) == 0 and int(w["crowded"]) == 0, tag + ": at every opening the Table was"
+		+ " hidden and no other selector was visible (table " + str(w["table_open"]) + ", crowded "
+		+ str(w["crowded"]) + " of " + str(w["openings"]) + " openings) - the human turn never runs two"
+		+ " panels at once")
+	check(w["rows"][0] == ["Guard", "Guard", "Guard", "Guard", "Countess"], tag + ": the first opening"
+		+ " shows the FULL 5-card family (" + str(w["rows"][0]) + ") - the panel opens BEFORE the draw,"
+		+ " so the human always chooses among every card he has left")
+	check(w["rows"][2] == ["Guard", "Guard", "Guard"], tag + ": the third opening shows the family MINUS"
+		+ " the two cards already drawn (" + str(w["rows"][2]) + ") - the Countess he drew out of the"
+		+ " middle is gone from the row, so the row is the LIVE family, not the dealt one")
+	check(main.family_draw_idx[0] == [0, 3, 0, 0, 0], tag + ": the drawn indices are the TAPPED indices,"
+		+ " in tap order (" + str(main.family_draw_idx[0]) + " for taps " + str([0, 3, 0, 0, 0])
+		+ ") - a path that drew index 0 every turn (the step 7 placeholder) cannot produce a 3")
+	check(int(main.family_draws[0]) == 5 and int(main.family_draws[1]) == 5, tag + ": both seats drew 5"
+		+ " family cards (" + str(main.family_draws[0]) + " / " + str(main.family_draws[1])
+		+ ") - the human's 5 draws are 5 turn starts, so the modal never draws twice at one turn start"
+		+ " and never skips one")
+	check(int(main.pile_draws) == 0, tag + ": 0 main-pile draws in the whole round ("
+		+ str(main.pile_draws) + ") - 2p keeps 1 card in the pile and the variant never draws it at a"
+		+ " turn start")
+	check(main.eliminations == 0 and int(main.round_end_actor[0]) == 0, tag + ": 0 eliminations and the"
+		+ " round ended on seat 0's empty family (actor " + str(main.round_end_actor[0]) + ") - the modal"
+		+ " gate does not break the family-out round end, it is the same turn-start check")
+	check(int(main.round_end_hands[0][0]) == 1, tag + ": the human ends the round with EXACTLY 1 hand card ("
+		+ str(main.round_end_hands[0][0]) + ") - the 1-card invariant holds through every modal draw")
+	_check_left_audit(main, tag)
+	main.queue_free()
 	await await_frames(2)

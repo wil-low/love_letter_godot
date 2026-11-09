@@ -40,6 +40,7 @@ var _cur_player: int:
 @onready var _table: Node2D = $Table
 @onready var _animation_layer: Node2D = $AnimationLayer
 @onready var _type_selector: Node2D = $TypeSelector
+@onready var _family_selector: FamilySelector = $FamilySelector
 @onready var _discard_marker: Marker2D = $DiscardMarker
 @onready var _round_over_label: Label = $RoundOverLabel
 @onready var _game_over_label: Label = $GameOverLabel
@@ -75,6 +76,7 @@ func init_players(random_seed: int) -> void:
 	_random_seed = random_seed
 	_table.show()
 	_type_selector.hide()
+	_family_selector.close()
 	_round_over_label.hide()
 	_game_over_label.hide()
 	_select_other_player.hide()
@@ -218,6 +220,36 @@ func deal_from_family(p: Player, family_idx: int) -> void:
 	c.position = p.hand.to_local(dst)
 
 
+# Noble Family (todo step 20): the human seat's mandatory family draw, taken in the `FamilySelector`
+# modal. The panel shows HIS OWN family and reports a family INDEX; `Main` pops `p.family[idx]`, so the
+# seat's data stays the single source of truth and the modal can only choose among cards he has (it can
+# invent, add, reorder or duplicate none of them).
+#
+# The Table is hidden while the panel is open: the draw comes BEFORE any play, so the played-card slot
+# and the piles have nothing to do with the choice, and a human turn has exactly one interactive surface
+# at a time (the type/target selectors are hidden here, they belong to the play that follows).
+#
+# `await signal` is one-shot by construction (it disconnects on the resume) and the panel disarms itself
+# on the commit, so one open() yields exactly one draw - and the draw is mandatory: the panel has no
+# cancel path, so the only way out of it is tapping a card the seat owns.
+func human_draw_from_family(p: Player) -> void:
+	if p.family.is_empty():
+		# Main owns the round-over / elimination decisions; a modal with no card to tap is a stalled
+		# turn, so an empty family is not a page - the caller takes the round-over (turn start) or the
+		# widow/elimination chain (Prince, step 21) branch instead.
+		push_warning("human_draw_from_family: player " + str(p.idx) + " has no family card to draw")
+		return
+	_table.hide()
+	_family_selector.open(p.family)
+	print("Family draw: player " + str(p.idx) + " chooses a family card")
+	var family_idx: int = await _family_selector.draw_selected
+	_family_selector.close()
+	_table.show()
+	print("Family draw: player " + str(p.idx) + " drew family[" + str(family_idx) + "] = "
+		+ Deck.card_names[int(p.family[family_idx])])
+	await deal_from_family(p, family_idx)
+
+
 func new_turn():
 	print("\nnew_turn for Player " + str(_cur_player) + ", level " + str(_players[_cur_player].ai_level))
 	if get_parent().print_memory:
@@ -247,9 +279,9 @@ func new_turn():
 			round_over()
 			return
 		if p.is_human():
-			# TODO(step 20): human modal. Placeholder: family index 0 (as-dealt order), so the
-			# human keeps the classic 2-card play selection until the draw modal exists.
-			await deal_from_family(p, 0)
+			# The human's mandatory family draw is HIS choice, taken in the modal (step 20): the seat's
+			# stack is display-only, so no path auto-picks a family card for a human seat.
+			await human_draw_from_family(p)
 			_begin_play_selection(p)
 		else:
 			# An AI seat does NOT draw here: the family draw is part of the move, enumerated by
