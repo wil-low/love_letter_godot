@@ -170,11 +170,24 @@ flip from active to inactive (`main.gd` calls `Player.set_inactive` directly; th
 `defence_failed` / `self_eliminated` signals belong to the human input path).
 
     rounds played: 300, games: 10, eliminations: 137, no script error
+    NOBLE UI: scripted 4p game, seat 0 human, played by tapping the family modal - 6 openings, 6 taps,
+            19 plays, 19 effect records, 108 frames sampled one by one; surfaces [Prince x2, Guard x15,
+            Baron x1, King x1]; rails: 0 frames where the pending draw and the open panel disagreed,
+            0 frames crowded by another selector, 0 closed-panel leaks; the Countess-forced play of a
+            human seat is TEST I1 play 5
 
 ```
 godot --headless --path . tests/smoke_games.tscn
-echo $?   # 0 = the games kept flowing, 1 = they stalled / no elimination
+echo $?   # 0 = the games kept flowing AND the embedded noble suite passed, 1 = a stall / a check failed
 ```
+
+**The NOBLE UI line is a nested run, not a copy.** It instantiates
+`tests/noble_family_rules.tscn` inside the classic gate (with `quit_on_fail = false` so the nested suite
+cannot quit the classic one), awaits its `suite_done`, and prints the counters TEST J measured — so the
+single classic command carries the step 22 exclusivity number: 6 modal openings served by 6 taps, and
+zero frames of the game in which the rails disagreed. It frees the classic game first, because an AI seat
+consumes the global RNG every turn and left running it steals random numbers from the scripted fixtures
+(measured: 16 plays where the standalone suite measures 19).
 
 ## tests/prince_memory_sim.py — headless model used for the statistics
 
@@ -754,6 +767,101 @@ one ends with 200 frames of the round-end state: no panel, no family draw, no re
 | only a SELF-Prince opens the modal (`tp.is_human() and p.idx == tp.idx`) — an AI's Prince aimed at the human auto-picks | **15** + the same stall | **I2 13** (exactly the list above), I3 1, + the 0-effect-records check — I1 and I4 pass, so the self-Prince path is not what this row pins; the gate is the target's family on ANOTHER seat's turn |
 | the panel opens on the ACTOR's family (`human_draw_from_family(_players[_cur_player])`) | **5** | I2 3 (the row is seat 1's `[Guard, Guard]`, the effect's `fams[0] 2 → 1`, the target's `hands[0] 1 → 1`), I3 2 — the panel is the TARGET's family: an AI Prince cannot put HIS cards into a human's hand (it is also a privacy break: it publishes an AI family on screen) |
 | the widow fallback is skipped for a human target (`... and not tp.is_human()`) — family 0 eliminates him | **5** | all in I3: the play-5 snapshot (widow `1 → 0`, hand `0 → 1`, active), the elimination at play 6, `pile_draws == 1`, the 11-turn round end, `_left == [4,0,…]` vs `[2,0,…]` — the widow is a FALLBACK PILE, in front of the elimination, for a human target too |
+
+### TEST J — the modal's exclusivity rails, sampled EVERY frame (step 22)
+
+Steps 20 and 21 put the human's family draws in a modal. **Step 22 guarantees that the modal is the
+only thing the human can act on while it is open, that the draw it is waiting for happens exactly once,
+and that the panel is closed on every way out of it.** `main.gd` carries the state that makes that
+inspectable: `_drawing` (a family draw is pending), `_draw_idx` (the index the guarded listener
+latched), `is_drawing()` for the harnesses, one listener connected once in `_ready()` (the panel is a
+permanent scene child, so a per-`open()` connect would be a per-draw resource a leaky exit path can
+strand), `_drawing` guards in `_on_card_played` / `_on_target_player_selected` / `_on_target_type_selected`
+/ `_on_move_chosen` that drop anything the play chain delivers under an open panel, the seat's state
+forced to `IDLE` for the length of the modal (`Player._on_card_input_event` gates card taps on `_state`,
+so this closes his own cards), the four `hide()`s that put the play surface away, the family-index
+validation (an index the seat cannot pop takes `family[0]`: the turn-start draw is mandatory, a draw
+that never lands never ends the turn), and `_close_family_modal()` on every commit, on `init_players`
+(the interrupted game: a suspended `await` never resumes, so this is the only thing that clears it) and
+on `_new_round` (the family is RE-DEALT, so a row of the previous family is a menu of cards that no
+longer exist). **91 checks in six fixtures, J1..J6** (the suite went 764 → 879: J's 91 plus 24 checks in
+TEST F1 and TEST I2 that were being SKIPPED by script errors — a check whose expression raises is never
+reported as a PASS, and it is not a FAIL either, so the old suite counted 764 checks and silently ran
+fewer; the fixes are the `add_child`-before-`ai_level` order in `_test_stack_unit` (the setter touches
+`@onready` children) and reading a watcher's 3rd opening only after it has happened).
+
+**Why a per-frame watcher.** `Main`'s human family draw is a coroutine suspended on
+`await draw_selected`, and the play chain is single-threaded, so with `Animator._speed = 0` in headless
+a **single `process_frame` can carry a whole game** — deal, 19 plays, an effect, a round end, the next
+round's deal. A panel that closes a frame late, a selector that flickers back for a frame, a draw that
+pops two family cards in one frame: all of them are invisible to a check made at one moment.
+`_watch_rails()` samples the state on every frame and counts violations: frames where `is_drawing()`
+and `is_open()` disagree, frames where the panel is open and a play surface is visible, closed panels
+left visible or left with a row of cards in them, family draws taken while a modal is open, plays that
+land while a modal is open.
+
+- **J1 — a whole 2-round 4p game, frame by frame** — seat 0 human (King + `[Prince, Baron, Guard]`),
+  seats 1-3 level 1 (Guard + `[Guard, Guard, Guard]`), 6 family-modal openings and 6 taps: a
+  **self-Prince** (the panel opens MID-EFFECT on his own 0-card hand, and the King he taps is the card
+  that later swaps with a rival family on the same play), a **Baron compare** against seat 1, and
+  **Guard** plays that need a target seat and a declared type. `openings == taps == 6`,
+  `family_draw_idx[0] == [0, 0, 0, 0, 1, 0]` == the taps (one pop per tap: a draw that pops twice
+  leaves 2 hand cards, a draw with no panel is the game choosing for him); every row equalled the seat's
+  live family data at that frame; `hands == [1, 0, 1, 1, 0, 1]` and `fams == [3, 2, 1, 3, 2, 1]` (a
+  turn start finds 1 card, a mid-effect Prince finds 0, each opening spent one family card); 0
+  eliminations, 0 pile draws, 19 plays in 2 rounds, 1 hand card at every play boundary. The
+  Countess-forced play of a human seat is I1 play 5 — the same rule on the same flow, in the same suite.
+- **J2 — the rails are INERT, not in the way** — the gate: a family draw is pending, the panel is open,
+  the human holds 1 card and his family is full. Probes, in order: a real tap on his own hand card, a
+  card played from the chain behind that tap, a target-player tap, a target-type tap, a `move_chosen`
+  from a seat in `IDLE` (the only state that answers it), and a real tap on the type selector's card.
+  All inert: 1 card in hand, 3 in family, 0 draws, no target, no type, no chain, and each probe leaves
+  the pending draw pending. The fixture ends by TAPPING THE PANEL — the draw the rails were guarding
+  lands, once, on the card he chose.
+- **J3 — a dirty board, and re-entrancy** — `_rails_dirty()` holds the type selector, both target
+  labels, the player-selection sprite, the Table **and the seat's own `_state` (SELECT_CARD)** on stage
+  on every frame the panel is closed, so the frame the panel opens is a fair test of the hiding lines
+  and of the state write (the production flow reaches `human_draw_from_family` with those surfaces
+  hidden and the state already `IDLE`, so a fixture that takes the board as it finds it cannot tell the
+  rails from luck — measured: deleting the hides, or the state write, changes **0** checks). Then: two
+  nested `human_draw_from_family` requests, from the seat that is already choosing, open **no second
+  modal**, close nothing, re-build nothing, draw nothing and cannot cancel the pending draw; the tap
+  after them draws exactly 1 card.
+- **J4 — the guarded listener: no pending draw, no latched index** — with `_drawing == false` the panel
+  reports indexes 3 and 0 and Main latches nothing, queues nothing, draws nothing; then a modal is
+  opened with the index pre-latched at 2 (the shape two emissions in flight take) and the seat taps 0:
+  the card that lands in his hand is the card HE TAPPED, not the one a stray emission latched.
+- **J5 — the modal cannot stall the mandatory draw** — a sabotage index the panel cannot produce (99,
+  emitted straight on the signal, bypassing `select()`'s validation, which is what a real out-of-the-blue
+  emission looks like) closes the panel, clears the pending state and lets the seat take `family[0]`:
+  1 draw, 1 card, 2 in hand, play selection resumed. A stalled mandatory draw ends no turn, so the
+  fallback is the lesser bug.
+- **J6 — closed on every exit path** — (1) the turn-start commit (closed, hidden, no row, the Table
+  back, the target selectors answering, 2-card hand, `family_draw_idx == [1]`); (2) the MID-EFFECT
+  Prince commit, inside the same effect; (3) a NEW GAME from a modal that is still open: the old panel
+  is gone, the interrupted draw resumed into **no second pop** (0 extra draws) and the new round's
+  first turn start opens a fresh row of the re-dealt family; (4) a NEW ROUND with a LIVE modal:
+  `_new_round` closes it, the seat's family is FULL again (3, his hand 1, the interrupted draw drew
+  nothing) and the new round's first opening shows the whole re-dealt family in as-dealt order, not the
+  old family's leftovers, opening ALONE.
+
+| sabotage (main.gd) | measured FAILs | where |
+|---|---|---|
+| the `_drawing` guard removed from `_on_card_played` (a card play is accepted under the panel) | **4** | J2: the play starts a chain under the panel (a card reaches the table, his hand empties), the chosen-move chain runs, his state is left at the play state, and the tap that follows draws on a hand the chain already touched |
+| the `_drawing` guards removed from `_on_target_player_selected` + `_on_target_type_selected` | **2** | J2: the target-type tap declares a type under the panel (and shows the Table back), and the chosen-move chain runs |
+| the four `hide()` calls of `human_draw_from_family` removed (the panel opens on a dirty board) | **1** | J3 (the opening samples every surface: the Table is back and the selectors are on stage) — J1's crowding counter sees **0**, because the production flow hides them at those moments anyway: J1 monitors the rails, J3 is what pins them |
+| `p._state = Player.State.IDLE` removed | **1** | J3 (the seat is tappable under the panel: `state == SELECT_CARD` at the opening) |
+| `_close_family_modal()` removed from `_new_round()` | **3** | J6 path 4 (the live modal survives the re-deal, the seat's family is 2 not 3, the stale row is the old family's leftovers) |
+| the `_drawing` nested-request guard removed (a nested request re-opens the panel) | **0 + a hung suite** (849 checks in, killed at 260 s) | J3: the nested request re-opens the panel and the fixture's own `await` never returns. The todo's gate for this step is "the modal cannot deadlock a human turn", and this is what that deadlock looks like from outside: a suite that stops printing |
+
+`tests/noble_family_rules.gd` publishes the counters of J1 (`ui_openings`, `ui_taps`, `ui_mismatch`,
+`ui_crowded`, `ui_leaks`, `ui_plays`, `ui_effects`, `ui_frames`, `ui_surfaces`) plus `suite_done` and
+`fails()`, and honours `quit_on_fail`: **`tests/smoke_games.tscn` runs this suite nested** (with
+`quit_on_fail = false`) and prints its `NOBLE UI:` line from those counters, so the classic gate carries
+the step 22 number. The nested run frees the classic game first — its AI seats consume the global RNG
+every turn, and left running they steal random numbers from the scripted fixtures (measured: 16 plays
+where the standalone suite measures 19).
+
 
 ## tests/noble_family_smoke.tscn — Noble Family variant, whole games on the AI (steps 7, 11, 14)
 

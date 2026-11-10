@@ -220,6 +220,27 @@ const NOBLE_2P_STACK_LEFT: Array[int] = [13, 0, 0, 2, 0, 0, 1, 0]  # 13 Guard, 2
 
 var _failed: int = 0
 var _deck: Deck
+
+# Public so another suite can EMBED this one: `tests/smoke_games.gd` instantiates
+# `tests/noble_family_rules.tscn`, sets `quit_on_fail = false` (a nested suite must never quit the
+# whole game it is embedded in), awaits `suite_done` and reads the counters below. That is how the
+# classic smoke test prints its NOBLE UI line: the numbers come from a real run of this suite, not
+# from a copy of its checks.
+var quit_on_fail: bool = true
+var suite_done: bool = false
+var ui_openings: int = 0
+var ui_taps: int = 0
+var ui_mismatch: int = 0
+var ui_crowded: int = 0
+var ui_leaks: int = 0
+var ui_effects: int = 0
+var ui_plays: int = 0
+var ui_frames: int = 0
+var ui_surfaces: Array = []
+
+
+func fails() -> int:
+	return _failed
 var _c_plays: Array[int] = [0, 0, 0, 0]  # TEST C: plays per seat, counted on `move_chosen`
 # main.gd / player.gd read these off the game's parent node, so the harness must expose them
 var print_memory: bool = false
@@ -247,6 +268,7 @@ func _ready() -> void:
 	await _test_family_selector()
 	await _test_human_modal()
 	await _test_prince_human_modal()
+	await _test_modal_rails()
 	await await_frames(1)
 
 	print("\n==========================")
@@ -255,7 +277,9 @@ func _ready() -> void:
 	else:
 		print(str(_failed) + " CHECK(S) FAILED")
 	print("==========================")
-	get_tree().quit(1 if _failed > 0 else 0)
+	suite_done = true
+	if quit_on_fail:
+		get_tree().quit(1 if _failed > 0 else 0)
 
 
 # ----------------------------------------------------------------------------------------
@@ -2046,21 +2070,24 @@ func _check_stack_p(tag: String, p: Player, names: Array, xs: Array, faceup: boo
 # reached directly (a live game only ever exercises the human branch + the reveal branch).
 func _test_stack_unit() -> void:
 	var tag := "F1"
+	# `add_child` FIRST: `Player.ai_level`'s setter touches `_badge` / `_score_digit`, which are
+	# `@onready` children, so setting it on a seat that is not in the tree yet writes to Nil nodes
+	# (a script error, and the badge/score visibility the setter applies is silently lost).
 	var p = PlayerScene.instantiate()
-	p.ai_level = Player.AI_Level.Human
 	add_child(p)
+	p.ai_level = Player.AI_Level.Human
 	await await_frames(1)
 	p.position = Vector2(5, 31)  # seat 0 on the real board
 	var pr = PlayerScene.instantiate()
-	pr.right_score = true
-	pr.ai_level = Player.AI_Level.Human
+	pr.right_score = true  # BEFORE `add_child`: `Player._ready()` mirrors the stack off `right_score`
 	add_child(pr)
+	pr.ai_level = Player.AI_Level.Human
 	await await_frames(1)
 	pr.position = Vector2(68, 31)  # seat 3 on the real board (x 68, right-handed)
 	var ai = PlayerScene.instantiate()
+	ai.right_score = true  # a right-handed seat, x 68 - the stack must mirror onto the board, so it
+	add_child(ai)  # has to be set before `_ready()` reads it
 	ai.ai_level = Player.AI_Level.Level_3
-	ai.right_score = true  # a right-handed seat, x 68 - the stack must mirror onto the board
-	add_child(ai)
 	await await_frames(1)
 	ai.position = Vector2(68, 0)
 
@@ -3146,7 +3173,7 @@ func _human_play_idx(main, hand_idx: int, target: int, type: Deck.CardType, draw
 			+ " cards) - the harness stops here instead of indexing a hand that does not exist")
 		return
 	var forced: int = p.countess_restricted()
-	check(hand_idx == 0 or forced == hand_idx, "the human taps hand index " + str(hand_idx)
+	check(forced == -1 or forced == hand_idx, "the human taps hand index " + str(hand_idx)
 		+ ", the Countess rule forces " + str(forced) + " (-1 = free) - a tap on a card the rule forbids"
 		+ " is ignored by `Player._on_card_input_event`, so the harness has to tap the forced card")
 	await main._on_card_played(p.hand.get_child(hand_idx))
@@ -3347,10 +3374,16 @@ func _test_ai_prince_human() -> void:
 	check(int(main.effect_log[1]["after"]["hands"][0]) == 1 and int(main.effect_log[1]["before"]["hands"][0]) == 1,
 		tag + ": the target's hand is 1 card BEFORE the hit (the King) and 1 card after (the Countess) -"
 		+ " a hit discards and replaces, the hand never passes through 2")
-	check(w["hand_types"][1] == "-" and w["hand_types"][2] == "Countess" and w["tapped"] == [0, 1, 0], tag
-		+ ": the mid-effect tap was family index 1 -> the COUNTRESS is his active card at his next turn"
-		+ " start (" + str(w["hand_types"]) + ") - the panel delivered the card he picked out of the row"
-		+ " [Guard, Countess], i.e. index 1 means the 2nd card of the data, not the 2nd card of a sort")
+	# His NEXT turn start is the 3rd opening, and it comes after seat 2's and seat 3's turns: a fixture
+	# that reads the 3rd opening's row before those turns ran reads an array with 2 entries.
+	await await_until(func() -> bool: return int(w["openings"]) >= 3)
+	var ht: Array = w["hand_types"]
+	var third_type: String = str(ht[2]) if ht.size() > 2 else "<no 3rd opening>"
+	check(ht.size() == 3 and third_type == "Countess" and w["tapped"] == [0, 1, 0]
+		and str(ht[1]) == "-", tag + ": the mid-effect tap was family index 1 -> the COUNTRESS is his"
+		+ " active card at his next turn start (" + str(ht) + ", taps " + str(w["tapped"])
+		+ ") - the panel delivered the card he picked out of the row [Guard, Countess], i.e. index 1"
+		+ " means the 2nd card of the data, not the 2nd card of a sort")
 	check(main.pile_draws == 0 and int(main._deck._widow_cards.size()) == 0, tag + ": 0 pile draws and a"
 		+ " 0-card widow (4p burns nothing) - the widow is the FALLBACK pile and a family that has cards"
 		+ " never lets a pile card near a human hand")
@@ -3521,5 +3554,736 @@ func _test_prince_out_no_widow() -> void:
 		and not main._family_selector.is_open(), tag + ": 200 frames of the round-end state: no panel, no"
 		+ " family draw, no reveal - the family draw modal reopens inside effects only, and an elimination"
 		+ " ends its seat's share of them")
+	main.queue_free()
+	await await_frames(2)
+
+
+
+# ----------------------------------------------------------------------------------------
+# TEST J (todo step 22): the MODAL / INPUT GUARD RAILS
+#
+# Steps 20 and 21 made a human family draw a COROUTINE: `human_draw_from_family()` opens the panel
+# and suspends the whole play chain on `await draw_selected`. Everything step 22 promises follows
+# from that one suspension, and `Main` now exposes its state to prove it (main.gd):
+#
+#   `_drawing`   - a family draw is PENDING. `is_drawing()` is the single source of truth for "the
+#                  human seat is choosing right now", so the exclusivity gate is a per-frame equality
+#                  a harness can sample: `is_drawing() == _family_selector.is_open()`.
+#   `_draw_idx`  - what the guarded listener latches. A stray emission (a double tap, a tap on a
+#                  closing panel) cannot queue a second draw: the listener drops it, and the index
+#                  Main pops is the one the seat's own tap carried.
+#
+# J1 samples EVERY frame of a 2-round human game (not just the openings, as TESTS H and I do):
+#  - `mismatch`  - frames where `is_drawing()` and `is_open()` disagree (the todo's exclusivity gate)
+#  - `crowded`   - frames with the panel open AND the Table / a type selector / a target label / the
+#                  player-selection sprite visible (the todo's "no stuck overlays": one surface)
+#  - `leak`      - frames with a closed panel left visible, `row_leak` frames with a closed panel
+#                  still holding its row of family cards
+#  - the taps, the rows, the seat's hand and family at each opening (the todo's "no double draws")
+# The game itself covers four of the five manual surfaces of step 22's Check line in ONE human game:
+# a self-Prince (a MID-EFFECT modal, on his own turn), a Guard (target + type selectors), a King
+# (the swap) and a Baron (the reveal and the comparison). The fifth, the Countess-forced play, is
+# I1's play 5 in this same suite (the (King, Countess) hand that forces index 1).
+#
+# J2  the rails are INERT: a card play, a target tap, a type tap and a chosen move, fired at the
+#     gate by a harness, start no chain, move no card, close no panel - and the pending draw survives.
+# J3  re-entrancy: a nested draw request (the same chain asking twice) opens NO second modal, pops
+#     nothing and cannot re-build the row the seat is looking at; the pending draw survives.
+# J4  the listener's guard: with no draw pending an emission is dropped (`_draw_idx` untouched), and
+#     a latched index from an out-of-the-blue emission cannot rename the card his tap drew.
+# J5  the anti-deadlock rail: an index Main cannot pop (only a sabotage can produce it: the panel
+#     only ever emits an index of its own row, G2) takes family[0] - a turn that never draws never
+#     ends, so a stalled mandatory draw is the worse failure.
+# J6  closed on every exit path: the turn-start commit, the mid-effect Prince commit, a NEW GAME
+#     (`init_players`, the menu/Exit path: a suspended await never resumes, so the panel would sit on
+#     the menu) and a NEW ROUND (`_new_round` re-deals the family - a row of the old family is a
+#     menu of cards that no longer exist).
+# ----------------------------------------------------------------------------------------
+
+# 4p burns NOTHING and keeps no widow, so the deal is: 4 first-hand cards (idx 0..3), then 3 family
+# columns, seat s column c = idx 4 + 4*c + s, and the main pile is EMPTY (16 - 4 - 12 == 0).
+# Seat 0 (human): King + [Prince, Baron, Guard]. Seats 1..3: Guard + [Guard x3].
+# Seat 0's round: tap the Prince (turn start), play it on HIMSELF (the mid-effect modal takes the
+# Baron), tap the Guard, play the BARON on seat 1 with the Guard he kept (Guard vs Guard: a TIE, so
+# the compare publishes seat 1's family and eliminates nobody).
+const NOBLE_4P_RAILS: Array[Deck.CardType] = [
+	Deck.CardType.King,     # 0  s0 first hand
+	Deck.CardType.Guard,    # 1  s1 first hand
+	Deck.CardType.Guard,    # 2  s2 first hand
+	Deck.CardType.Guard,    # 3  s3 first hand
+	Deck.CardType.Prince,   # 4  s0 family 0
+	Deck.CardType.Guard,    # 5  s1 family 0
+	Deck.CardType.Guard,    # 6  s2 family 0
+	Deck.CardType.Guard,    # 7  s3 family 0
+	Deck.CardType.Baron,    # 8  s0 family 1
+	Deck.CardType.Guard,    # 9  s1 family 1
+	Deck.CardType.Guard,    # 10 s2 family 1
+	Deck.CardType.Guard,    # 11 s3 family 1
+	Deck.CardType.Guard,    # 12 s0 family 2
+	Deck.CardType.Guard,    # 13 s1 family 2
+	Deck.CardType.Guard,    # 14 s2 family 2
+	Deck.CardType.Guard,    # 15 s3 family 2
+]
+const NOBLE_4P_RAILS_LEFT: Array[int] = [13, 0, 1, 0, 1, 1, 0, 0]  # 13 Guard, 1 Baron, 1 Prince, 1 King
+# The taps, in opening order: round 1 = turn start (Prince), the self-Prince's mid-effect row
+# [Baron, Guard] (Baron), the last family card (Guard); round 2 = turn start (Prince), the AI
+# Prince's mid-effect row [Baron, Guard] (GUARD, index 1), the last family card (Baron).
+const NOBLE_4P_RAILS_TAPS: Array[int] = [0, 0, 0, 0, 1, 0]
+
+
+func _test_modal_rails() -> void:
+	print("--- TEST J1 (4p, 2 rounds: the per-frame exclusivity rails of a whole human game) ---")
+	await _test_rails_game()
+	print("--- TEST J2 (the rails are inert: taps and handler calls under the panel do nothing) ---")
+	await _test_rails_inert()
+	print("--- TEST J3 (re-entrancy: a nested draw request opens no second modal) ---")
+	await _test_rails_reentrant()
+	print("--- TEST J4 (the guarded listener: no pending draw, no latched index) ---")
+	await _test_rails_listener_guard()
+	print("--- TEST J5 (a sabotage index Main cannot pop takes family[0], the turn never stalls) ---")
+	await _test_rails_bad_index()
+	print("--- TEST J6 (closed on every exit path: commit, mid-effect, new game, new round) ---")
+	await _test_rails_exit_paths()
+
+
+# The per-frame watcher (a coroutine): it samples EVERY frame, and taps every opening from the queue,
+# so it is the only source of taps in this fixture and it sees the frames TESTS H and I sample between.
+func _rail_watcher(taps: Array) -> Dictionary:
+	return {"frames": 0, "taps": taps, "k": 0, "stop": false,
+		"openings": 0, "open_frames": 0, "mismatch": 0, "crowded": 0, "leak": 0, "row_leak": 0,
+		"actors": [], "rows": [], "snaps": [], "tapped": [], "hands": [], "fams": [], "tables": [],
+		"states": []}
+
+
+func _watch_rails(main, w) -> void:
+	var was := false
+	while int(w["frames"]) < 20000 and not bool(w["stop"]):
+		w["frames"] = int(w["frames"]) + 1
+		var sel = main._family_selector
+		var open: bool = sel.is_open()
+		if open:
+			w["open_frames"] = int(w["open_frames"]) + 1
+		if open != main.is_drawing():
+			w["mismatch"] = int(w["mismatch"]) + 1
+		if open and (main._table.visible or main._type_selector.visible
+				or main._select_other_player.visible or main._select_any_player.visible
+				or bool(main._player_selection.visible)):
+			w["crowded"] = int(w["crowded"]) + 1
+		if not open:
+			if bool(sel.visible):
+				w["leak"] = int(w["leak"]) + 1
+			if int(sel.get_child_count()) > 1:
+				w["row_leak"] = int(w["row_leak"]) + 1
+		if open and not was:
+			var p0 = main._players[0]
+			var cards: Array = _fs_cards(sel)
+			w["openings"] = int(w["openings"]) + 1
+			w["actors"].append(int(main._cur_player))
+			w["rows"].append(_rn(cards))
+			w["snaps"].append(_fam_names(p0))
+			w["hands"].append(int(p0.hand.get_child_count()))
+			w["fams"].append(int(p0.family_size()))
+			w["tables"].append(bool(main._table.visible))
+			w["states"].append(int(p0._state))
+			var k: int = int(w["k"])
+			var idx: int = int(w["taps"][k]) if k < w["taps"].size() else -1
+			if idx >= 0 and idx < cards.size():
+				_fs_tap(cards[idx]["node"])
+			w["tapped"].append(idx)
+			w["k"] = k + 1
+		was = open
+		await get_tree().process_frame
+
+
+func _rails_settle(main, w) -> void:
+	_watch_rails(main, w)
+	await main.init_players(SEED)
+	var fam: int = Deck.NOBLE_FAMILY_SIZE[int(main._player_count)]
+	await await_until(func() -> bool:
+		var ready := true
+		for p in main._players:
+			if p.is_active() and p.idx > 0:
+				ready = ready and p.hand.get_child_count() == 1 and p.family_size() == fam
+		return ready and main._players[0].hand.get_child_count() == 2 \
+			and main._players[0].family_size() == fam - 1)
+
+
+func _test_rails_game() -> void:
+	var tag := "J1"
+	var main = _scripted_main_human(4, NOBLE_4P_RAILS, NOBLE_4P_RAILS_LEFT)
+	var w = _rail_watcher(NOBLE_4P_RAILS_TAPS)
+	await _rails_settle(main, w)
+	var p0 = main._players[0]
+
+	# ---- round 1: the self-Prince (a mid-effect modal) and the Baron (the reveal + compare) ----
+	await _human_play_idx(main, 1, 0, Deck.CardType.Unknown, -1, tag + " r1 play 1")
+	var r1a: Array = main.effect_log
+	check(r1a.size() == 1 and int(r1a[0]["played"]) == int(Deck.CardType.Prince)
+		and int(r1a[0]["target"]) == 0, tag + ": play 1 is the Prince on seat 0 HIMSELF - a mid-effect"
+		+ " modal of his OWN family, on HIS turn, inside the play chain that is suspended on it")
+	check(int(r1a[0]["before"]["fams"][0]) == 2 and int(r1a[0]["after"]["fams"][0]) == 1, tag
+		+ ": the effect's family deltas are 2 -> 1: the turn-start tap spent family[0] (the Prince) and"
+		+ " the mid-effect tap spent one more INSIDE the same effect - one family pop per tap, no phantom"
+		+ " draw, and the mid-effect draw is attributed to this play")
+	check(int(r1a[0]["after"]["hands"][0]) == 1 and bool(r1a[0]["after"]["active"][0]), tag
+		+ ": after the mid-effect modal the human holds EXACTLY 1 card and is still active - the modal"
+		+ " REPLACES the card the Prince took, it never adds to a 2-card hand")
+	check(not main._family_selector.is_open() and not bool(main._family_selector.visible)
+		and _fs_cards(main._family_selector).is_empty() and not main.is_drawing(), tag
+		+ ": the mid-effect modal CLOSED on its commit (open " + str(main._family_selector.is_open())
+		+ ", visible " + str(bool(main._family_selector.visible)) + ", row "
+		+ str(_fs_cards(main._family_selector).size()) + " cards, drawing " + str(main.is_drawing())
+		+ ") - a Prince redraw that left its panel on screen is the stuck overlay step 22 is about")
+	await _human_play_idx(main, 0, 1, Deck.CardType.Unknown, -1, tag + " r1 play 2")
+	var r1b: Array = main.effect_log
+	var baron_i: int = -1
+	for i in r1b.size():
+		if int(r1b[i]["played"]) == int(Deck.CardType.Baron) and int(r1b[i]["target"]) == 1:
+			baron_i = i
+	var baron_no: int = baron_i + 1
+	check(baron_i >= 0, tag + ": a BARON on seat 1 is in the round-1 log (play #" + str(baron_no)
+		+ " of " + str(r1b.size()) + "), played with the Guard the mid-effect modal gave him - the draw"
+		+ " the modal made is the card his NEXT play is made with, and his next play is his SECOND turn"
+		+ " (the 3 AI seats play between: the log's plays #2..#4 are their Guards aimed at the human)")
+	if baron_i >= 0:
+		var brec: Dictionary = r1b[baron_i]
+		check(int(brec["before"]["hands"][0]) == 1 and int(brec["after"]["hands"][0]) == 1
+			and int(brec["before"]["fams"][0]) == 0, tag
+			+ ": at that play the human's snapshot is 1 hand card with 0 family cards left ("
+			+ str(int(brec["before"]["hands"][0])) + ", " + str(int(brec["before"]["fams"][0]))
+			+ ") - `_snapshot` is taken with the played card ALREADY on the table, so the card it reports"
+			+ " is the one he KEPT: the 2-card hand the modal built (his kept card + the card his turn"
+			+ " start tapped out) spent exactly one family card and exactly one play, and a double draw"
+			+ " would have left 2 cards in this snapshot")
+	check(main.eliminations == 0, tag + ": the Baron compare published seat 1's family and eliminated"
+		+ " NOBODY (eliminations " + str(main.eliminations) + ") - Guard (rank 0) vs Guard is a tie, so"
+		+ " the reveal+compare surface runs with the modal closed and the round survives to round 2")
+	var settle: int = 0
+	while main.round_end_actor.size() < 1 and settle < 500:
+		await get_tree().process_frame
+		settle += 1
+	check(main.round_end_actor.size() == 1 and int(main.round_end_actor[0]) == 0, tag + ": round 1 ended"
+		+ " on seat 0's turn start with an EMPTY family (actor " + str(main.round_end_actor) + ") - 3"
+		+ " taps drained his 3-card family (2 turn starts + 1 mid-effect), the modal gate sits behind the"
+		+ " family-empty round-end check and never stalls it")
+	_check_no_leak(main, tag + " round 1 end")
+	_check_left_audit(main, tag + " round 1")
+
+	# ---- round 2: the King swap, then a Guard (target + type selectors) ----
+	await main._on_round_over_pressed()
+	var fam: int = Deck.NOBLE_FAMILY_SIZE[4]
+	await _rails_redeal(main, w)
+	check(int(p0.family_size()) == fam - 1 and int(p0.hand.get_child_count()) == 2, tag
+		+ ": round 2 re-dealt seat 0 a FULL family and his first turn start spent one card (family "
+		+ str(p0.family_size()) + " of " + str(fam) + ", hand " + str(int(p0.hand.get_child_count()))
+		+ ") - the same panel node serves the new round, on the row of the NEW family")
+	await _human_play_idx(main, 0, 1, Deck.CardType.Unknown, -1, tag + " r2 play 1")
+	var r2a: Array = main.effect_log
+	var king_i: int = -1
+	for i in r2a.size():
+		if int(r2a[i]["played"]) == int(Deck.CardType.King) and int(r2a[i]["target"]) == 1:
+			king_i = i
+	var king_no: int = king_i + 1
+	check(king_i >= 0, tag + ": a KING on seat 1 is in the play log (play #" + str(king_no) + " of "
+		+ str(r2a.size()) + ") - the swap is the fourth manual surface of step 22's Check line, played"
+		+ " with the Prince he tapped out of this round's turn-start modal")
+	if king_i >= 0:
+		var krec: Dictionary = r2a[king_i]
+		check(int(krec["after"]["hands"][0]) == 1 and int(krec["before"]["hands"][0]) == 1, tag
+			+ ": the swap left the human with EXACTLY 1 hand card (1 -> 1) - a King swap exchanges the"
+			+ " card he kept with the target's active card, it never leaves 2 cards in a hand")
+		var kl: int = int(krec["after"]["left"][int(Deck.CardType.King)])
+		var kl0: int = int(krec["before"]["left"][int(Deck.CardType.King)])
+		check(kl == kl0 - 1, tag + ": the King left the supply by the PLAY (-1: " + str(kl0) + " -> "
+			+ str(kl) + "), the swap itself decrements nothing, and the family draws of this round"
+			+ " decremented nothing either")
+	# the AI Prince of seat 1 hits the human MID-EFFECT on the AI's turn: the modal opens on HIS family
+	var mid: int = int(w["openings"])
+	await await_until(func() -> bool: return int(w["openings"]) > mid)
+	check(int(w["openings"]) == 5 and int(w["actors"][4]) == 1, tag + ": the 5th opening happened on seat"
+		+ " 1's TURN (" + str(w["actors"]) + ") - an AI's Prince aimed at the human opens the HUMAN's"
+		+ " panel, mid-effect, while the chain is suspended inside seat 1's effect")
+	check(w["rows"][4] == ["Baron", "Guard"] and w["rows"][4] == w["snaps"][4], tag + ": that row is the"
+		+ " human's live family data (" + str(w["rows"][4]) + ") - the Prince has already taken his"
+		+ " swapped card out of play (hand " + str(w["hands"][4]) + " cards at the opening), and the AI"
+		+ " never picks the replacement for him")
+	await _human_play_idx(main, 0, 2, Deck.CardType.Priest, -1, tag + " r2 play 2")
+	var r2b: Array = main.effect_log
+	var guard_i: int = -1
+	for i in r2b.size():
+		if int(r2b[i]["played"]) == int(Deck.CardType.Guard) and int(r2b[i]["target"]) == 2 \
+				and int(r2b[i]["target_type"]) == int(Deck.CardType.Priest):
+			guard_i = i
+	var guard_no: int = guard_i + 1
+	check(guard_i >= 0, tag + ": a GUARD on seat 2 declaring Priest is in the log (play #" + str(guard_no)
+		+ " of " + str(r2b.size()) + ") - the target selector and the type selector are the fifth manual"
+		+ " surface, played with the Guard the King swap left in his hand, and they run AFTER the modal"
+		+ " closed, never under it")
+	if guard_i >= 0:
+		var gtype: int = int(r2b[guard_i]["target_type"])
+		check(gtype == int(Deck.CardType.Priest), tag + ": the Guard's DECLARED type is the one the type"
+			+ " selector reported (" + Deck.card_names[gtype].strip_edges() + ") - the declaration is a"
+			+ " play-chain choice, not a modal choice, and no Priest exists in this supply, so it misses")
+	check(int(w["crowded"]) == 0, tag + ": at every opening of both rounds the Table was hidden and NO"
+		+ " type selector, target label or player-selection sprite was visible - the modal is the only"
+		+ " interactive surface for its whole length (crowded frames " + str(w["crowded"]) + " of "
+		+ str(w["open_frames"]) + " open frames)")
+	settle = 0
+	while main.round_end_actor.size() < 2 and settle < 500:
+		await get_tree().process_frame
+		settle += 1
+	w["stop"] = true
+	await await_frames(2)
+	check(main.round_end_actor.size() == 2, tag + ": 2 rounds ran to their family-empty ends ("
+		+ str(main.round_end_actor) + ") - the rails survive a round transition, they are not a"
+		+ " one-round guard")
+
+	# ---- the per-frame exclusivity gate, over the whole game ----
+	check(int(w["mismatch"]) == 0, tag + ": in every frame of the game (" + str(w["frames"])
+		+ " frames sampled) `is_drawing() == _family_selector.is_open()` (" + str(w["mismatch"])
+		+ " disagreeing frames) - the pending-draw flag IS the panel: no frame has a modal nobody is"
+		+ " awaiting (a tap that would land on a stale panel) and no frame has a pending draw with no"
+		+ " panel (a turn that is waiting on nothing)")
+	check(int(w["open_frames"]) == int(w["openings"]), tag + ": the panel was open for " + str(
+		w["open_frames"]) + " frames over " + str(w["openings"]) + " openings - one frame each, so a"
+		+ " committed draw closes the panel in the SAME frame it commits, no overlay survives a frame"
+		+ " it is no longer asked for")
+	check(int(w["leak"]) == 0 and int(w["row_leak"]) == 0, tag + ": 0 frames of a closed panel left"
+		+ " visible and 0 frames of a closed panel keeping its row (leak " + str(w["leak"])
+		+ ", row leak " + str(w["row_leak"]) + ") - a row that outlives its modal is a family a tap can"
+		+ " still hit between turns")
+	check(int(w["openings"]) == NOBLE_4P_RAILS_TAPS.size() and w["tapped"] == NOBLE_4P_RAILS_TAPS, tag
+		+ ": " + str(w["openings"]) + " openings, all served by a tap (" + str(w["tapped"]) + ") - no"
+		+ " opening was left untapped (a stalled turn) and no draw happened without a panel (an auto-pick)"
+		+ " in " + str(w["frames"]) + " frames")
+	check(main.family_draw_idx[0] == NOBLE_4P_RAILS_TAPS, tag + ": the indices seat 0 drew ARE his taps ("
+		+ str(main.family_draw_idx[0]) + ") - 6 family cards, 6 taps, one pop per tap: no double draw (a"
+		+ " draw that pops twice leaves the seat with 2 hand cards) and no skipped draw")
+	var ai_lo: int = int(main.family_draws[1])
+	var ai_min: int = ai_lo
+	var ai_max: int = ai_lo
+	for s in [1, 2, 3]:
+		ai_min = mini(ai_min, int(main.family_draws[s]))
+		ai_max = maxi(ai_max, int(main.family_draws[s]))
+	check(int(main.family_draws[0]) == 6 and ai_min >= 3 and ai_max <= 2 * fam, tag + ": 6 family draws"
+		+ " for the human (2 rounds x 3 cards: 2 turn starts + 1 mid-effect draw a round) and "
+		+ str(main.family_draws) + " for the seats - no seat drew more than the 6 family cards the 2"
+		+ " rounds dealt him, and every family card a round dealt was drawn through the modal or its"
+		+ " turn-start twin (an AI seat answers the same `deal_from_family` with no panel)")
+	check(w["rows"] == w["snaps"], tag + ": every row equalled the seat's live family data at that frame ("
+		+ str(w["rows"]) + ") - the modal never shows a family the seat does not own, and exclusivity is"
+		+ " what keeps the row and the data in step: a draw from a family while its modal is open would"
+		+ " make the two disagree")
+	check(w["hands"] == [1, 0, 1, 1, 0, 1] and w["fams"] == [3, 2, 1, 3, 2, 1], tag + ": at every opening"
+		+ " the human's hand was " + str(w["hands"]) + " cards and his family " + str(w["fams"])
+		+ " - a turn start always finds 1 card (the draw has not happened), a mid-effect Prince always"
+		+ " finds 0 (the card is already out of play), and each opening spent one family card")
+	check(int(main.eliminations) == 0 and int(main.pile_draws) == 0, tag + ": 0 eliminations and 0 pile"
+		+ " draws in 2 rounds (" + str(main.eliminations) + ", " + str(main.pile_draws) + ") - 4p burns"
+		+ " nothing, so no widow exists and the modal is the only family-draw path a human seat has")
+	check(int(main.round_end_hands[0][0]) == 1 and int(main.round_end_hands[1][0]) == 1, tag
+		+ ": seat 0 ended BOTH rounds with exactly 1 hand card (" + str(main.round_end_hands[0][0])
+		+ ", " + str(main.round_end_hands[1][0]) + ") - the 1-card invariant through 6 modal draws, 2 of"
+		+ " them mid-effect")
+	var n: int = main.effect_log.size()
+	check(n == 19, tag + ": 19 plays in 2 rounds (" + str(n) + ") - 8 in round 1 (the round ended on"
+		+ " seat 0's 3rd turn) and 11 in round 2: a 3-card family buys a seat 3 plays a round, and the"
+		+ " mid-effect draws spend family cards, so the human's 4th turn start finds an empty family and"
+		+ " ends the round before every AI seat has played 4 times")
+	var seen: Dictionary = {}
+	for i in n:
+		var pt: int = int(main.effect_log[i]["played"])
+		seen[pt] = int(seen.get(pt, 0)) + 1
+	var nprince: int = int(seen.get(int(Deck.CardType.Prince), 0))
+	var nking: int = int(seen.get(int(Deck.CardType.King), 0))
+	var nbaron: int = int(seen.get(int(Deck.CardType.Baron), 0))
+	var nguard: int = int(seen.get(int(Deck.CardType.Guard), 0))
+	check(nprince == 2 and nking == 1 and nbaron == 1 and nguard == 15, tag + ": the round logs hold 2"
+		+ " Princes (the human's self-Prince and seat 1's hit on him), 1 King swap, 1 Baron compare and 15"
+		+ " Guards (" + str(seen) + ") - the four surfaces of step 22's manual pass that this fixture can"
+		+ " reach, in ONE human game: Guard (target + type selectors), King (the swap), Baron (the reveal"
+		+ " and compare) and Prince (the mid-effect modal); the Countess-forced play of a human seat is I1"
+		+ " play 5, the same rule on the same flow")
+	# publish the rails counters for an embedding suite (`tests/smoke_games.gd` prints its NOBLE UI
+	# line from these, so the number is a measurement of this run, not a restatement of the checks)
+	ui_openings = int(w["openings"])
+	ui_taps = int(w["tapped"].size())
+	ui_mismatch = int(w["mismatch"])
+	ui_crowded = int(w["crowded"])
+	ui_leaks = int(w["leak"]) + int(w["row_leak"])
+	ui_effects = main.effect_log.size()
+	ui_plays = n
+	ui_surfaces = []
+	for k in seen:
+		ui_surfaces.append(str(Deck.card_names[k]).strip_edges() + " x" + str(seen[k]))
+	ui_frames = int(w["frames"])
+	_check_no_leak(main, tag + " game end")
+	_check_left_audit(main, tag + " game end")
+	_check_pairings(main)
+	main.queue_free()
+	await await_frames(2)
+
+
+# Settle a re-deal WITHOUT re-initializing the seats (the watcher keeps tapping the openings, so the
+# first turn start of the new round is served by the queue, exactly like a real round transition).
+func _rails_redeal(main, w) -> void:
+	var openings: int = int(w["openings"])
+	await await_until(func() -> bool: return int(w["openings"]) > openings)
+	var fam: int = Deck.NOBLE_FAMILY_SIZE[int(main._player_count)]
+	await await_until(func() -> bool:
+		return main._players[0].hand.get_child_count() == 2 and main._players[0].family_size() == fam - 1)
+
+
+# The gate: a 4p human game stopped at the FIRST turn start, panel open, nothing drawn (the H1 position).
+func _rails_gate(n: int, scripted: Array[Deck.CardType], scripted_left: Array[int]):
+	var main = _scripted_main_human(n, scripted, scripted_left)
+	await main.init_players(SEED)
+	await await_until(func() -> bool: return main._family_selector.is_open())
+	return main
+
+
+func _test_rails_inert() -> void:
+	var tag := "J2"
+	var main = await _rails_gate(4, NOBLE_4P_RAILS, NOBLE_4P_RAILS_LEFT)
+	var sel = main._family_selector
+	var p0 = main._players[0]
+	var row_before: Array = _rn(_fs_cards(sel))
+	var target_before: int = int(main._target_player)
+	var type_before: int = int(main._target_type)
+	check(main.is_drawing() and sel.is_open(), tag + ": the gate - a family draw is PENDING and the panel"
+		+ " is open (drawing " + str(main.is_drawing()) + ", open " + str(sel.is_open()) + ")")
+	check(int(p0.hand.get_child_count()) == 1 and int(p0.family_size()) == 3
+		and int(main.family_draws[0]) == 0, tag + ": the human holds 1 card and his family is full ("
+		+ str(int(p0.hand.get_child_count())) + ", " + str(int(p0.family_size())) + ") - nothing is drawn"
+		+ " at the gate, so every probe below has to leave it at 1 card / 3 cards to be INERT")
+	check(not main._table.visible and not main._type_selector.visible
+		and not main._select_other_player.visible and not main._select_any_player.visible
+		and not bool(main._player_selection.visible), tag + ": the whole play surface is put away for the"
+		+ " length of the draw (table, type selector, both target labels, the selection sprite) - a tap on"
+		+ " any of them has nothing to act on")
+	check(p0._state == Player.State.IDLE and not bool(p0.current_mark.visible), tag + ": the seat's tap"
+		+ " gate is CLOSED for the length of the modal (state " + str(p0._state) + ", mark "
+		+ str(bool(p0.current_mark.visible)) + ") - `Player._on_card_input_event` accepts a card tap in"
+		+ " SELECT_CARD only, so his own cards cannot start a play under the panel")
+
+	# 1. a card play (`card_played`, what a card tap emits)
+	await main._on_card_played(p0.hand.get_child(0))
+	check(main.effect_log.is_empty() and int(p0.hand.get_child_count()) == 1
+		and int(main._deck._left[int(Deck.CardType.King)]) == 1, tag + ": a CARD PLAY under the panel"
+		+ " started NO chain (" + str(main.effect_log.size()) + " plays, hand "
+		+ str(int(p0.hand.get_child_count())) + " cards, King left "
+		+ str(int(main._deck._left[int(Deck.CardType.King)])) + ") - no card moved to the table, nothing"
+		+ " was discarded, so the modal cannot be raced by a play"
+		+ " (Main._on_card_played's `_drawing` rail)")
+	# 2. a target-player tap (a seat tap / `target_player_selected`)
+	await main._on_target_player_selected(1)
+	check(main.effect_log.is_empty() and int(main._target_player) == target_before
+		and not bool(main._player_selection.visible), tag + ": a TARGET-PLAYER tap under the panel picked"
+		+ " no target (target " + str(main._target_player) + " == the gate value " + str(target_before)
+		+ ", sprite " + str(bool(main._player_selection.visible)) + ") - the pick belongs to the play that"
+		+ " FOLLOWS the draw")
+	# 3. a target-type tap
+	await main._on_target_type_selected(Deck.CardType.Priest)
+	check(main.effect_log.is_empty() and int(main._target_type) == type_before
+		and not main._type_selector.visible and not main._table.visible, tag + ": a TARGET-TYPE tap"
+		+ " under the panel declared nothing (type " + str(main._target_type) + " == the gate value "
+		+ str(type_before) + ") - it did not open the type selector and did not un-hide the Table,"
+		+ " which is what `_on_target_type_selected` does when it is LEGAL to resolve an effect")
+	# 4. a chosen move (the AI signal a stale chain would drive)
+	var m := Move.new(null, 0, -1, Deck.CardType.Unknown, -1)
+	await main._on_move_chosen(m)
+	check(main.effect_log.is_empty() and int(p0.hand.get_child_count()) == 1
+		and int(p0.family_size()) == 3, tag + ": a CHOSEN MOVE under the panel drew nothing and played"
+		+ " nothing (" + str(int(p0.family_size())) + " family, " + str(int(p0.hand.get_child_count()))
+		+ " hand) - no chain runs under the panel, so no family card can be popped from under the seat"
+		+ " that is choosing (Main._on_move_chosen's `_drawing` rail)")
+	# 5. the seat's own state, which is his tap gate
+	check(int(p0._state) == int(Player.State.IDLE), tag + ": after all four probes the seat's state is"
+		+ " UNCHANGED (" + str(p0._state) + ") - no probe queued a play, so nothing is waiting to be"
+		+ " played when the draw lands")
+	check(main.is_drawing() and sel.is_open() and _rn(_fs_cards(sel)) == row_before
+		and int(p0.family_size()) == 3, tag + ": the PENDING DRAW SURVIVES every probe (panel open, row "
+		+ str(_rn(_fs_cards(sel))) + " == " + str(row_before) + ", family " + str(int(p0.family_size()))
+		+ ") - the rails drop the taps, they do not cancel the mandatory draw: a rail that closed the"
+		+ " modal on a stray tap would leave the seat with no way to draw")
+	# and the draw the modal asked for still lands, exactly once, on the card he taps
+	await _human_draw(main, 2)
+	await await_until(func() -> bool:
+		return p0.hand.get_child_count() == 2 and p0._state == Player.State.SELECT_CARD)
+	check(main.family_draw_idx[0] == [2] and int(p0.family_size()) == 2
+		and int(p0.hand.get_child_count()) == 2, tag + ": the tap on family index 2 STILL drew exactly"
+		+ " one card (" + str(main.family_draw_idx[0]) + ", family " + str(int(p0.family_size()))
+		+ ", hand " + str(int(p0.hand.get_child_count())) + ") - the gates are inert, not destructive: 4"
+		+ " ignored taps cost no draw and no card")
+	check(int(main.family_draw_idx[0].size()) == 1 and int(main.family_draws[0]) == 1, tag + ": ONE family"
+		+ " draw after 1 tap (" + str(main.family_draws[0]) + ") - the pending draw is one draw, not two"
+		+ " (no double draw through the rails)")
+	check(not sel.is_open() and not bool(sel.visible) and bool(main._table.visible)
+		and p0._state == Player.State.SELECT_CARD, tag + ": the modal closed, the Table came back and the"
+		+ " play selection opened (state " + str(p0._state) + ") - the gate restored what the caller left"
+		+ " behind, so the turn continues normally after 4 refused taps"
+		+ " (the todo's 'no stuck overlays')")
+	main.queue_free()
+	await await_frames(2)
+
+
+# A per-frame watcher that keeps the play surfaces ON STAGE while no modal is open, and samples them
+# on the frame the panel opens. The crowding counter of J1 cannot pin the hiding lines: the production
+# flow has those surfaces hidden at the moments a modal opens anyway, so deleting all the `hide()`
+# calls of `human_draw_from_family` changes 0 checks (measured: 878 PASS, exit 0). This is the shape a
+# real stuck overlay arrives in - a board that is dirty when the modal opens - and the hiding lines are
+# the only thing standing between that board and the human's one question.
+func _rails_dirty(main, w) -> void:
+	var was := false
+	while int(w["frames"]) < 6000 and not bool(w["stop"]):
+		w["frames"] = int(w["frames"]) + 1
+		var sel = main._family_selector
+		var now: bool = sel.is_open()
+		if not now:
+			main._type_selector.visible = true
+			main._select_other_player.visible = true
+			main._select_any_player.visible = true
+			main._player_selection.visible = true
+			main._table.visible = true
+			# the seat's OWN tap gate, held OPEN: a card tap in SELECT_CARD emits `card_played` and
+			# starts a play chain on the hand the modal is about to grow. The turn-start flow reaches the
+			# modal with the state already IDLE (the previous play left it there), so a fixture that
+			# takes the state as it finds it cannot tell "the modal closed the tap gate" from "the seat
+			# happened to be idle" - measured: deleting `p._state = Player.State.IDLE` changes 0 checks.
+			main._players[0]._state = Player.State.SELECT_CARD
+		elif not was:
+			w["openings"] = int(w["openings"]) + 1
+			var t: bool = main._table.visible
+			var crow: bool = main._type_selector.visible or main._select_other_player.visible \
+				or main._select_any_player.visible or bool(main._player_selection.visible)
+			var st: int = int(main._players[0]._state)
+			var mark: bool = bool(main._players[0].current_mark.visible)
+			w["tables"].append(bool(t))
+			w["states"].append(st)
+			w["snaps"].append(mark)
+			if t:
+				w["crowded"] = int(w["crowded"]) + 1
+			if crow:
+				w["crowded"] = int(w["crowded"]) + 1
+			if st != int(Player.State.IDLE) or mark:
+				w["crowded"] = int(w["crowded"]) + 1
+			w["stop"] = true  # the rails had their one fair shot at the surfaces
+		was = now
+		await get_tree().process_frame
+
+
+func _test_rails_reentrant() -> void:
+	var tag := "J3"
+	var main = _scripted_main_human(4, NOBLE_4P_RAILS, NOBLE_4P_RAILS_LEFT)
+	var dirty = _rail_watcher([])
+	_rails_dirty(main, dirty)  # keeps the surfaces on stage until the panel opens
+	main.init_players(SEED)
+	await await_until(func() -> bool: return int(dirty["openings"]) > 0)
+	var sel = main._family_selector
+	var p0 = main._players[0]
+	check(dirty["openings"] == 1 and dirty["tables"] == [false] and int(dirty["crowded"]) == 0
+		and dirty["states"] == [int(Player.State.IDLE)] and dirty["snaps"] == [false], tag
+		+ ": the modal opened ALONE, and the seat was UNtappable, on a board that was NOT clean - the"
+		+ " type selector, both target labels, the player-selection sprite and the Table were held"
+		+ " visible, and his own state was held at SELECT_CARD, on every frame before the opening; on the"
+		+ " frame the panel opened every surface was off and his state was IDLE with no current-mark"
+		+ " (state " + str(dirty["states"]) + ", mark " + str(dirty["snaps"]) + ", table"
+		+ " " + str(dirty["tables"]) + ", crowded frames " + str(int(dirty["crowded"]))
+		+ ") - the hiding lines and the state write of `human_draw_from_family` are what keep a stuck"
+		+ " overlay from becoming a second question the seat can answer with a tap")
+	# A tiny watcher of the openings, so a second modal is COUNTED, not eyeballed. It taps NOTHING: the
+	# gate's modal is the pending draw the fixture is probing, and a watcher that tapped it would settle
+	# the turn and turn the "nested" request into an ordinary second turn.
+	var w = _rail_watcher([])
+	_watch_rails(main, w)
+	await await_frames(1)
+	check(int(w["openings"]) == 1, tag + ": ONE opening so far - the turn-start modal the gate stopped at ("
+		+ str(w["openings"]) + ")")
+	var row: Array = _rn(_fs_cards(sel))
+	# The chain asks TWICE: the turn-start draw is suspended, and a nested request (the Prince chain, a
+	# replayed `new_turn`, anything) reaches the only place a modal is ever opened.
+	await main.human_draw_from_family(p0)
+	await await_frames(2)
+	check(int(w["openings"]) == 1, tag + ": the nested request opened NO second modal (" + str(w["openings"])
+		+ " openings in " + str(w["frames"]) + " frames) - one interactive surface, and the row the seat is"
+		+ " looking at is never re-built from under him")
+	check(main.is_drawing() and sel.is_open() and _rn(_fs_cards(sel)) == row, tag + ": the FIRST modal is"
+		+ " intact (drawing " + str(main.is_drawing()) + ", row " + str(_rn(_fs_cards(sel))) + " == "
+		+ str(row) + ") - the nested request did not close it, did not re-open it on the CURRENT family"
+		+ " (which would drop the card it is asking about) and did not move the seat's state")
+	check(int(main.family_draws[0]) == 0 and int(p0.family_size()) == 3
+		and int(p0.hand.get_child_count()) == 1, tag + ": the nested request drew NOTHING ("
+		+ str(main.family_draws[0]) + " draws, family " + str(int(p0.family_size())) + ", hand "
+		+ str(int(p0.hand.get_child_count())) + ") - it popped no card, so it cannot make the seat's"
+		+ " pending choice point at a card that is gone")
+	# a THIRD request, from the same seat, while the modal is open
+	await main.human_draw_from_family(p0)
+	check(int(w["openings"]) == 1 and int(main.family_draws[0]) == 0 and main.is_drawing(), tag
+		+ ": a THIRD request is dropped the same way (" + str(w["openings"]) + " openings, "
+		+ str(main.family_draws[0]) + " draws) - the re-entrancy rail is a property of the moment, not of"
+		+ " the caller")
+	# the pending draw survives and commits ONCE
+	w["stop"] = true
+	await _human_draw(main, 0)
+	await await_until(func() -> bool:
+		return p0.hand.get_child_count() == 2 and p0._state == Player.State.SELECT_CARD)
+	check(main.family_draw_idx[0] == [0] and int(main.family_draws[0]) == 1
+		and int(p0.family_size()) == 2 and int(p0.hand.get_child_count()) == 2, tag + ": after 2 dropped"
+		+ " requests the tap drew EXACTLY 1 card (" + str(main.family_draw_idx[0]) + ", family "
+		+ str(int(p0.family_size())) + ", hand " + str(int(p0.hand.get_child_count()))
+		+ ") - a nested request cannot steal the draw, delay it into a second draw, or draw for the seat")
+	main.queue_free()
+	await await_frames(2)
+
+
+func _test_rails_listener_guard() -> void:
+	var tag := "J4"
+	var main = await _rails_gate(4, NOBLE_4P_RAILS, NOBLE_4P_RAILS_LEFT)
+	var sel = main._family_selector
+	var p0 = main._players[0]
+	# 1. no draw pending -> the emission is DROPPED, the latch untouched
+	main._close_family_modal()
+	check(not main.is_drawing() and int(main._draw_idx) == -1, tag + ": the reset drops the pending state"
+		+ " (drawing " + str(main.is_drawing()) + ", latched " + str(main._draw_idx) + ")")
+	main._on_family_draw_selected(3)
+	check(int(main._draw_idx) == -1 and not main.is_drawing(), tag + ": an emission with NO draw pending"
+		+ " is dropped by the RECEIVER (latched " + str(main._draw_idx) + ", drawing "
+		+ str(main.is_drawing()) + ") - the panel is a permanently allocated node with ONE listener for"
+		+ " the whole game, so a stray emission (a double tap, a tap on a closing panel) has to be"
+		+ " dropped by the listener: a listener that queued it would draw a family card nobody asked for")
+	check(int(main.family_draws[0]) == 0 and int(p0.family_size()) == 3
+		and int(p0.hand.get_child_count()) == 1, tag + ": and it drew NOTHING ("
+		+ str(main.family_draws[0]) + " draws, family " + str(int(p0.family_size())) + ", hand "
+		+ str(int(p0.hand.get_child_count())) + ") - dropping is not queueing")
+	# 2. the pending draw is open, a latched index from out of the blue cannot rename the card he taps
+	main._family_selector.open(p0.family)
+	main._drawing = true
+	main._draw_idx = -1
+	await await_frames(1)
+	check(main.is_drawing() and sel.is_open(), tag + ": a pending draw of the full 3-card family ("
+		+ str(_rn(_fs_cards(sel))) + ")")
+	main._on_family_draw_selected(2)
+	check(int(main._draw_idx) == 2 and main.is_drawing(), tag + ": while a draw IS pending the listener"
+		+ " latches what the panel reports (latched " + str(main._draw_idx) + ") - the latch is the"
+		+ " listener's, and the commit reads its index off its own `await`")
+	await _human_draw(main, 0)
+	await await_until(func() -> bool:
+		return p0.hand.get_child_count() == 2 and p0._state == Player.State.SELECT_CARD)
+	check(main.family_draw_idx[0] == [0] and int(main.family_draws[0]) == 1, tag + ": the draw that"
+		+ " landed is the TAP's index 0, not the latched 2 (" + str(main.family_draw_idx[0])
+		+ ") - two emissions in flight are reported by the mismatch rail and the tap wins, so a stray"
+		+ " emission can never rename the card the seat picked")
+	check(int(p0.hand.get_child_count()) == 2 and int(p0.family_size()) == 2, tag + ": 1 tap = 1 pop (hand"
+		+ " " + str(int(p0.hand.get_child_count())) + ", family " + str(int(p0.family_size()))
+		+ ") - the latched index drew no second card, so the 1-hand-card shape of the turn survives a"
+		+ " double emission (the todo's 'no double draws')")
+	check(not sel.is_open() and not bool(sel.visible) and _fs_cards(sel).is_empty()
+		and not main.is_drawing() and int(main._draw_idx) == -1, tag + ": the commit cleared BOTH the"
+		+ " panel and the latch (open " + str(sel.is_open()) + ", latched " + str(main._draw_idx)
+		+ ") - nothing is left to fire the next turn's draw twice")
+	main.queue_free()
+	await await_frames(2)
+
+
+func _test_rails_bad_index() -> void:
+	var tag := "J5"
+	var main = await _rails_gate(4, NOBLE_4P_RAILS, NOBLE_4P_RAILS_LEFT)
+	var sel = main._family_selector
+	var p0 = main._players[0]
+	# The panel's own guards (G2) make a tap report an index of its own row ONLY, so the only way Main
+	# is handed an index it cannot pop is a panel emitting out of the blue: a harness sabotage.
+	sel.draw_selected.emit(99)
+	await await_until(func() -> bool:
+		return int(main.family_draws[0]) > 0 and p0.hand.get_child_count() == 2 \
+			and p0._state == Player.State.SELECT_CARD)
+	check(main.family_draw_idx[0] == [0] and int(main.family_draws[0]) == 1, tag + ": an emitted index"
+		+ " the seat cannot pop (99 of a 3-card family) took FAMILY[0] (" + str(main.family_draw_idx[0])
+		+ ", 1 draw) - the draw is MANDATORY (step 7): a turn that never draws never ends, so a stalled"
+		+ " turn is the worse failure and the fallback is the price of never deadlocking")
+	check(int(p0.family_size()) == 2 and int(p0.hand.get_child_count()) == 2, tag + ": the fallback drew"
+		+ " EXACTLY 1 card (family " + str(int(p0.family_size())) + ", hand "
+		+ str(int(p0.hand.get_child_count())) + ") - it is one draw, not a re-deal, not 2 cards, and the"
+		+ " seat is not handed a card that does not exist")
+	check(not sel.is_open() and not bool(sel.visible) and not main.is_drawing()
+		and bool(main._table.visible), tag + ": the modal closed on the fallback path too (open "
+		+ str(sel.is_open()) + ", drawing " + str(main.is_drawing()) + ", table "
+		+ str(main._table.visible) + ") - the out-of-range branch is an exit path of the modal like any"
+		+ " other, it does not leave a panel on screen")
+	await await_until(func() -> bool:
+		return p0._state == Player.State.SELECT_CARD and p0.hand.get_child_count() == 2)
+	check(p0._state == Player.State.SELECT_CARD, tag + ": and the turn CONTINUES (state " + str(p0._state)
+		+ ") - the seat gets his play selection on the card the fallback drew, so a bad report costs a"
+		+ " choice, not the round")
+	main.queue_free()
+	await await_frames(2)
+
+
+func _test_rails_exit_paths() -> void:
+	var tag := "J6"
+	# path 1: the turn-start commit (the tap)
+	var main = await _rails_gate(4, NOBLE_4P_RAILS, NOBLE_4P_RAILS_LEFT)
+	var sel = main._family_selector
+	var p0 = main._players[0]
+	await _human_draw(main, 1)
+	check(not sel.is_open() and not bool(sel.visible) and _fs_cards(sel).is_empty()
+		and not main.is_drawing() and main.family_draw_idx[0] == [1], tag + ": path 1, the TURN-START"
+		+ " COMMIT - the tap closed the panel, dropped the row and cleared the pending state (draws "
+		+ str(main.family_draw_idx[0]) + ") - the modal closes BEFORE the card flies, so the draw"
+		+ " animation runs with no overlay on screen")
+	# path 2: the mid-effect Prince commit (a modal opened by an effect, closed by its own draw)
+	await _human_play_idx(main, 1, 0, Deck.CardType.Unknown, -1, tag + " self-Prince")
+	check(not sel.is_open() and not bool(sel.visible) and _fs_cards(sel).is_empty()
+		and not main.is_drawing(), tag + ": path 2, the MID-EFFECT Prince commit - the modal an effect"
+		+ " opened closed inside that same effect (" + str(sel.is_open()) + ", drawing "
+		+ str(main.is_drawing()) + ") - a Prince redraw that left its panel open would sit on the NEXT"
+		+ " seat's turn, on a board that no longer has that family")
+	# path 3: a NEW GAME (the Main-Menu / Exit path): the game is abandoned mid-modal, and a suspended
+	# `await draw_selected` never resumes, so the panel would be sitting on the menu
+	await main.init_players(SEED)
+	await await_until(func() -> bool: return sel.is_open())
+	check(int(p0.family_size()) == 3 and int(main.family_draws[0]) == 1
+		and _rn(_fs_cards(sel)) == ["Prince", "Baron", "Guard"], tag + ": path 3, a NEW GAME from a"
+		+ " modal that is still open - `init_players` closed the old panel and the new round's first turn"
+		+ " start opened a FRESH one on the re-dealt family (" + str(_rn(_fs_cards(sel)))
+		+ ", draws " + str(main.family_draws[0]) + ") - no row of the interrupted family survived into"
+		+ " the new game, and the interrupted draw was not resumed into a second pop")
+	check(main.is_drawing() and int(main.family_draw_idx[0].size()) == 1, tag + ": exactly ONE family"
+		+ " draw across the reset (" + str(main.family_draw_idx[0]) + ") - the interrupted modal drew"
+		+ " nothing, and the new modal is the ONLY thing the new turn is waiting on")
+	# path 4: a NEW ROUND with a LIVE modal. `_new_round()` re-deals every family, so a row of the old
+	# family is a menu of cards that no longer exist, and a suspended `await draw_selected` points at a
+	# family index the re-deal has already forgotten. This is the strictest exit path.
+	var fam: int = Deck.NOBLE_FAMILY_SIZE[4]
+	await _human_draw(main, 2)
+	await await_until(func() -> bool:
+		return p0.hand.get_child_count() == 2 and p0._state == Player.State.SELECT_CARD)
+	await _human_play_idx(main, 0, 1, Deck.CardType.Unknown, -1, tag + " play after the reset")
+	await await_until(func() -> bool: return sel.is_open())
+	check(sel.is_open() and main.is_drawing() and int(p0.family_size()) < fam, tag
+		+ ": path 4 fixture: a LIVE modal at the round transition (open " + str(sel.is_open())
+		+ ", drawing " + str(main.is_drawing()) + ", family " + str(int(p0.family_size())) + " of "
+		+ str(fam) + ") - the seat is mid-round with a draw pending on family cards the next round"
+		+ " re-deals")
+	await main._on_round_over_pressed()
+	await await_until(func() -> bool: return sel.is_open())
+	var row4: Array = _rn(_fs_cards(sel))
+	check(sel.is_open() and main.is_drawing() and row4.size() == fam, tag + ": path 4, a NEW ROUND -"
+		+ " `_new_round` calls `_close_family_modal`, so the re-deal dropped the live panel (with its"
+		+ " suspended await) and the new round's first turn start opened a row of the FULL re-dealt"
+		+ " family (" + str(row4) + " of " + str(fam) + ") - a stale menu of the old family's leftovers"
+		+ " would pop a family index the seat does not own")
+	check(row4 == ["Prince", "Baron", "Guard"], tag + ": the new round's row is the NEW family in"
+		+ " as-dealt order (" + str(row4) + ") - the panel re-opens on the re-dealt family, not the"
+		+ " leftovers, so every card the seat can tap is a card the round actually dealt him")
+	check(int(p0.family_size()) == fam and int(p0.hand.get_child_count()) == 1, tag
+		+ ": the seat's family is FULL again (family " + str(int(p0.family_size())) + ", hand "
+		+ str(int(p0.hand.get_child_count())) + ") - the interrupted draw of the old round drew nothing"
+		+ " after the re-deal, and the modal is his only way to draw")
+	check(not main._table.visible and not main._type_selector.visible
+		and not main._select_other_player.visible and not main._select_any_player.visible
+		and not bool(main._player_selection.visible), tag + ": the new round's modal opens ALONE (table,"
+		+ " type selector, target labels and the selection sprite all hidden) - the round transition"
+		+ " resets the play surface as well as the panel, so the modal is one question and nothing else")
+	_check_left_audit(main, tag + " new round")
 	main.queue_free()
 	await await_frames(2)

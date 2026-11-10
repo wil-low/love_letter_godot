@@ -28,6 +28,7 @@ const LEVELS: Array[Player.AI_Level] = [
 
 var _rounds: int = 0
 var _eliminations: int = 0
+var _main: Main  # the classic game, kept so it can be STOPPED before the nested suites run
 
 
 func _ready() -> void:
@@ -37,6 +38,7 @@ func _ready() -> void:
 		AudioServer.set_bus_mute(i, true)
 
 	var main: Main = MainScene.instantiate()
+	_main = main
 	add_child(main)
 	for i in 4:
 		main._players[i].ai_level = LEVELS[i]
@@ -72,6 +74,9 @@ func _ready() -> void:
 	if ok:
 		print("PASS  " + str(ROUNDS) + " rounds played with all four seats on the AI, "
 			+ str(_eliminations) + " eliminations, no script error")
+
+	var ui_ok: bool = await _check_noble_ui()
+	ok = ok and ui_ok
 	get_tree().quit(0 if ok else 1)
 
 
@@ -84,3 +89,78 @@ func scores_str(main: Main) -> String:
 	for p in main._players:
 		s += str(p.idx) + ":" + str(p.score) + " "
 	return s
+
+
+# NOBLE UI (todo step 22): the manual pass the todo names - "Guard (target + type selector),
+# Countess-forced play, King swap, Baron reveal and self-Prince in one human game: no stuck overlays,
+# no double draws" - is automated as TEST J1 of `tests/noble_family_rules.tscn`: a scripted 4-player
+# game, seat 0 human, played ENTIRELY by tapping the family modal's real `Card` nodes, with the
+# exclusivity rails sampled on EVERY frame (a 1-frame check sees a 1-frame bug: a panel that closes a
+# frame late, a selector that flickers back for a frame, a draw that pops two family cards in one
+# frame is invisible to a check made at one moment).
+#
+# This section runs THAT SUITE nested inside the classic gate (its own `get_tree().quit()` is turned
+# off with `quit_on_fail`) and prints the counters TEST J measures, so the classic command carries
+# the step 22 number: the classic loop and the modal's rails fail together, in one run, and the
+# numbers are a measurement of a real suite run, not a restatement of its checks.
+const RULES_SCENE: String = "res://tests/noble_family_rules.tscn"
+const RULES_FRAMES: int = 60000
+
+
+func _check_noble_ui() -> bool:
+	var scene := load(RULES_SCENE) as PackedScene
+	if scene == null:
+		print("FAIL  NOBLE UI: ", RULES_SCENE, " is missing - the family modal has no gate at all")
+		return false
+	# STOP the classic game first. Its seats are still on the AI, and an AI seat consumes the global
+	# RNG every turn - left running, it would steal random numbers from the scripted fixtures (measured:
+	# 16 plays where the standalone suite measures 19, a whole game's worth of AI drift) and the NOBLE
+	# UI counters would describe a game nobody scripted.
+	if _main != null and is_instance_valid(_main):
+		_main.queue_free()
+		await get_tree().process_frame
+		await get_tree().process_frame
+	var suite = scene.instantiate()
+	suite.set("quit_on_fail", false)  # a nested suite must not quit the game it is embedded in
+	add_child(suite)
+	var frames: int = 0
+	while not bool(suite.get("suite_done")) and frames < RULES_FRAMES:
+		await get_tree().process_frame
+		frames += 1
+	if not bool(suite.get("suite_done")):
+		print("FAIL  NOBLE UI: the noble rules suite never finished (", frames, " frames)")
+		return false
+	var opens: int = int(suite.get("ui_openings"))
+	var taps: int = int(suite.get("ui_taps"))
+	var plays: int = int(suite.get("ui_plays"))
+	var effects: int = int(suite.get("ui_effects"))
+	var mismatch: int = int(suite.get("ui_mismatch"))
+	var crowded: int = int(suite.get("ui_crowded"))
+	var leaks: int = int(suite.get("ui_leaks"))
+	var surfaces: Array = suite.get("ui_surfaces")
+	var names: Array[String] = []
+	for x in surfaces:
+		names.append(str(x))
+	var fails: int = int(suite.call("fails"))
+	print("NOBLE UI: scripted 4p game, seat 0 human, played by tapping the family modal - ", opens,
+		" openings, ", taps, " taps, ", plays, " plays, ", effects, " effect records, ",
+		int(suite.get("ui_frames")), " frames sampled one by one; surfaces [", ", ".join(names), "];"
+		+ " rails: " + str(mismatch) + " frames where the pending draw and the open panel disagreed, "
+		+ str(crowded) + " frames crowded by another selector, " + str(leaks)
+		+ " closed-panel leaks; the Countess-forced play of a human seat is TEST I1 play 5 of the"
+		+ " same suite")
+	var ok := true
+	if fails > 0:
+		print("FAIL  NOBLE UI: ", fails, " check(s) of the embedded noble rules suite failed")
+		ok = false
+	if opens != 6 or taps != 6:
+		print("FAIL  NOBLE UI: ", opens, " family-modal openings and ", taps, " taps, expected 6/6"
+			+ " (2 rounds x (2 turn starts + 1 mid-effect draw) for seat 0) - an opening left untapped"
+			+ " is a stalled human turn, a draw with no panel is a draw the game picked for him")
+		ok = false
+	if mismatch > 0 or crowded > 0 or leaks > 0:
+		print("FAIL  NOBLE UI: the rails leaked (", mismatch, " drawing/open mismatches, ", crowded,
+			" frames crowded by another selector, ", leaks, " closed-panel leaks) - the modal is not"
+			+ " exclusive for the WHOLE game, which is the whole point of step 22")
+		ok = false
+	return ok
