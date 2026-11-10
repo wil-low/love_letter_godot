@@ -220,7 +220,7 @@ func deal_from_family(p: Player, family_idx: int) -> void:
 	c.position = p.hand.to_local(dst)
 
 
-# Noble Family (todo step 20): the human seat's mandatory family draw, taken in the `FamilySelector`
+# Noble Family (todo steps 20 + 21): the human seat's mandatory family draw, taken in the `FamilySelector`
 # modal. The panel shows HIS OWN family and reports a family INDEX; `Main` pops `p.family[idx]`, so the
 # seat's data stays the single source of truth and the modal can only choose among cards he has (it can
 # invent, add, reorder or duplicate none of them).
@@ -232,6 +232,11 @@ func deal_from_family(p: Player, family_idx: int) -> void:
 # `await signal` is one-shot by construction (it disconnects on the resume) and the panel disarms itself
 # on the commit, so one open() yields exactly one draw - and the draw is mandatory: the panel has no
 # cancel path, so the only way out of it is tapping a card the seat owns.
+#
+# This is the ONLY family draw a human seat ever takes, and it has exactly two call sites: `new_turn()`
+# (the turn-start draw, step 20) and the Prince branch of `resolve_effect()` (a Prince REDRAW, step 21,
+# reached by a self-Prince and by an AI's Prince aimed at him). A mid-effect draw is the same panel on
+# the same rules: no cancel, no auto-pick, no empty family.
 func human_draw_from_family(p: Player) -> void:
 	if p.family.is_empty():
 		# Main owns the round-over / elimination decisions; a modal with no card to tap is a stalled
@@ -549,13 +554,21 @@ func resolve_effect() -> void:
 					await set_inactive(tp, false)
 				else:
 					# Noble Family: a Prince redraw draws from the target's own family first
-					# (as-dealt index 0), the widow is the fallback pile, and a target with an
-					# empty family and no widow (4p burns nothing, so no widow exists) is
-					# eliminated. The widow is never drawable at a turn start - only here.
+					# (an AI seat takes the as-dealt index 0, a human seat PICKS in the modal - step 21),
+					# the widow is the fallback pile, and a target with an empty family and no widow
+					# (4p burns nothing, so no widow exists) is eliminated. The widow is never
+					# drawable at a turn start - only here.
 					if noble_family:
 						if not tp.family.is_empty():
-							# TODO(step 21): a human target picks the family card in the modal.
-							await deal_from_family(tp, 0)
+							if tp.is_human():
+								# Todo step 21: a human target chooses HIS OWN family card in the same modal a
+								# turn start uses, so a mid-effect draw is HIS choice in both shapes this branch
+								# can reach: a self-Prince (tp == p) and an AI's Prince aimed at him. No path here
+								# auto-picks a family card for a human seat, and an empty family is never a page -
+								# the widow / elimination chain below runs INSTEAD of the panel.
+								await human_draw_from_family(tp)
+							else:
+								await deal_from_family(tp, 0)
 						elif not _deck._widow_cards.is_empty():
 							await deal_card(tp, true)
 						else:

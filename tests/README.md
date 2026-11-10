@@ -306,7 +306,8 @@ Step 4 pins the **deal table** of `Deck.prepare_noble()`; later steps append scr
 the same file (step 14 round end, step 15 Prince family/widow/elimination, step 16 elimination
 reveal + discard accounting, step 17 the continuous `_left` audit on the real deck, step 18 the
 seat's own family stack node, step 19 the family draw modal, step 20 the human's turn-start draw
-through that modal, step 31 joint move legality and L1 determinism). TEST A needs no
+through that modal, step 21 the human's Prince redraw through that modal, step 31 joint move legality
+and L1 determinism). TEST A needs no
 `Main` scene - it drives the real `Deck` scene directly, 200 seeded deals per player count.
 
 | player count | burn / widow | first-hand | family per seat | main pile leftovers |
@@ -689,6 +690,70 @@ that was acting, its row, and whether the Table/any other selector was visible a
 | a 1 s timeout fallback auto-picks index 0 when nobody taps | **7** | H1 1 (the 200-frame no-tap check), H2 4 (the drawn index, the drawn card, the stack, the elimination), H3 2 (drawn indices, the third row) |
 | the modal opens for EVERY seat, with a one-frame auto-pick (no `is_human()` gate) | **32** | H3's AI-actor check (`[0,0,0,0,0,1]`, AI openings 1) + E2's whole round (18) + the draw/play pairing (5) — an AI seat's family published on screen is a privacy break AND a supply break |
 
+
+### TEST I — a human seat's Prince REDRAW goes through the modal (step 21)
+
+Step 20 made the human's turn-start draw a modal; **step 21 makes his Prince redraw one too.** The
+Prince branch of `resolve_effect()` draws the target's replacement card from the target's own family,
+so its family branch is where "an AI picks for a human" was living: `await deal_from_family(tp, 0)`.
+Step 21 splits it on `tp.is_human()`: a human target gets `human_draw_from_family(tp)` — the same
+panel, the same mandatory rules, the same index-reporting contract — and an AI target keeps the
+as-dealt index 0, because an AI has no choice to make. **No path in the game picks a family card for a
+human seat.** The fallbacks are untouched and stay panel-free: an empty family draws THE WIDOW, an
+empty family with no widow card eliminates the target, and `open([])` refuses to open, so an empty
+family is never a page. 78 checks in four fixtures with seat 0 human.
+
+Two shapes reach that call site and both are pinned. A **self-Prince** (`tp == p`: `_find_noble_moves`
+enumerates self as a Prince target and `_on_target_player_selected` accepts it under `INPUT_ANY_P`),
+and **an AI's Prince aimed at the human**, which opens the panel *on the AI's turn*. The watcher here
+is the human seat's hands for a whole round (`_tap_modal()`): it taps **every** opening from one queue,
+so a turn start and a mid-effect redraw are served by the same code and the recorded taps are the only
+taps in the fixture. Each opening is sampled with the acting seat, the row, the seat's live family
+DATA at that moment, Table / other-selector visibility, and the seat's hand.
+
+- **I1, a self-Prince (4p)** — 3 openings, all on seat 0, and the middle one is **mid-effect**: the row
+  is `[King, Countess]`, i.e. the family MINUS the Guard he tapped one frame earlier, read as the live
+  data, and his hand is **0 cards** at that moment (the Prince has already revealed and discarded his
+  card, so the panel draws a REPLACEMENT, never a 2-card hand mid-effect) against 1 card at the other
+  two openings. The family goes 3 → 2 → 1, one card per tap, `family_draw_idx == [1, 0, 0] ==` the
+  taps; the King that lands in his hand is the card he tapped, and it is the card that **wins him the
+  round** (scores `1 0 0 0`). The play-1 snapshot is the accounting gate: `before.fams[0] == 2 →
+  after.fams[0] == 1` (both draws inside one effect, no phantom draw), the Prince `-1` by the play, the
+  victim's Guard `-1`, and the family → hand move `-0`, so `_left == [12,0,0,0,0,1,1,0]` after play 1
+  and `[6,0,0,0,0,1,0,0]` (7 == 16 − 8 plays − 1 hit) at the round end. Play 5 is the **Countess**: a
+  `(King, Countess)` hand forces index 1, so the harness taps index 1 and says so. Play 5's snapshot is
+  `fams[0] 0 → 0`: the turn start tapped out the LAST family card before the play, so a family draw is
+  never an effect's family delta.
+- **I2, an AI's Prince hits the human (4p)** — opening 2 has `actors == [0, 1, 0]`: an **AI turn** opens
+  the **human's** panel, showing `[Guard, Countess]` (seat 0's data; seat 1's 3 Guards are nowhere in
+  that row). The tap is index 1, so the **Countess** is what lands in the human's hand — visible as the
+  active card at his next turn start (`hand_types == [Guard, -, Countess]`). The hit's snapshot is
+  `fams[0] 2 → 1`, `hands[0] 1 → 1` (discarded and replaced, never 2), seat 0 stays active, and
+  `pile_draws == 0` with a 0-card widow: a family that has cards never lets a pile card near a human
+  hand. 8 plays, 9 turns, 0 eliminations, `_left == [7,0,0,0,0,0,0,0]`.
+- **I3, family 0 → THE WIDOW (3p)** — 4 openings drain the 4-card family (`[G,G,G,Countess]`,
+  `[G,G,Countess]`, `[G,Countess]`, `[G]`; taps `[0,1,1,0] == family_draw_idx[0]` — the Countess is
+  picked out of the middle at index 1 of `[Guard, Countess]`, which only an index-reporting panel can
+  do). Then play 5 hits a seat with family **0**: the widow draws for him (`widow 1 → 0`, `hand 0 → 1`,
+  still active), **no panel opens**; play 6 hits family 0 **and** widow 0 → **eliminated** (active
+  false, hand 0). Exactly 1 pile draw, 1 elimination, 4 openings in the whole round, and the
+  elimination's reveal call materializes **0 cards** (`family_size == 0`): an out seat with an empty
+  family publishes nothing and opens nothing. 10 plays, 11 turns, `_left == [2,0,…]` == 16 − 10 − 4.
+- **I4, family 0 and no widow exists (4p)** — seat 3's Prince hits seat 0 with family 0 and widow 0 →
+  eliminated, **no panel, no pile draw, 0 reveal cards**; seat 1 goes the same way at play 11. 2
+  eliminations, 3 openings — **0 of them on an AI turn** — 0 pile draws, 11 plays, 12 turns, `_left ==
+  [2,0,…]` == 16 − 11 − 3.
+
+Every fixture re-runs the step 17 audit, the step 15 effect-log gates, the step 14 pairing check and
+the leak check (panel closed, hidden, no row, the Table visible again, no selector left open), and each
+one ends with 200 frames of the round-end state: no panel, no family draw, no reveal.
+
+| sabotage (main.gd) | measured FAILs | where |
+|---|---|---|
+| the step 20 TODO back: a human target's family draw is `deal_from_family(tp, 0)` (an AI picks for him) | **16** + a harness stall (the run is killed at 220 s) | I1 1 (the self-Prince opens no 2nd panel), **I2 13** (the AI-turn opening is gone, the row, the 0-card hand, the tapped index, `family_draw_idx == [0, 0]`, the Table, the leak check), I3 1 (the row of the T2 hit), + 1 "the round recorded 0 effect records". Then `_human_play_idx` reports "the human seat never reached a 2-card hand in SELECT_CARD (state 0, 1 cards)" and the round never ends: **every tap of the queue is shifted by one**, which is what a "the game drew for the human" bug looks like from outside |
+| only a SELF-Prince opens the modal (`tp.is_human() and p.idx == tp.idx`) — an AI's Prince aimed at the human auto-picks | **15** + the same stall | **I2 13** (exactly the list above), I3 1, + the 0-effect-records check — I1 and I4 pass, so the self-Prince path is not what this row pins; the gate is the target's family on ANOTHER seat's turn |
+| the panel opens on the ACTOR's family (`human_draw_from_family(_players[_cur_player])`) | **5** | I2 3 (the row is seat 1's `[Guard, Guard]`, the effect's `fams[0] 2 → 1`, the target's `hands[0] 1 → 1`), I3 2 — the panel is the TARGET's family: an AI Prince cannot put HIS cards into a human's hand (it is also a privacy break: it publishes an AI family on screen) |
+| the widow fallback is skipped for a human target (`... and not tp.is_human()`) — family 0 eliminates him | **5** | all in I3: the play-5 snapshot (widow `1 → 0`, hand `0 → 1`, active), the elimination at play 6, `pile_draws == 1`, the 11-turn round end, `_left == [4,0,…]` vs `[2,0,…]` — the widow is a FALLBACK PILE, in front of the elimination, for a human target too |
 
 ## tests/noble_family_smoke.tscn — Noble Family variant, whole games on the AI (steps 7, 11, 14)
 

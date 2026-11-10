@@ -36,6 +36,13 @@ extends Node2D
 # the right-handed seats, inside the 84 x 48 viewport, zero input connections, rendered ONLY for the
 # human seat (an AI family is data, never pixels), shrunk by every draw and refilled by every re-deal.
 #
+# TEST I (todo step 21) pins the Prince REDRAW of a HUMAN seat: a family card is NEVER picked for a
+# human seat, mid-effect or at a turn start. A human target's redraw runs the SAME modal path a turn
+# start runs (`Main.human_draw_from_family()`), in both shapes the Prince branch reaches - a self-Prince
+# and an AI's Prince aimed at him (an AI TURN that opens the HUMAN's panel). The fallbacks stay pile /
+# elimination paths that open NO panel: a 3p hit with an empty family draws THE WIDOW, a 4p hit with an
+# empty family and no widow eliminates him, and an eliminated seat with an empty family reveals NOTHING.
+#
 # TEST A deliberately needs no Main scene at all, so the deal table is pinned
 # independently of the game loop.
 #
@@ -239,6 +246,7 @@ func _ready() -> void:
 	await _test_family_stack()
 	await _test_family_selector()
 	await _test_human_modal()
+	await _test_prince_human_modal()
 	await await_frames(1)
 
 	print("\n==========================")
@@ -2944,5 +2952,574 @@ func _test_modal_round() -> void:
 	check(int(main.round_end_hands[0][0]) == 1, tag + ": the human ends the round with EXACTLY 1 hand card ("
 		+ str(main.round_end_hands[0][0]) + ") - the 1-card invariant holds through every modal draw")
 	_check_left_audit(main, tag)
+	main.queue_free()
+	await await_frames(2)
+
+
+# ----------------------------------------------------------------------------------------
+# TEST I (todo step 21): the Prince REDRAW of a HUMAN seat goes through the MODAL
+#
+# Step 15 put the whole Prince fallback chain in production: family first, then the widow, then the
+# elimination. For an AI target the family branch is `deal_from_family(tp, 0)` - no choice to make.
+# For a HUMAN target it was the `# TODO(step 21)` call site: the same auto-pick step 20 deleted at
+# turn start. Step 21 replaces it with `human_draw_from_family(tp)`, so a family card is NEVER picked
+# for a human seat, mid-effect or at a turn start. Two shapes reach that call site:
+#   - a SELF-Prince (tp == p, seat 0 Prince-plays himself), and
+#   - an AI's Prince aimed at the human (the panel opens on the AI's turn and shows the HUMAN's family).
+# The fallbacks stay pile/elimination paths, i.e. NO panel: an empty family is never a page, and
+# `open([])` refuses to open.
+#
+# The watcher here is the human SEAT'S HANDS for a whole round: it taps EVERY panel opening from a
+# queue, so a turn-start draw and a mid-effect Prince redraw are served by the same code and the
+# recorded taps are the ONLY taps in the fixture (an auto-pick path shows up as a row/hand/index
+# mismatch, not as a passing game). Each opening is sampled with: the acting seat, the row, the
+# seat's family DATA at that moment, the Table / other-selector visibility, and the seat's hand.
+#
+# I1  4p self-Prince   : 3 openings on seat 0, the middle one MID-EFFECT with the hand at 0 cards
+#                        (the Prince has already taken the card out of play, the draw REPLACES it),
+#                        the row = family minus the card tapped 1 frame earlier.
+# I2  4p AI Prince     : the middle opening happens on seat 1's TURN (an AI turn that shows a human
+#                        family), the tapped index 1 lands in the human's hand, the pile stays closed.
+# I3  3p widow fallback: 4 openings drain the 4-card family, then the 5th hit finds family 0 and
+#                        draws THE WIDOW with no panel, and the 6th hit finds family 0 AND widow 0 and
+#                        eliminates him - 1 pile draw, 1 elimination, 0 panels after the elimination.
+# I4  4p no widow      : family 0 and no widow exists at all -> eliminated, no panel, no reveal cards
+#                        (his family is empty: an empty family reveals NOTHING, and the modal never
+#                        opens on it).
+#
+# Fixtures: 4p deal order = 4 first-hand cards (idx 0..3) then 3 family columns, seat s column c =
+# idx 4 + 4*c + s; 3p = burn idx 0 (the widow), first-hand idx 1..3, seat s column c = idx 4 + 3*c + s.
+# ----------------------------------------------------------------------------------------
+
+# I1 + I2 (4p): seat 0 = Prince + [King, Guard, Countess], seats 1..3 = Guard + [Guard x3] (I1);
+# seat 0 = Guard, seat 1 = Prince, families as in I1 (I2).
+# I1: 1 Prince / 1 King / 1 Countess / 13 Guard. Plays: 8 (s0 Prince + Countess, s1..3 2 Guards each),
+# 9 turns, 1 Prince hit (his own), 0 eliminations, 0 pile draws. Out of play: 8 plays + 1 self-Prince
+# victim card (the Guard he tapped) = 9 -> `_left` == [6,0,0,0,0,1,0,0] (the King stays in his hand).
+const NOBLE_4P_SELF_PRINCE: Array[Deck.CardType] = [
+	Deck.CardType.Prince, Deck.CardType.Guard, Deck.CardType.Guard, Deck.CardType.Guard,
+	Deck.CardType.King, Deck.CardType.Guard, Deck.CardType.Guard, Deck.CardType.Guard,
+	Deck.CardType.Guard, Deck.CardType.Guard, Deck.CardType.Guard, Deck.CardType.Guard,
+	Deck.CardType.Countess, Deck.CardType.Guard, Deck.CardType.Guard, Deck.CardType.Guard,
+]
+const NOBLE_4P_HUMAN_PRINCE_LEFT: Array[int] = [13, 0, 0, 0, 1, 1, 1, 0]
+const NOBLE_4P_SELF_PRINCE_END_LEFT: Array[int] = [6, 0, 0, 0, 0, 1, 0, 0]
+
+# I2 (4p): the same supply, the Prince in seat 1's hand instead of seat 0's -> seat 1 Princes seat 0 on
+# play 2, which is the panel-opening mid-effect draw. 8 plays, 9 turns, 1 hit, 0 eliminations,
+# 0 pile draws, out of play 8 + 1 (the King the hit took) = 9 -> [7,0,0,0,0,0,0,0].
+const NOBLE_4P_AI_PRINCE: Array[Deck.CardType] = [
+	Deck.CardType.Guard, Deck.CardType.Prince, Deck.CardType.Guard, Deck.CardType.Guard,
+	Deck.CardType.King, Deck.CardType.Guard, Deck.CardType.Guard, Deck.CardType.Guard,
+	Deck.CardType.Guard, Deck.CardType.Guard, Deck.CardType.Guard, Deck.CardType.Guard,
+	Deck.CardType.Countess, Deck.CardType.Guard, Deck.CardType.Guard, Deck.CardType.Guard,
+]
+const NOBLE_4P_AI_PRINCE_END_LEFT: Array[int] = [7, 0, 0, 0, 0, 0, 0, 0]
+
+# I3 (3p): seat 0 (HUMAN) = Guard + [Guard, Guard, Guard, COUNTESS]; seats 1 and 2 hold two Princes
+# each (first-hand + family[0]), so they hit seat 0 on turns 2, 3, 5 and 6 - exactly the TEST D 3p
+# shape, with the Countess hidden at family index 3 so a tap can pick it out of the middle.
+# T1 own draw (4 -> 3), T2 hit (3 -> 2), T3 hit (2 -> 1), T4 own draw (1 -> 0), T5 hit finds family 0
+# and takes THE WIDOW (1 -> 0 cards), T6 hit finds family 0 AND widow 0 -> seat 0 is ELIMINATED.
+# 10 plays, 11 turns, 4 hits, 1 elimination, exactly 1 pile draw -> `_left` == [2,0,...] == 16 - 10 - 4.
+const NOBLE_3P_PRINCE_HUMAN: Array[Deck.CardType] = [
+	Deck.CardType.Guard, Deck.CardType.Guard, Deck.CardType.Prince, Deck.CardType.Prince,
+	Deck.CardType.Guard, Deck.CardType.Prince, Deck.CardType.Prince, Deck.CardType.Guard,
+	Deck.CardType.Guard, Deck.CardType.Guard, Deck.CardType.Guard, Deck.CardType.Guard,
+	Deck.CardType.Guard, Deck.CardType.Countess, Deck.CardType.Guard, Deck.CardType.Guard,
+]
+const NOBLE_3P_PRINCE_HUMAN_LEFT: Array[int] = [11, 0, 0, 0, 4, 0, 1, 0]
+const NOBLE_3P_PRINCE_HUMAN_END_LEFT: Array[int] = [2, 0, 0, 0, 0, 0, 0, 0]
+
+# I4 (4p): seat 0 = Prince + [King, Guard, Countess], seat 3 = Guard + [PRINCE, PRINCE, Guard].
+# T1 own tap + self-Prince (3 -> 1 family), T5 own tap (family 0), T8 seat 3's Prince hits a seat with
+# family 0 and NO widow (4p burns nothing) -> seat 0 is ELIMINATED with no panel. Seat 1 follows him at
+# play 11 (seat 3's Prince, family 0, no widow). 11 plays, 12 turns, 3 hits, 2 eliminations, 0 pile
+# draws, out of play 11 + 3 = 14 -> `_left` == [2,0,0,0,0,0,0,0].
+const NOBLE_4P_PRINCE_OUT_HUMAN: Array[Deck.CardType] = [
+	Deck.CardType.Prince, Deck.CardType.Guard, Deck.CardType.Guard, Deck.CardType.Guard,
+	Deck.CardType.King, Deck.CardType.Guard, Deck.CardType.Guard, Deck.CardType.Prince,
+	Deck.CardType.Guard, Deck.CardType.Guard, Deck.CardType.Guard, Deck.CardType.Prince,
+	Deck.CardType.Countess, Deck.CardType.Guard, Deck.CardType.Guard, Deck.CardType.Guard,
+]
+const NOBLE_4P_PRINCE_OUT_HUMAN_LEFT: Array[int] = [11, 0, 0, 0, 3, 1, 1, 0]
+const NOBLE_4P_PRINCE_OUT_HUMAN_END_LEFT: Array[int] = [2, 0, 0, 0, 0, 0, 0, 0]
+
+
+func _test_prince_human_modal() -> void:
+	print("--- TEST I1 (4p, a self-Prince: the panel opens MID-EFFECT on an empty hand) ---")
+	await _test_self_prince_modal()
+	print("--- TEST I2 (4p, an AI's Prince hits the human: an AI turn opens HIS family) ---")
+	await _test_ai_prince_human()
+	print("--- TEST I3 (3p, family 0 -> the WIDOW, no panel; then family 0 + widow 0 -> out) ---")
+	await _test_prince_widow_no_modal()
+	print("--- TEST I4 (4p, family 0 and no widow exists -> out, no panel, no reveal) ---")
+	await _test_prince_out_no_widow()
+
+
+func _fam_names(p: Player) -> Array:
+	var out: Array = []
+	for t in p.family:
+		out.append(Deck.card_names[int(t)].strip_edges())
+	return out
+
+
+func _tap_watcher(taps: Array) -> Dictionary:
+	return {"frames": 0, "taps": taps, "openings": 0, "actors": [], "rows": [], "snaps": [],
+		"tapped": [], "tables": [], "crow_rows": [], "crowded": 0, "hands": [], "fams": [],
+		"hand_types": [], "ai_open": 0, "stop": false}
+
+
+# The seat's hands, for a whole round: tap every opening, in queue order. A RISING EDGE of
+# `is_open()` is one draw the production flow asked the human to take, so `openings` counts the
+# draws and `tapped` is what he chose - the queue is the only source of taps in these fixtures.
+func _tap_modal(main, w) -> void:
+	var was := false
+	var k := 0
+	var taps: Array = w["taps"]
+	while int(w["frames"]) < 9000 and not bool(w["stop"]):
+		w["frames"] = int(w["frames"]) + 1
+		var sel = main._family_selector
+		var now: bool = sel.is_open()
+		if now and not was:
+			var p0 = main._players[0]
+			var cards: Array = _fs_cards(sel)
+			w["openings"] = int(w["openings"]) + 1
+			w["actors"].append(int(main._cur_player))
+			if int(main._cur_player) != 0:
+				w["ai_open"] = int(w["ai_open"]) + 1
+			w["rows"].append(_rn(cards))
+			w["snaps"].append(_fam_names(p0))
+			w["tables"].append(bool(main._table.visible))
+			var crow: bool = main._type_selector.visible or main._select_other_player.visible \
+				or main._select_any_player.visible
+			w["crow_rows"].append(bool(crow))
+			if crow:
+				w["crowded"] = int(w["crowded"]) + 1
+			w["hands"].append(int(p0.hand.get_child_count()))
+			w["fams"].append(int(p0.family_size()))
+			w["hand_types"].append(Deck.card_names[int(p0.hand.get_child(0).type)].strip_edges()
+				if p0.hand.get_child_count() > 0 else "-")
+			var idx: int = int(taps[k]) if k < taps.size() else -1
+			if idx >= 0 and idx < cards.size():
+				_fs_tap(cards[idx]["node"])
+			w["tapped"].append(idx)
+			k += 1
+		was = now
+		await get_tree().process_frame
+
+
+# Start the hands BEFORE the deal settles (the first turn start opens the panel) and wait for the
+# post-draw shape: 1 hand card + a full family in every AI seat, 2 cards + one spent family card in
+# the human seat (the queue tapped his first turn start).
+func _settle_taps(main, w) -> void:
+	_tap_modal(main, w)
+	await main.init_players(SEED)
+	var fam: int = Deck.NOBLE_FAMILY_SIZE[int(main._player_count)]
+	await await_until(func() -> bool:
+		var ready := true
+		for p in main._players:
+			if p.is_active() and p.idx > 0:
+				ready = ready and p.hand.get_child_count() == 1 and p.family_size() == fam
+		return ready and main._players[0].hand.get_child_count() == 2 \
+			and main._players[0].family_size() == fam - 1)
+
+
+# The human plays a chosen HAND INDEX (0 = the active card, 1 = the card the modal drew), served by
+# the tap queue (`draw_idx == -1`: the watcher owns the taps of this turn start). `_human_play` only
+# plays index 0, and the Countess rule over a human's 2-card hand FORCES index 1 on a (King, Countess)
+# pair - a harness that played index 0 there would be an ILLEGAL tap, which production forbids in
+# `Player._on_card_input_event`. `Main._on_card_played()` is called directly (that is what a card tap
+# emits), so the legality check the tap handler runs is replicated here as a check of its own.
+func _human_play_idx(main, hand_idx: int, target: int, type: Deck.CardType, draw_idx: int,
+		tag: String = "human play") -> void:
+	var p = main._players[0]
+	await _human_draw(main, draw_idx)
+	await await_until(func() -> bool:
+		return p._state == Player.State.SELECT_CARD and p.hand.get_child_count() == 2)
+	if p._state != Player.State.SELECT_CARD or p.hand.get_child_count() != 2:
+		# A fixture that diverges from the expected flow (a production path that draws FOR the human
+		# instead of asking him shifts every tap of the queue): say it and stop, rather than crash
+		# inside `countess_restricted()`, which indexes hand[1] and exists only over a 2-card hand.
+		check(false, tag + ": the human seat never reached a 2-card hand in SELECT_CARD (state "
+			+ str(p._state) + ", " + str(p.hand.get_child_count())
+			+ " cards) - the harness stops here instead of indexing a hand that does not exist")
+		return
+	var forced: int = p.countess_restricted()
+	check(hand_idx == 0 or forced == hand_idx, "the human taps hand index " + str(hand_idx)
+		+ ", the Countess rule forces " + str(forced) + " (-1 = free) - a tap on a card the rule forbids"
+		+ " is ignored by `Player._on_card_input_event`, so the harness has to tap the forced card")
+	await main._on_card_played(p.hand.get_child(hand_idx))
+	if p._state == Player.State.INPUT_OTHER_P:
+		await await_until(func() -> bool: return p._state == Player.State.INPUT_OTHER_P)
+		await main._on_target_player_selected(target)
+		if p._state == Player.State.INPUT_T:
+			await main._on_target_type_selected(type)
+	elif p._state == Player.State.INPUT_ANY_P:
+		# Prince: any active non-protected seat, HIMSELF included (`_find_noble_moves` enumerates self)
+		await main._on_target_player_selected(target)
+	await await_until(func() -> bool: return main._cur_player != 0)
+
+
+# The panel state a harness can only read from OUTSIDE a play chain: closed, invisible, no row, and
+# the Table back - the "no modal leak" gate, run after every fixture.
+func _check_no_leak(main, tag: String) -> void:
+	var sel = main._family_selector
+	check(not sel.is_open() and not bool(sel.visible) and int(sel.get_child_count()) == 1
+		and _fs_cards(sel).is_empty(), tag + ": the panel is CLOSED, hidden, with no row left ("
+		+ str(int(sel.get_child_count())) + " children) - a mid-effect modal that leaked would sit on"
+		+ " the next round's board")
+	check(bool(main._table.visible), tag + ": the Table is visible again - every surface the modal hid"
+		+ " came back, so the Prince card on the table can be discarded")
+	check(not main._type_selector.visible and not main._select_other_player.visible
+		and not main._select_any_player.visible, tag + ": no selector panel is left open after the round")
+
+
+func _test_self_prince_modal() -> void:
+	var tag := "I1"
+	var main = _scripted_main_human(4, NOBLE_4P_SELF_PRINCE, NOBLE_4P_HUMAN_PRINCE_LEFT)
+	var w = _tap_watcher([1, 0, 0])
+	await _settle_taps(main, w)
+	var p0 = main._players[0]
+	var fam: int = Deck.NOBLE_FAMILY_SIZE[4]
+	check(w["openings"] == 1 and w["tapped"] == [1], tag + ": ONE opening served the deal - the turn-start"
+		+ " draw, tapped at family index 1 (" + str(w["tapped"]) + ")")
+	check(w["rows"][0] == w["snaps"][0] and w["rows"][0] == ["King", "Guard", "Countess"], tag
+		+ ": the row is the family DATA in as-dealt order (" + str(w["rows"][0]) + ") - the modal is a view of"
+		+ " `p.family`, it is not a copy Main has to keep in step")
+	check(int(p0.hand.get_child_count()) == 2 and int(p0.family_size()) == fam - 1, tag + ": after the tapped"
+		+ " draw the human holds 2 cards and his family is down to " + str(fam - 1) + ", i.e. the tap POPPED the"
+		+ " card, it did not copy it")
+	# play 1: the Prince on HIMSELF - `_find_noble_moves` enumerates self as a Prince target and
+	# `Main._on_target_player_selected` accepts it under INPUT_ANY_P
+	await _human_play_idx(main, 0, 0, Deck.CardType.Unknown, -1, tag)
+	check(w["openings"] == 2 and w["actors"] == [0, 0], tag + ": the self-Prince opened the panel a SECOND"
+		+ " time INSIDE the same play - the draw is a mid-effect draw of his OWN family, the only shape a"
+		+ " self-targeted Prince can take")
+	check(w["rows"][1] == ["King", "Countess"] and w["rows"][1] == w["snaps"][1], tag + ": the mid-effect row"
+		+ " is the family MINUS the card he tapped 1 frame earlier (" + str(w["rows"][1])
+		+ "), read as the seat's live data at that moment - the panel opened on what is LEFT, not on the"
+		+ " family he was dealt")
+	check(w["hands"][0] == 1 and w["hands"][1] == 0, tag + ": the human's hand was " + str(w["hands"][0])
+		+ " card at the turn-start opening and " + str(w["hands"][1])
+		+ " cards at the mid-effect opening - the Prince has ALREADY taken his card out of play (reveal +"
+		+ " discard), so the panel draws on an empty hand: the draw REPLACES the card the Prince took, it"
+		+ " never adds to a 2-card hand (the 1-card invariant)")
+	check(w["fams"] == [3, 2] and w["fams"][1] == fam - 1, tag + ": the family went " + str(w["fams"])
+		+ " - one card per tap, and the effect ran while the family still held a card, which is what picks"
+		+ " the panel over the widow / elimination chain")
+	check(w["tables"] == [false, false] and int(w["crowded"]) == 0, tag + ": at BOTH openings the Table is"
+		+ " hidden and NO other selector panel is visible (" + str(w["crow_rows"])
+		+ ") - mid-effect is exactly as clean as a turn start: no TypeSelector, no player picker, and no"
+		+ " tap can reach the hand behind the panel")
+	check(w["tapped"] == [1, 0], tag + ": the taps are " + str(w["tapped"]) + " - he kept the King out of the"
+		+ " mid-effect row [King, Countess]")
+	check(main.family_draw_idx[0] == w["tapped"], tag + ": every tap was an INDEX draw ("
+		+ str(main.family_draw_idx[0]) + ") - `Main` popped `family[idx]`, the panel reported an index")
+	check(int(p0.hand.get_child_count()) == 1 and int(p0.family_size()) == 1, tag + ": after the whole play"
+		+ " chain the human holds EXACTLY 1 card and his family is 1 - the 1-card invariant through a"
+		+ " mid-effect modal, and the family did not shrink twice (1 draw per tap)")
+	check(int(p0.hand.get_child(0).type) == int(Deck.CardType.King), tag + ": the card in his hand is the KING"
+		+ " he tapped in the modal - the panel delivers the card he picked, it cannot invent, add, reorder or"
+		+ " duplicate one")
+	var recs1: Array = main.effect_log
+	check(recs1.size() == 1 and int(recs1[0]["played"]) == int(Deck.CardType.Prince)
+		and int(recs1[0]["target"]) == 0, tag + ": play 1 is the Prince on seat 0 HIMSELF (target "
+		+ str(recs1[0]["target"]) + ") - a self-Prince is a legal Prince target")
+	check(int(recs1[0]["before"]["fams"][0]) == 2 and int(recs1[0]["after"]["fams"][0]) == 1, tag
+		+ ": around the effect his family went " + str(recs1[0]["before"]["fams"][0]) + " -> "
+		+ str(recs1[0]["after"]["fams"][0])
+		+ ": the turn-start draw already spent family index 1, and the mid-effect draw spent one more"
+		+ " inside the same effect, so the effect's family deltas show BOTH draws and no phantom draw")
+	check(int(recs1[0]["before"]["left"][int(Deck.CardType.Prince)]) == 1
+		and int(recs1[0]["after"]["left"][int(Deck.CardType.Prince)]) == 0, tag + ": the Prince left the"
+		+ " supply by the PLAY (-1), the self-victim's Guard left by the Prince branch's `discard` (-1), and"
+		+ " the King he drew out of the modal moved hand <- family, which changes `_left` NOT AT ALL: after"
+		+ " play 1 _left == " + str(main._deck._left))
+	check(int(recs1[0]["after"]["left"][int(Deck.CardType.Guard)]) == 12
+		and int(recs1[0]["after"]["left"][int(Deck.CardType.King)]) == 1
+		and int(recs1[0]["after"]["hands"][0]) == 1 and bool(recs1[0]["after"]["active"][0]), tag
+		+ ": the 13th Guard left play as the self-Prince victim card, the King is still in his hand (1 card)"
+		+ " and seat 0 is still ACTIVE - a self-Prince with a card to draw is a hit, not an elimination")
+	check(main.eliminations == 0 and main.pile_draws == 0 and int(main._deck._widow_cards.size()) == 0, tag
+		+ ": 0 eliminations, 0 pile draws and a 0-card widow (4p burns nothing) - a human target with a"
+		+ " non-empty family is served by the modal ONLY: the pile is never touched, so the modal cannot"
+		+ " smuggle a main-pile card into his hand")
+	# play 5 (seat 0's next turn): family [Countess] -> hand [King, Countess] -> the Countess rule
+	# FORCES the Countess (index 1), which is why this play taps index 1 and not index 0
+	await _human_play_idx(main, 1, -1, Deck.CardType.Unknown, -1, tag)
+	check(w["openings"] == 3 and w["tapped"] == [1, 0, 0] and w["rows"][2] == ["Countess"], tag
+		+ ": the third opening is a plain turn start on the LAST family card (" + str(w["rows"][2])
+		+ ") - 3 openings for 3 family cards, i.e. the panel is the only family-draw path a human seat has")
+	check(w["hand_types"][2] == "King" and w["hands"][2] == 1, tag + ": at the turn-start opening his hand is"
+		+ " 1 card, the King - the card he tapped out of the mid-effect panel is the card he plays with 4"
+		+ " turns later, so a Prince redraw feeds his NEXT plays and not his current one")
+	var recs5: Array = main.effect_log
+	check(recs5.size() == 5 and int(recs5[4]["played"]) == int(Deck.CardType.Countess)
+		and int(recs5[4]["target"]) == -1, tag + ": play 5 is the COUNTRESS (target -1 = self, the variant"
+		+ " pairing rule) - a (King, Countess) hand cannot keep the King")
+	check(int(recs5[4]["before"]["fams"][0]) == 0 and int(recs5[4]["after"]["fams"][0]) == 0, tag
+		+ ": play 5's effect sees the family at 0 -> 0: the turn start tapped out the LAST family card BEFORE"
+		+ " the play was made, so a family draw is never an effect's family delta - the only family deltas a"
+		+ " round produces are mid-effect Prince redraws, which is exactly what the panel draws are")
+	check(int(main._deck._left[int(Deck.CardType.Countess)]) == 0
+		and int(main._deck._left[int(Deck.CardType.King)]) == 1, tag + ": the Countess left play by the"
+		+ " play, the King is in his hand and out of the supply: after play 5 _left == "
+		+ str(main._deck._left))
+	var recs: Array = await _run_to_first_round_end(main)
+	w["stop"] = true
+	await await_frames(2)
+	check(int(w["openings"]) == 3, tag + ": 3 panel openings in the WHOLE round, all served by a tap - no"
+		+ " turn start and no mid-effect draw of this round opened a 4th one")
+	check(w["actors"] == [0, 0, 0] and int(w["ai_open"]) == 0, tag + ": every opening happened on the"
+		+ " HUMAN's own turn (" + str(w["actors"]) + ") - a self-Prince keeps the acting seat at 0, so"
+		+ " `Main` reads `_cur_player` as the human and the modal is his")
+	check(main.eliminations == 0 and main.pile_draws == 0, tag + ": the whole round: 0 eliminations, 0 pile"
+		+ " draws - 8 plays, 9 turns, the human's 3 family draws (2 mid-effect + turn starts) all went"
+		+ " through the panel")
+	check(int(main.round_end_actor[0]) == 0, tag + ": the round ended on seat 0's turn start with an empty"
+		+ " family (actor " + str(main.round_end_actor) + ") - the family is the round's clock, and the"
+		+ " human's clock ran out through TAPPED draws only")
+	check(recs.size() == 8, tag + ": 8 plays in the round (" + str(recs.size())
+		+ "), the human's 2 (the Prince, the Countess) and 2 per AI seat")
+	check(int(main._players[0].score) == 1 and int(main._players[1].score) == 0
+		and int(main._players[2].score) == 0 and int(main._players[3].score) == 0, tag + ": the human WON"
+		+ " the round with the King he tapped out of the mid-effect panel (scores " + str(main._players[0].score)
+		+ " " + str(main._players[1].score) + " " + str(main._players[2].score) + " "
+		+ str(main._players[3].score) + ") - the cards a human picks in the modal are the cards that score"
+		+ " for him, so a mid-effect modal is a decision, not a cutscene")
+	_check_effect_log_basics(recs, main)
+	_check_left_end(recs, NOBLE_4P_SELF_PRINCE_END_LEFT, tag)
+	_check_left_audit(main, tag)
+	_check_pairings(main)
+	_check_no_leak(main, tag)
+	var settle: int = 0
+	while settle < 200:
+		await get_tree().process_frame
+		settle += 1
+	check(int(w["openings"]) == 3 and int(settle) == 200 and not main._family_selector.is_open()
+		and main.family_draw_idx[0].size() == 3, tag + ": " + str(settle) + " frames of the round-end state"
+		+ " opened NO panel and drew NO family card (" + str(main.family_draw_idx[0])
+		+ ") - the Prince redraw reopens the panel inside an effect, it does not reopen it on the round-end"
+		+ " state")
+	main.queue_free()
+	await await_frames(2)
+
+
+func _test_ai_prince_human() -> void:
+	var tag := "I2"
+	var main = _scripted_main_human(4, NOBLE_4P_AI_PRINCE, NOBLE_4P_HUMAN_PRINCE_LEFT)
+	var w = _tap_watcher([0, 1, 0])
+	await _settle_taps(main, w)
+	var p0 = main._players[0]
+	# play 1: the human's Guard on seat 1, declaring Priest - seat 1 holds the Prince, so it misses
+	await _human_play_idx(main, 0, 1, Deck.CardType.Priest, -1, tag)
+	check(w["openings"] == 1 and w["actors"] == [0] and w["rows"][0] == w["snaps"][0], tag
+		+ ": the only opening so far is his OWN turn start (" + str(w["rows"][0])
+		+ "), tapped at family index 0 (the King)")
+	# seat 1 is level 1: his first valid Prince move targets the lowest-index live unprotected seat,
+	# seat 0 - the panel opens MID-EFFECT ON SEAT 1'S TURN, on the human's family, and seat 1 has no
+	# way to pick for him: the tap below is the harness tapping the human's panel.
+	await await_until(func() -> bool: return int(w["openings"]) >= 2)
+	check(int(w["openings"]) == 2 and int(w["actors"][1]) == 1 and int(w["ai_open"]) == 1, tag
+		+ ": the second opening happened on an AI TURN (" + str(w["actors"])
+		+ ") - seat 1's Prince aimed at seat 0 opened the human's panel, so a mid-effect family draw is"
+		+ " the human's choice even when an AI's play caused it")
+	check(w["rows"][1] == ["Guard", "Countess"] and w["rows"][1] == w["snaps"][1], tag + ": the row is the"
+		+ " HUMAN's family data as it stands inside seat 1's effect (" + str(w["rows"][1])
+		+ ") - the King he tapped at his own turn start is gone from the data, the panel shows what the"
+		+ " seat has NOW, and an AI turn never shows the AI's family here (seat 1's family is 3 Guards,"
+		+ " none of them in this row)")
+	check(w["hands"][1] == 0 and w["fams"] == [3, 2], tag + ": at that opening the human's hand is 0 cards"
+		+ " and his family is 2 (" + str(w["fams"]) + ") - the Prince compared his card, took it out of"
+		+ " play, and the panel draws the replacement, so the draw is a REDRAW and never a 2-card hand"
+		+ " mid-effect")
+	await await_until(func() -> bool:
+		return main.effect_log.size() >= 2 and p0.hand.get_child_count() == 1)
+	check(main.effect_log.size() == 2 and int(main.effect_log[1]["played"]) == int(Deck.CardType.Prince)
+		and int(main.effect_log[1]["target"]) == 0, tag + ": play 2 is seat 1's Prince on seat 0 ("
+		+ str(main.effect_log[1]["target"]) + ") - a human target with a non-empty family is HIT, not"
+		+ " eliminated")
+	check(int(main.effect_log[1]["before"]["fams"][0]) == 2 and int(main.effect_log[1]["after"]["fams"][0]) == 1,
+		tag + ": the effect's family deltas are 2 -> 1: the draw the human made IN THE PANEL is the"
+		+ " effect's redraw, attributed to this play, so an AI Prince never picks a card for a human seat"
+		+ " and never skips the redraw")
+	check(int(main.effect_log[1]["after"]["hands"][0]) == 1 and int(main.effect_log[1]["before"]["hands"][0]) == 1,
+		tag + ": the target's hand is 1 card BEFORE the hit (the King) and 1 card after (the Countess) -"
+		+ " a hit discards and replaces, the hand never passes through 2")
+	check(w["hand_types"][1] == "-" and w["hand_types"][2] == "Countess" and w["tapped"] == [0, 1, 0], tag
+		+ ": the mid-effect tap was family index 1 -> the COUNTRESS is his active card at his next turn"
+		+ " start (" + str(w["hand_types"]) + ") - the panel delivered the card he picked out of the row"
+		+ " [Guard, Countess], i.e. index 1 means the 2nd card of the data, not the 2nd card of a sort")
+	check(main.pile_draws == 0 and int(main._deck._widow_cards.size()) == 0, tag + ": 0 pile draws and a"
+		+ " 0-card widow (4p burns nothing) - the widow is the FALLBACK pile and a family that has cards"
+		+ " never lets a pile card near a human hand")
+	check(w["tables"] == [false, false, false] and int(w["crowded"]) == 0, tag + ": the Table was hidden at"
+		+ " all 3 openings and no other selector panel was ever visible (" + str(w["crow_rows"])
+		+ ") - the Prince card sits on the table at the mid-effect opening, so hiding the Table is what"
+		+ " keeps the modal a single question")
+	# play 5 (seat 0's next turn): family [Guard] -> hand [Countess, Guard] -> the Countess rule forces
+	# index 0, i.e. he plays the Countess he tapped out of the mid-effect panel
+	await _human_play_idx(main, 0, -1, Deck.CardType.Unknown, -1, tag)
+	var recs: Array = await _run_to_first_round_end(main)
+	w["stop"] = true
+	await await_frames(2)
+	check(int(w["openings"]) == 3 and w["rows"][2] == ["Guard"] and w["fams"] == [3, 2, 1], tag
+		+ ": 3 openings for 3 family cards, the last one a plain turn start on the 1 card left - every"
+		+ " family card of a human seat is spent by a tap, mid-effect draws included")
+	check(main.family_draw_idx[0] == w["tapped"], tag + ": every one of his family draws is a TAPPED index"
+		+ " (" + str(main.family_draw_idx[0]) + ") - no family card of a human seat is picked by code")
+	check(recs.size() == 8 and int(main.round_end_actor[0]) == 0, tag + ": 8 plays, 9 turns, the round ended"
+		+ " on seat 0's turn start with an empty family (actor " + str(main.round_end_actor)
+		+ ") - 1 hit (seat 1's Prince), 0 eliminations, the family the clock")
+	check(main.eliminations == 0 and main.pile_draws == 0, tag + ": the whole round: 0 eliminations and 0"
+		+ " pile draws - a human target with a 2-card family took the modal path, not the widow path")
+	_check_effect_log_basics(recs, main)
+	_check_left_end(recs, NOBLE_4P_AI_PRINCE_END_LEFT, tag)
+	_check_left_audit(main, tag)
+	_check_pairings(main)
+	_check_no_leak(main, tag)
+	await await_frames(200)
+	check(int(w["openings"]) == 3 and not main._family_selector.is_open(), tag
+		+ ": 200 frames of the round-end state opened no 4th panel - an AI turn can OPEN a human's panel"
+		+ " (a Prince hit), it cannot keep reopening one")
+	main.queue_free()
+	await await_frames(2)
+
+
+func _test_prince_widow_no_modal() -> void:
+	var tag := "I3"
+	var main = _scripted_main_human(3, NOBLE_3P_PRINCE_HUMAN, NOBLE_3P_PRINCE_HUMAN_LEFT)
+	var w = _tap_watcher([0, 1, 1, 0])
+	await _settle_taps(main, w)
+	check(w["openings"] == 1 and w["rows"][0] == ["Guard", "Guard", "Guard", "Countess"], tag
+		+ ": the turn-start row is the FULL 4-card family in as-dealt order, the Countess LAST - the panel"
+		+ " never sorts a row, so a tap that picks the 2nd card of the row is the 2nd card of the data")
+	# play 1: the human's Guard on seat 1, declaring Priest (seat 1 holds the Prince -> miss)
+	await _human_play_idx(main, 0, 1, Deck.CardType.Priest, -1, tag)
+	await await_until(func() -> bool: return int(w["openings"]) >= 2)
+	check(w["openings"] == 2 and w["tapped"] == [0, 1] and w["rows"][1] == ["Guard", "Guard", "Countess"],
+		tag + ": seat 1's Prince hit him mid-effect and the row shrank to the 3 cards LEFT after his"
+		+ " turn-start tap (" + str(w["rows"][1]) + "), tapped at index 1 - the MIDDLE Guard, which only"
+		+ " an index-reporting panel can pick out of a row of identical cards")
+	await _human_play_idx(main, 0, -1, Deck.CardType.Unknown, -1, tag)
+	check(int(w["openings"]) == 4 and w["rows"] == w["snaps"], tag + ": 4 openings, each row equal to the"
+		+ " seat's live family data at that moment " + str(w["rows"]) + " - 4 cards, 3, 2, 1: the panel"
+		+ " drained his family one tap at a time (2 hits, 2 turn starts), and no row ever showed a card"
+		+ " the data did not hold")
+	check(w["rows"][3] == ["Guard"] and w["tapped"] == [0, 1, 1, 0] and w["fams"] == [4, 3, 2, 1], tag
+		+ ": the taps " + str(w["tapped"]) + " drained the family to 0 (" + str(w["fams"])
+		+ ") and the last row was the 1 remaining Guard - the Countess left the family at the T3 hit's tap"
+		+ " (index 1 of [Guard, Countess])")
+	check(main.family_draw_idx[0] == w["tapped"], tag + ": all 4 family draws are index draws ("
+		+ str(main.family_draw_idx[0]) + ") - every family card of a human seat leaves the data through a"
+		+ " tap, including the 2 mid-effect Prince redraws")
+	check(w["hands"] == [1, 0, 0, 1] and w["hand_types"][3] == "Countess", tag + ": his hand at the 4"
+		+ " openings was " + str(w["hands"]) + " cards, the 4th opening's active card being the Countess -"
+		+ " a hit leaves the hand at 0 cards and the panel draw replaces the compared card (the 1-card"
+		+ " invariant through 2 mid-effect modals)")
+	var recs: Array = await _run_to_first_round_end(main)
+	w["stop"] = true
+	await await_frames(2)
+	check(recs.size() == 10 and int(main.round_end_actor[0]) == 1, tag + ": 10 plays, 11 turns, the round"
+		+ " ended on seat 1's turn start with an empty family (actor " + str(main.round_end_actor)
+		+ ") - seat 0 left the board at play 6, so his clock cannot end the round")
+	check(int(w["openings"]) == 4, tag + ": 4 openings in the WHOLE round, all of them before the"
+		+ " elimination - the family emptied tap by tap, and every path that followed it ran WITHOUT a panel")
+	# play 5 (T5): family 0, the widow has its 1 card -> the pile fallback, no panel
+	check(int(recs[4]["played"]) == int(Deck.CardType.Prince) and int(recs[4]["target"]) == 0
+		and int(recs[4]["before"]["fams"][0]) == 0 and int(recs[4]["before"]["widow"]) == 1
+		and int(recs[4]["after"]["widow"]) == 0 and int(recs[4]["after"]["hands"][0]) == 1
+		and bool(recs[4]["after"]["active"][0]), tag + ": play 5 hit a seat with family 0 and the 1-card"
+		+ " widow, so the widow drew for him (widow 1 -> 0, hand 0 -> 1, seat 0 still ACTIVE) - an empty"
+		+ " family is NEVER a page: `open([])` refuses to open and the fallback pile is a pile draw, not a"
+		+ " choice the human makes")
+	# play 6 (T6): family 0 AND widow 0 -> eliminated
+	check(int(recs[5]["played"]) == int(Deck.CardType.Prince) and int(recs[5]["target"]) == 0
+		and int(recs[5]["before"]["fams"][0]) == 0 and int(recs[5]["before"]["widow"]) == 0
+		and not bool(recs[5]["after"]["active"][0]) and int(recs[5]["after"]["hands"][0]) == 0, tag
+		+ ": play 6 hit a seat with family 0 and widow 0 -> seat 0 is ELIMINATED (active false, hand 0) -"
+		+ " no panel, no pile card, no card in hand, exactly the step 15 chain")
+	check(main.eliminations == 1 and main.eliminated_seats == [0], tag + ": 1 elimination, seat 0, at play 6"
+		+ " - the human seat left the board through the fallback chain, not through a modal")
+	check(main.pile_draws == 1 and int(main._deck._widow_cards.size()) == 0, tag + ": exactly ONE pile draw"
+		+ " in the round (the widow at play 5) and a 0-card widow at the round end - the widow is 1 card"
+		+ " in 3p and it is spent by ONE hit, so a second hit finds nothing")
+	check(main.reveal_calls == 1 and main.reveal_log.size() == 1
+		and int(main.reveal_log[0]["seat"]) == 0 and int(main.reveal_log[0]["family_size"]) == 0
+		and _rn(main.reveal_log[0]["cards"]).is_empty(), tag + ": the elimination called the reveal ONCE"
+		+ " and materialized 0 cards (container " + str(main.reveal_log[0]["container"])
+		+ ", family_size 0) - an eliminated seat whose family is already empty reveals NOTHING and opens"
+		+ " NO modal: the panel is not a reveal, and the reveal is not a panel")
+	_check_effect_log_basics(recs, main)
+	_check_left_end(recs, NOBLE_3P_PRINCE_HUMAN_END_LEFT, tag)
+	_check_left_audit(main, tag)
+	_check_pairings(main)
+	_check_no_leak(main, tag)
+	await await_frames(200)
+	check(int(w["openings"]) == 4 and main.family_draw_idx[0] == [0, 1, 1, 0]
+		and not main._family_selector.is_open(), tag + ": 200 frames after the round end the panel is"
+		+ " closed, the human drew NO 5th family card and opened no panel - an out seat has no family, the"
+		+ " widow is spent and the round is over")
+	main.queue_free()
+	await await_frames(2)
+
+
+func _test_prince_out_no_widow() -> void:
+	var tag := "I4"
+	var main = _scripted_main_human(4, NOBLE_4P_PRINCE_OUT_HUMAN, NOBLE_4P_PRINCE_OUT_HUMAN_LEFT)
+	var w = _tap_watcher([1, 0, 0])
+	await _settle_taps(main, w)
+	# play 1: the human's Prince on himself, served by the panel (turn start tap 1 = Guard, then the
+	# mid-effect row [King, Countess], tap 0 = the King)
+	await _human_play_idx(main, 0, 0, Deck.CardType.Unknown, -1, tag)
+	check(w["openings"] == 2 and w["actors"] == [0, 0] and w["rows"][1] == ["King", "Countess"], tag
+		+ ": the self-Prince opened the panel on his own family mid-effect (" + str(w["rows"][1])
+		+ "), tapped 1 frame into the same play - the King he keeps came out of a modal, not out of a"
+		+ " pile, a widow or a dealt family")
+	# play 5: family [Countess] -> hand [King, Countess] -> the Countess rule FORCES index 1
+	await _human_play_idx(main, 1, -1, Deck.CardType.Unknown, -1, tag)
+	check(int(w["openings"]) == 3 and w["tapped"] == [1, 0, 0] and main.family_draw_idx[0] == [1, 0, 0],
+		tag + ": 3 openings, 3 taps, 3 family cards - his whole 3-card family left the data through the"
+		+ " panel, 2 of them inside Prince effects")
+	var recs: Array = await _run_to_first_round_end(main)
+	w["stop"] = true
+	await await_frames(2)
+	check(recs.size() == 11 and int(main.round_end_actor[0]) == 2, tag + ": 11 plays, 12 turns, the round"
+		+ " ended on seat 2's turn start with an empty family (actor " + str(main.round_end_actor)
+		+ ") - seats 0 and 1 are out, so seats 2 and 3 close the round")
+	check(int(recs[7]["played"]) == int(Deck.CardType.Prince) and int(recs[7]["target"]) == 0
+		and int(recs[7]["before"]["fams"][0]) == 0 and int(recs[7]["before"]["widow"]) == 0
+		and not bool(recs[7]["after"]["active"][0]) and int(recs[7]["after"]["hands"][0]) == 0, tag
+		+ ": play 8 (seat 3's Prince) hit seat 0 with family 0 and widow 0 - 4p burns NOTHING, so no widow"
+		+ " exists and the elimination is the only path: active false, hand 0, no pile draw")
+	check(int(recs[10]["played"]) == int(Deck.CardType.Prince) and int(recs[10]["target"]) == 1
+		and int(recs[10]["before"]["fams"][1]) == 0
+		and not bool(recs[10]["after"]["active"][1]), tag + ": play 11 (seat 3's 2nd Prince) hit seat 1 the"
+		+ " same way (family 0, no widow) - the chain is not a human-seat special case: any seat with no"
+		+ " family card and no widow card is out")
+	check(main.eliminations == 2 and main.eliminated_seats == [0, 1], tag + ": 2 eliminations, seats "
+		+ str(main.eliminated_seats) + " - both hits found an empty family and no widow")
+	check(int(w["openings"]) == 3 and int(w["ai_open"]) == 0, tag + ": 3 openings in the WHOLE round and 0"
+		+ " of them on an AI turn - a 4p elimination opens NO panel for anybody: the modal is a family that"
+		+ " has cards, nothing else")
+	check(main.pile_draws == 0 and int(main._deck._widow_cards.size()) == 0, tag + ": 0 pile draws and 0"
+		+ " widow cards the whole round - 4p has no widow pile, so the fallback chain goes family -> out")
+	check(main.reveal_calls == 2 and main.reveal_log.size() == 2
+		and _rn(main.reveal_log[0]["cards"]).is_empty() and _rn(main.reveal_log[1]["cards"]).is_empty(), tag
+		+ ": 2 reveal calls, 0 cards each (families " + str([main.reveal_log[0]["family_size"],
+		main.reveal_log[1]["family_size"]]) + ") - both seats drained their families through the panel"
+		+ " before they were hit, so there is no family left to publish: the modal consumed the reveal's"
+		+ " material")
+	_check_effect_log_basics(recs, main)
+	_check_left_end(recs, NOBLE_4P_PRINCE_OUT_HUMAN_END_LEFT, tag)
+	_check_left_audit(main, tag)
+	_check_pairings(main)
+	_check_no_leak(main, tag)
+	await await_frames(200)
+	check(int(w["openings"]) == 3 and main.family_draw_idx[0].size() == 3
+		and not main._family_selector.is_open(), tag + ": 200 frames of the round-end state: no panel, no"
+		+ " family draw, no reveal - the family draw modal reopens inside effects only, and an elimination"
+		+ " ends its seat's share of them")
 	main.queue_free()
 	await await_frames(2)

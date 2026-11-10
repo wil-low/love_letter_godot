@@ -63,7 +63,7 @@ offset = Vector2(5.5, 8.5)
 visible = false
 z_index = 10
 
-[node name="FamilySelector" parent="." instance=ExtResource("8_famself")]
+[node name="FamilySelector" parent="." unique_id=803516277 instance=ExtResource("8_famself")]
 visible = false
 z_index = 10
 
