@@ -335,6 +335,10 @@ func _ready() -> void:
 	# block-buffered stdout (the M5 lesson, step 26), so the sections that must be READ live before the
 	# TEST M tail. O is the new part of the page, N is the data it shows, so O runs first.
 	await _test_stats_switch()
+	# TEST P (step 28) runs between O and N: it DELETES and REWRITES `user://options.cfg` (a save-format
+	# test has to produce an old-format file, which is the player's own file), and it writes the player's
+	# file back at the end of every fixture. N6 reads that file at its start, so P must land before N.
+	await _test_stats_persistence()
 	# TEST N is placed BEFORE TEST M, not appended at the end of the list: Godot's stdout is block-buffered
 	# when it is redirected, and the suite's LAST few kilobytes of prints are gone from the log (measured:
 	# the committed suite's log ends at M4's last check and its M5 checks and its summary line are missing,
@@ -5920,27 +5924,25 @@ func _test_st_classic_writes() -> void:
 	await _menu_ready(app)
 	var stats = app._stats
 	var main: Node = app._main
-	var saved: Array = _st_saved()
-	var live: Array = _st_row(stats.tables[Stats.MODE_CLASSIC])
-	if saved.size() == 2 * Player.AI_Level.size():
-		check(live == saved, tag + ": a save whose length matches `load_config()`'s OWN size formula"
-			+ " is KEPT and lands in the CLASSIC table (" + str(live) + ") - an old-format save is the"
-			+ " classic history, never a mystery mode")
-	else:
-		check(_st_zero(live), tag + ": a " + str(saved.size()) + "-counter save is DROPPED by"
-			+ " `load_config()`'s EXISTING size check (`2 * AI_Level.size()` == "
-			+ str(2 * Player.AI_Level.size()) + "), so the classic table opens at zeros - PRE-EXISTING"
-			+ " behaviour, step 26 changes no save format and no drop rule. The first save the game"
-			+ " writes back is " + str(STATS_COUNT) + " long, so the NEXT boot keeps it; step 28's"
-			+ " migration Check (an old-format save must migrate to the classic table) is the step that"
-			+ " must decide the 12-to-" + str(STATS_COUNT) + " rule, and THIS check is the one that flips"
-			+ " when it does")
+	var cls: Array = _st_cfg_vals(STATS_SECTION, STATS_KEY_CLASSIC)
+	var nob: Array = _st_cfg_vals(STATS_SECTION, STATS_KEY_NOBLE)
+	var live_cls: Array = _st_row(stats.tables[Stats.MODE_CLASSIC])
+	var live_nob: Array = _st_row(stats.tables[Stats.MODE_NOBLE])
+	var expected: Array = _st_expected_saved()
+	check(live_cls == expected[Stats.MODE_CLASSIC] and live_nob == expected[Stats.MODE_NOBLE],
+		tag + ": the two tables are what the suite's OWN copy of step 28's load rules predicts from the"
+		+ " player's file (classic " + str(live_cls) + " / noble " + str(live_nob) + "; file: new keys "
+		+ str(cls.size()) + "+" + str(nob.size()) + " ints, legacy "
+		+ str(_st_cfg_vals(STATS_LEGACY_SECTION, STATS_KEY_LEGACY).size()) + " ints) - a save whose"
+		+ " length matches `2 * AI_Level.size()` is KEPT, an old-format file MIGRATES to classic, and a"
+		+ " stale length DROPS ITS OWN table; STEP 27'S N6 CHECK IS FLIPPED here: it read the legacy key"
+		+ " and its message named step 28 as the check that would flip it")
 	check(stats.tables[Stats.MODE_CLASSIC] is Array[int], tag + ": the loaded save is NORMALIZED to"
-		+ " `Array[int]` by the alias setter - the file holds a plain array, so the normalization is"
-		+ " what keeps `table()` readable on the load path")
-	check(stats.tables[Stats.MODE_NOBLE] is Array[int] and _st_zero(stats.tables[Stats.MODE_NOBLE]),
-		tag + ": the NOBLE table starts at zeros (no save key for it yet - step 28 adds"
-		+ " `Stats/noble_family`)")
+		+ " `Array[int]` - the file holds plain values, `ConfigFile` has no types, and `table()` reads"
+		+ " typed arrays (the pre-variant alias setter did the same, step 26)")
+	check(stats.tables[Stats.MODE_NOBLE] is Array[int], tag + ": the NOBLE table is typed on the same"
+		+ " path - `Stats/" + STATS_KEY_NOBLE + "` is read by the same loop, so a typed read cannot be"
+		+ " the classic table's luck")
 	check(stats.mode == Stats.MODE_CLASSIC, tag + ": a classic game opens on the CLASSIC table")
 
 	_st_won = []
@@ -5950,16 +5952,19 @@ func _test_st_classic_writes() -> void:
 	await _tap_start_play(app)
 	await _tap_row(app, "CLASSIC")
 	var base: Array = _st_row(stats.tables[Stats.MODE_CLASSIC])
+	var noble_before: Array = _st_row(stats.tables[Stats.MODE_NOBLE])
 	await _settle_menu_deal(app, 0, CLASSIC_4P_MAIN)
 	await _run_menu_rounds(app, 2)
 	# The save is written by `save_stats.emit()` at the TAIL of `round_over()` (after every
 	# `round_won`), and the game keeps playing after the 2nd round, so the file is a LAGGING snapshot of
-	# the table. The check is convergence: poll until "what the file says" == "what the page shows".
+	# the table. The check is convergence: poll until "what the file says" == "what the page shows" - for
+	# BOTH keys, because step 28 writes both tables on every save.
 	var matched := false
 	var now: Array = _st_row(stats.tables[Stats.MODE_CLASSIC])
 	for _f in 600:
 		now = _st_row(stats.tables[Stats.MODE_CLASSIC])
-		if _st_saved() == now:
+		if _st_cfg_vals(STATS_SECTION, STATS_KEY_CLASSIC) == now \
+				and _st_cfg_vals(STATS_SECTION, STATS_KEY_NOBLE) == _st_row(stats.tables[Stats.MODE_NOBLE]):
 			matched = true
 			break
 		await get_tree().process_frame
@@ -5978,19 +5983,28 @@ func _test_st_classic_writes() -> void:
 		+ " winner is credited ONCE, and a mode index written twice would double here")
 	check(wins == _st_fin.size(), tag + ": the WINS grew by exactly the number of `round_finished`"
 		+ " emissions (" + str(wins) + " for " + str(_st_fin.size()) + ")")
-	check(_st_zero(stats.tables[Stats.MODE_NOBLE]), tag + ": a CLASSIC game wrote NOTHING to the noble"
-		+ " table - the write path is mode-scoped, so a variant table cannot collect classic games")
+	var nob_after: Array = _st_row(stats.tables[Stats.MODE_NOBLE])
+	check(nob_after == noble_before, tag + ": a CLASSIC game changed NOTHING in the noble table ("
+		+ str(noble_before) + " -> " + str(nob_after) + ") - the write path is mode-scoped, so a variant"
+		+ " table cannot collect classic games. STEP 27'S version of this check compared with ZEROS, and"
+		+ " that was only true because no pre-step-28 file had a noble key: a file that HAS one now means"
+		+ " the honest measurement is a DELTA, because a loaded variant history is a legitimate starting"
+		+ " point for a classic game")
 	check(int(now[0]) >= int(base[0]) and int(now[1]) >= int(base[1]), tag + ": a classic game ADDS to"
 		+ " the saved classic history, it never replaces it (" + str(base) + " -> " + str(now[0])
 		+ " on the first slot)")
-	check(matched, tag + ": the save the game wrote back EQUALS the table the page shows (" + str(now)
-		+ ") - `save_config()` writes the CURRENT table under the legacy key; step 28 splits that key"
-		+ " per mode. Measured lag: the file is written at the TAIL of `round_over()`, so a snapshot"
-		+ " taken right after a `round_won` is one round behind the in-memory table")
-	check(_st_saved().size() == STATS_COUNT, tag + ": the save the game wrote back is " + str(STATS_COUNT)
-		+ " counters long - the length `load_config()`'s own size check expects, so the format the game"
-		+ " writes and the rule that drops a save agree with each other (a 12-counter legacy save does"
-		+ " NOT, which is the drop measured above; step 28 owns that gap)")
+	check(matched, tag + ": the file the game wrote back EQUALS the live tables on BOTH keys - `Stats/"
+		+ STATS_KEY_CLASSIC + "` == the classic table (" + str(now) + ") and `Stats/" + STATS_KEY_NOBLE
+		+ "` == the noble table (" + str(nob_after) + "): `save_config()` writes the CURRENT value of each"
+		+ " table on every save, so a game of one mode can never overwrite the other mode's history."
+		+ " Measured lag: the file is written at the TAIL of `round_over()`, so a snapshot taken right"
+		+ " after a `round_won` is one round behind the in-memory table")
+	check(_st_cfg_vals(STATS_SECTION, STATS_KEY_CLASSIC).size() == STATS_COUNT
+			and _st_cfg_vals(STATS_SECTION, STATS_KEY_NOBLE).size() == STATS_COUNT,
+		tag + ": both keys the game writes are " + str(STATS_COUNT) + " counters long - the length"
+		+ " `load_stats()`'s per-table size check expects, so the format the game writes and the rule that"
+		+ " drops a save agree with each other (a 12-counter legacy save does NOT, which is the padding"
+		+ " P2 measures)")
 	main.round_won.disconnect(_st_note_won)
 	main.round_finished.disconnect(_st_note_finished)
 	await _free_menu_app(app)
@@ -6514,12 +6528,15 @@ func _test_sw_app() -> void:
 
 
 # ---- O6: where a running game's counters land when the page shows the OTHER table -----------
-# A MEASUREMENT of today's behaviour, not an approval. Step 26 aliased `_totals_and_wins` to
-# `tables[mode]`, and `mode` is now something the PLAYER can change, so the write target is the
-# page's view. Step 28 changes the two write paths to `tables[_main.noble_family_index()]`; every
-# check below is the Check that FLIPS when that lands.
+# Step 26 aliased `_totals_and_wins` to `tables[mode]`, and step 27 made `mode` something the PLAYER
+# can change, so step 27's measurement had the write target as the page's view. Step 28 moves the
+# target: `_on_round_won` / `_on_round_finished` now index `tables[_main.noble_family_index()]`, i.e.
+# the mode of the RUNNING game - the mode is picked at PLAY and cannot change mid-game, so it is a
+# fact about the game, while the page's view is a fact about a browser window. The checks below are
+# the flipped form of step 27's: the same fixture, the page STILL on the other table at the round
+# end, and the counters landing in the GAME's table. P4 measures the classic half of the same rule.
 func _test_sw_game_write() -> void:
-	var tag := "O6 the write target today"
+	var tag := "O6 the write target is the game"
 	_menu_levels = [Player.AI_Level.Level_2, Player.AI_Level.Level_3,
 		Player.AI_Level.Level_2, Player.AI_Level.Level_3]
 	var app = _make_menu_app()
@@ -6545,25 +6562,637 @@ func _test_sw_game_write() -> void:
 	await _run_menu_rounds(app, 1)
 	var csum: int = _sum_ints(_st_row(stats.tables[Stats.MODE_CLASSIC]))
 	var nsum: int = _sum_ints(_st_row(stats.tables[Stats.MODE_NOBLE]))
+	var cls: Array = _st_row(stats.tables[Stats.MODE_CLASSIC])
+	var nob: Array = _st_row(stats.tables[Stats.MODE_NOBLE])
 	var events: int = _st_won.size() + _st_fin.size()
 	check(_st_won.size() >= 1, tag + ": the variant game ended " + str(_st_won.size())
 		+ " round(s) after the resume, so the counters are measurable (" + str(_st_fin.size())
 		+ " `round_finished` emissions)")
 	check(int(stats.mode) == Stats.MODE_CLASSIC, tag + ": the page was STILL showing CLASSIC at the"
 		+ " round end - nothing re-pinned the mode between the flip and the write")
-	check(csum == events, tag + ": MEASURED, " + str(csum) + " counters landed in the table the PAGE"
-		+ " was showing (classic) for " + str(_st_won.size()) + " `round_won` + " + str(_st_fin.size())
-		+ " `round_finished` emissions: the alias `_totals_and_wins` IS `tables[mode]`, the mode the"
-		+ " page chose, and `_on_round_won` / `_on_round_finished` name no mode")
-	check(nsum == 0, tag + ": and the NOBLE table - the table the RUNNING variant game belongs to -"
-		+ " took NOTHING. THIS IS THE CHECK THAT FLIPS WHEN STEP 28 LANDS: index the two write paths"
-		+ " by the running game's mode and this sum must be " + str(events) + " while the classic sum"
-		+ " above must be 0. Until step 28 lands, the mitigation O5 pins is that every page open"
-		+ " re-pins the mode, so only a flip-and-resume (no page reopen) can misfile a counter")
-	check(_st_zero(_st_row(stats.tables[Stats.MODE_NOBLE])) and csum > 0, tag + ": the shape of the"
-		+ " hazard in one line - a player who browsed the classic table mid-variant-game ends the round"
-		+ " with classic counters + " + str(events) + " and a variant history of zeros (" + str(csum)
-		+ " / " + str(nsum) + ")")
+	check(int(main.noble_family_index()) == Stats.MODE_NOBLE, tag + ": the RUNNING game names its own"
+		+ " table (`noble_family_index()` == " + str(main.noble_family_index()) + " == MODE_NOBLE) - the"
+		+ " write path asks the game, and the game's mode was fixed at PLAY")
+	check(csum == 0, tag + ": MEASURED, the CLASSIC table - the one the PAGE was showing at the round"
+		+ " end - took NOTHING (" + str(cls) + ") for " + str(_st_won.size()) + " `round_won` + "
+		+ str(_st_fin.size()) + " `round_finished` emissions. THIS IS STEP 27'S O6 CHECK, FLIPPED: the"
+		+ " alias is now `tables[_main.noble_family_index()]`, so a browse cannot move a counter")
+	check(nsum == events, tag + ": and the NOBLE table - the table the RUNNING variant game belongs to"
+		+ " - took ALL of it: " + str(nsum) + " counters == " + str(events) + " emissions (" + str(nob)
+		+ "), which is " + "the step 26 requirement in plain words: a variant game's counters are the"
+		+ " variant history, whatever page the player was looking at")
+	check(_st_zero(cls) and nsum > 0, tag + ": the same situation as step 27's one-line hazard, now the"
+		+ " other way round - a player who browsed the classic table mid-variant-game ends the round with"
+		+ " classic " + str(csum) + " and variant " + str(nsum) + ": browsing moves a VIEW, not a number")
 	main.round_won.disconnect(_st_note_won)
 	main.round_finished.disconnect(_st_note_finished)
 	await _free_menu_app(app)
+# =======================================================================================
+# TEST P (todo step 28): the two tables SAVE and LOAD, and a round's counters are FILED BY MODE
+# ---------------------------------------------------------------------------------------
+# Step 27 left two loose ends, and both are named in the checks they came from: O6 measured a write
+# target that is the stats page's VIEW (`_totals_and_wins` is `tables[mode]`, and since step 27
+# `mode` is a button the player can press), and N6 measured a save that is the pre-variant SINGLE
+# array under `Gameplay/totals_and_wins`. Step 28 closes both:
+#   * `Main.noble_family_index()` names the table a RUNNING game belongs to. The mode is picked at
+#     PLAY and cannot change during a game, so it is a fact about the game, and the page's view is
+#     not - the counters follow the game;
+#   * the save is TWO keys - `Stats/classic` and `Stats/noble_family` - and BOTH are written on
+#     every save, so a game of one mode can never overwrite the other mode's history;
+#   * an old save (`Gameplay/totals_and_wins`) is the player's CLASSIC history and migrates to the
+#     classic table; the new keys win when they exist; a table whose saved length is not
+#     `2 * AI_Level.size()` is dropped ON ITS OWN and the other table survives;
+#   * the counters are COUNTED ON SIGNALS, per mode, and compared with the two tables.
+#
+# Harness rules the fixtures obey (all of them were paid for in steps 11-27):
+#   - `Animator._speed = 0` for the whole suite, and a deal is settled by the PILES + HANDS +
+#     FAMILY SIZES, never by "the animation finished";
+#   - a mode is known to the harness by THE ROW IT TAPPED. Reading `main.noble_family` back would
+#     measure the write path with the write path's own input, so `_st_pw_mode` is the harness's
+#     own record of its tap - the same who-knows-what split as `mode_at_start` in the counting app;
+#   - the player's save is BACKED UP at the fixture's start and WRITTEN BACK at its end: this
+#     suite is also embedded in `smoke_games.tscn`, and deleting `user://options.cfg` is not a gift.
+const STATS_SECTION: String = "Stats"
+const STATS_KEY_CLASSIC: String = "classic"
+const STATS_KEY_NOBLE: String = "noble_family"
+const STATS_LEGACY_SECTION: String = "Gameplay"
+const STATS_KEY_LEGACY: String = "totals_and_wins"
+const STATS_LEGACY_LEN: int = 12  # the pre-variant table: 6 label rows x (totals, wins)
+
+var _st_pw_won: Array = [[], []]  # per mode, one entry per `round_won` emission: the level it carried
+var _st_pw_fin: Array = [[], []]  # per mode, one entry per `round_finished` emission
+var _st_pw_mode: int = 0          # the mode of the game the harness tapped into existence
+
+
+# ---- reading and writing the save file ------------------------------------------------------
+func _st_cfg():
+	var c := ConfigFile.new()
+	if c.load(STATS_OPTIONS) != OK:
+		return null
+	return c
+
+
+# The ONE place the suite reads the file. A `ConfigFile` stores an array as a CSV string, and a
+# ONE-element array comes back as a plain String (the quirk `_st_saved()` notes for the legacy key),
+# so the normalization lives here and every check below compares plain arrays of ints.
+# MEASURED API (Godot 4.7.2, `ConfigFile.get_method_list()`): the presence test is
+# `has_section_key(section, key)` - there is NO `has_value` and NO `is_section_key_present` on this
+# class, and both names look obvious enough that a suite writes them first; a nonexistent-method call
+# on a Variant-typed variable is a RUNTIME error (the analyzer cannot see it), which is why the
+# helper is one function and the name is pinned here.
+func _st_cfg_vals(section: String, key: String) -> Array:
+	var c = _st_cfg()
+	if c == null or not c.has_section_key(section, key):
+		return []
+	var v = c.get_value(section, key, [])
+	var out: Array = []
+	if v is Array:
+		for x in v:
+			out.append(int(x))
+	elif v is String:
+		if v.strip_edges() == "":
+			return []
+		for x: String in v.split(","):
+			out.append(int(x.strip_edges()))
+	else:
+		out.append(int(v))
+	return out
+
+
+func _st_cfg_has(section: String, key: String) -> bool:
+	var c = _st_cfg()
+	return c != null and c.has_section_key(section, key)
+
+
+func _st_cfg_write(sections: Dictionary, tag: String) -> void:
+	var c := ConfigFile.new()
+	for s: String in sections:
+		var keys: Dictionary = sections[s]
+		for k: String in keys:
+			c.set_value(s, k, keys[k])
+	check(c.save(STATS_OPTIONS) == OK, tag + ": the fixture wrote its SAVE FILE (`save()` == OK)")
+	await await_frames(2)
+
+
+func _st_cfg_delete(tag: String) -> void:
+	var d := DirAccess.open("user://")
+	var err := OK
+	if d.file_exists("options.cfg"):
+		err = d.remove("options.cfg")
+	check(err == OK and not d.file_exists("options.cfg"), tag + ": the fixture removed the SAVE FILE,"
+		+ " so `load_config()` starts at zeros - " + str(err) + ", no file is a state the game knows")
+
+
+func _st_cfg_backup() -> Dictionary:
+	var c = _st_cfg()
+	var out: Dictionary = {}
+	if c == null:
+		return out
+	for s: String in c.get_sections():
+		var keys: Dictionary = {}
+		for k: String in c.get_section_keys(s):
+			keys[k] = c.get_value(s, k)
+		out[s] = keys
+	return out
+
+
+func _st_cfg_restore(backup: Dictionary, tag: String) -> void:
+	if backup.is_empty():
+		await _st_cfg_delete(tag + " (restoring a player's file that did not exist)")
+		return
+	await _st_cfg_write(backup, tag + " (the player's file is written back: the suite does not keep"
+		+ " it)")
+
+
+# The suite's OWN copy of step 28's load rules, written from todo step 28 + `application.gd`'s
+# comments; N6 and P1..P3 compare the LIVE tables against it. Spelling the rules out here is what
+# makes a change on either side show up as a failing equality instead of a green suite.
+func _st_expected_saved() -> Array:
+	var has_cls: bool = _st_cfg_has(STATS_SECTION, STATS_KEY_CLASSIC)
+	var has_nob: bool = _st_cfg_has(STATS_SECTION, STATS_KEY_NOBLE)
+	var out: Array = []
+	for mode in Stats.MODE_COUNT:
+		var key: String = STATS_KEY_CLASSIC if mode == Stats.MODE_CLASSIC else STATS_KEY_NOBLE
+		var vals: Array = []
+		if _st_cfg_has(STATS_SECTION, key):
+			vals = _st_cfg_vals(STATS_SECTION, key)  # the new keys win, whatever the legacy key holds
+		elif mode == Stats.MODE_CLASSIC and not has_cls and not has_nob \
+				and _st_cfg_has(STATS_LEGACY_SECTION, STATS_KEY_LEGACY):
+			vals = _st_cfg_vals(STATS_LEGACY_SECTION, STATS_KEY_LEGACY)
+			if vals.size() == STATS_LEGACY_LEN:
+				vals.append(0)  # the 2 AI slots a 12-counter save never had
+				vals.append(0)
+		if vals.size() != STATS_COUNT:
+			vals = _st_zeros(STATS_COUNT)  # the stale-size drop, PER TABLE
+		out.append(vals)
+	return out
+
+
+# A round end SAVES; the file matches the tables some frames later. A deferred write is polled on
+# its measured end condition (the file equals the tables), never on `await_frames(k)`. The timeout is
+# deliberately SHORT (600 frames): a game plays a round in a few dozen frames at `_speed = 0`, so a
+# long poll burns real game time and inflates every counter the fixture is trying to measure.
+func _st_pw_saved(app, tag: String) -> void:
+	for _f in 600:
+		var cls: Array = _st_cfg_vals(STATS_SECTION, STATS_KEY_CLASSIC)
+		var nob: Array = _st_cfg_vals(STATS_SECTION, STATS_KEY_NOBLE)
+		if cls == _st_row(app._stats.tables[Stats.MODE_CLASSIC]) \
+				and nob == _st_row(app._stats.tables[Stats.MODE_NOBLE]):
+			return
+		await get_tree().process_frame
+	check(false, tag + ": the save file NEVER caught up with the live tables (600 frames) - a round"
+		+ " end calls `save_config()`, so the file has to reach the numbers the tables hold")
+
+
+# ---- the fixture's own event counters, filed per mode ---------------------------------------
+func _st_pw_note_won(level) -> void:
+	_st_pw_won[_st_pw_mode].append(int(level))
+
+
+func _st_pw_note_fin(level) -> void:
+	_st_pw_fin[_st_pw_mode].append(int(level))
+
+
+func _st_pw_reset() -> void:
+	_st_pw_won = [[], []]
+	_st_pw_fin = [[], []]
+	_st_pw_mode = Stats.MODE_CLASSIC
+
+
+func _st_pw_events(mode: int) -> int:
+	return _st_pw_won[mode].size() + _st_pw_fin[mode].size()
+
+
+# One game, played to `rounds` round ends, in the mode the harness tapped. THE TAP IS THE MODE:
+# `_st_pw_mode` is set here, from the row name, and never read back off the game.
+func _st_pw_game(app, row: String, mode: int, rounds: int) -> void:
+	await _tap_start_play(app)
+	await _tap_row(app, row)
+	_st_pw_mode = mode
+	await _settle_menu_deal(app, NOBLE_FAMILY_4P if mode == Stats.MODE_NOBLE else 0,
+		0 if mode == Stats.MODE_NOBLE else CLASSIC_4P_MAIN)
+	var want: int = _st_pw_won[mode].size() + rounds
+	# Poll the harness's OWN per-mode signal count (the harness rule: count events on signals, never
+	# "the animation finished"). The budget is 4000 frames ~ 60 rounds of headroom at `_speed = 0`: a
+	# longer one only burns real game time and inflates the counters a fixture is measuring. A stall
+	# prints the APP STATE, because every stall this suite has hit was a state the fixture had not
+	# measured (a paused tree, a `Disabled` speed, a page covering the game) and a counter list alone
+	# cannot tell those apart.
+	for _f in 4000:
+		if _st_pw_won[mode].size() >= want:
+			return
+		await get_tree().process_frame
+	check(false, "P game " + row + ": the round ends did not arrive (4000 frames, "
+		+ str(_st_pw_won[mode].size()) + " of " + str(want) + ") - app state at the stall: "
+		+ _st_pw_state(app))
+
+# ---- P1: 2 save keys, 2 games, 1 restart ----------------------------------------------------
+# THE GATE (todo step 28): "play 2 rounds in each mode, restart the app - the 2 tables stay
+# separate; a fresh save shows zeros". The counters are checked against the harness's own event
+# counts per mode, and the file is checked against the tables.
+func _test_sp_two_keys() -> void:
+	var tag := "P1 the two save keys"
+	var backup := _st_cfg_backup()
+	await _st_cfg_delete(tag)
+	_st_pw_reset()
+	_menu_levels = [Player.AI_Level.Level_4, Player.AI_Level.Level_4,
+		Player.AI_Level.Level_3, Player.AI_Level.Level_2]
+	var app = _make_menu_app()
+	await _menu_ready(app)
+	var stats = app._stats
+	var main: Node = app._main
+	# A fresh save: no file, so no history at all - the page opens showing zeros and so do the tables.
+	check(_st_zero(stats.tables[Stats.MODE_CLASSIC]) and _st_zero(stats.tables[Stats.MODE_NOBLE]),
+		tag + ": with NO save file BOTH tables open at zeros - " + str(_st_row(stats.tables[0]))
+		+ " / " + str(_st_row(stats.tables[1])))
+	app._on_pause_stats_pressed()
+	_st_press_now(stats, "BackButton")
+	await await_frames(1)
+	check(_st_labels(stats) == _st_expect(_st_zeros(STATS_COUNT)), tag + ": and the page SHOWS those"
+		+ " zeros (" + str(_st_labels(stats)[0]) + ") - a fresh save is a visible state, not a mystery")
+	_st_press_now(stats, "BackButton")
+	await await_frames(1)
+	main.round_won.connect(_st_pw_note_won)  # THE COUNTERS ARE COUNTED ON SIGNALS
+	main.round_finished.connect(_st_pw_note_fin)
+	await _st_pw_game(app, "NOBLE", Stats.MODE_NOBLE, 2)
+	await _st_pw_saved(app, tag)
+	var ne: int = _st_pw_events(Stats.MODE_NOBLE)
+	var cls_vals: Array = _st_cfg_vals(STATS_SECTION, STATS_KEY_CLASSIC)
+	var nob_vals: Array = _st_cfg_vals(STATS_SECTION, STATS_KEY_NOBLE)
+	var cls_tbl: Array = _st_row(stats.tables[Stats.MODE_CLASSIC])
+	var nob_tbl: Array = _st_row(stats.tables[Stats.MODE_NOBLE])
+	check(_st_cfg_has(STATS_SECTION, STATS_KEY_NOBLE) and _st_cfg_has(STATS_SECTION, STATS_KEY_CLASSIC),
+		tag + ": after a VARIANT round end the file has BOTH new keys - every save writes both tables,"
+		+ " so a variant game can never overwrite the classic history and vice versa")
+	check(nob_vals == nob_tbl, tag + ": `Stats/" + STATS_KEY_NOBLE + "` equals the live noble table ("
+		+ str(nob_vals) + ")")
+	check(cls_vals == cls_tbl and _st_zero(cls_tbl), tag + ": `Stats/" + STATS_KEY_CLASSIC + "` equals"
+		+ " the live classic table, and that table is STILL ZEROS (" + str(cls_vals) + ") - a variant"
+		+ " game filed NOTHING in classic")
+	check(_sum_ints(nob_tbl) == ne, tag + ": MEASURED, the noble table sums to " + str(_sum_ints(nob_tbl))
+		+ " for " + str(_st_pw_won[Stats.MODE_NOBLE].size()) + " `round_won` + "
+		+ str(_st_pw_fin[Stats.MODE_NOBLE].size()) + " `round_finished` emissions = " + str(ne)
+		+ " - 1 counter per emission, no double write, no lost write")
+	check(not _st_cfg_has(STATS_LEGACY_SECTION, STATS_KEY_LEGACY), tag + ": the save writes NO legacy"
+		+ " key - `Gameplay/" + STATS_KEY_LEGACY + "` is read, never written (an old-format file"
+		+ " migrates, a new-format file never grows one)")
+	check(int(main.noble_family_index()) == Stats.MODE_NOBLE, tag + ": the running variant game's own"
+		+ " index names the NOBLE table (`noble_family_index()` == " + str(main.noble_family_index())
+		+ "), and the counters landed there - the write path asks the GAME, not the page")
+	# The page is a VIEW: flipping it here must not move the next round's target.
+	app._on_pause_stats_pressed()
+	await _st_press(stats, "LeftButton")
+	check(int(stats.mode) == Stats.MODE_CLASSIC, tag + ": the player peeks at the CLASSIC table during"
+		+ " the variant game (the page's view flipped)")
+	check(int(main.noble_family_index()) == Stats.MODE_NOBLE, tag + ": and the flip moved NOTHING - the"
+		+ " running game's index is still " + str(main.noble_family_index()) + " (NOBLE)")
+	check(_st_row(stats.tables[Stats.MODE_CLASSIC]) == _st_zeros(STATS_COUNT), tag
+		+ ": the table the player was LOOKING at is the classic one and it is still ZEROS - the page is"
+		+ " a window on a table, browsing it writes nothing")
+	_st_press_now(stats, "BackButton")
+	await await_frames(1)
+	app._on_pause_resume_pressed()
+	await _free_menu_app(app)
+	# THE RESTART (part 1): a brand new app reads the file the variant game wrote.
+	var app2 = _make_menu_app()
+	await _menu_ready(app2)
+	check(_st_row(app2._stats.tables[Stats.MODE_CLASSIC]) == cls_tbl, tag + ": after a RESTART the"
+		+ " classic table is the saved classic history (" + str(_st_row(app2._stats.tables[0])) + ")")
+	check(_st_row(app2._stats.tables[Stats.MODE_NOBLE]) == nob_tbl, tag + ": and the noble table is the"
+		+ " saved variant history (" + str(_st_row(app2._stats.tables[1])) + ") - 2 tables, 1 game, 1"
+		+ " restart, NOTHING MIXED (classic " + str(_sum_ints(cls_tbl)) + " counters, noble "
+		+ str(_sum_ints(nob_tbl)) + " = " + str(ne) + " events)")
+	check(int(app2._stats.mode) == Stats.MODE_CLASSIC, tag + ": a page with no game running opens on the"
+		+ " CLASSIC table - the mode is picked per game and never persisted, so the view may not be"
+		+ " remembered as a fact about the game")
+	# THE SECOND GAME plays in a FRESH app, and that is a MEASURED harness fact, not a style choice:
+	# a SECOND game in the SAME app dies on `Main.resolve_effect`'s "Player N has 1 card" assertion the
+	# first time the classic target modal resolves with `type Unknown` (measured in the log:
+	# `resolve_effect for Guard, player 2, type Unknown` -> assertion -> the game's coroutine is dead,
+	# 0 round ends in 4000 frames). The assertion reproduces with step 28's changes REVERTED, so it is
+	# a pre-existing landmine of the raw-app harness, not a step-28 finding; TEST M's post-exit classic
+	# game never walks into it because it counts PLAYS and never waits for a round end.
+	var main2: Node = app2._main
+	main2.round_won.connect(_st_pw_note_won)  # THE COUNTERS ARE COUNTED ON SIGNALS
+	main2.round_finished.connect(_st_pw_note_fin)
+	await _st_pw_game(app2, "CLASSIC", Stats.MODE_CLASSIC, 2)
+	await _st_pw_saved(app2, tag)
+	cls_vals = _st_cfg_vals(STATS_SECTION, STATS_KEY_CLASSIC)
+	nob_vals = _st_cfg_vals(STATS_SECTION, STATS_KEY_NOBLE)
+	cls_tbl = _st_row(app2._stats.tables[Stats.MODE_CLASSIC])
+	nob_tbl = _st_row(app2._stats.tables[Stats.MODE_NOBLE])
+	var ce: int = _st_pw_events(Stats.MODE_CLASSIC)
+	check(cls_vals == cls_tbl, tag + ": after a CLASSIC round end the file's classic key equals the live"
+		+ " classic table (" + str(cls_vals) + ")")
+	check(nob_vals == nob_tbl and _sum_ints(nob_tbl) == ne, tag + ": and the NOBLE table + key are"
+		+ " EXACTLY what the variant game left them at (sum " + str(_sum_ints(nob_tbl)) + " == " + str(ne)
+		+ ") - the classic game wrote the classic key and did not touch the noble one")
+	check(_sum_ints(cls_tbl) == ce, tag + ": MEASURED, the classic table sums to " + str(_sum_ints(cls_tbl))
+		+ " for " + str(_st_pw_won[Stats.MODE_CLASSIC].size()) + " `round_won` + "
+		+ str(_st_pw_fin[Stats.MODE_CLASSIC].size()) + " `round_finished` emissions = " + str(ce)
+		+ " - the counters of the classic game, in the classic table")
+	check(_st_cfg_vals(STATS_SECTION, STATS_KEY_CLASSIC) == _st_expected_saved()[Stats.MODE_CLASSIC]
+			and _st_cfg_vals(STATS_SECTION, STATS_KEY_NOBLE) == _st_expected_saved()[Stats.MODE_NOBLE],
+		tag + ": the file the game wrote is a file the suite's OWN copy of the load rules reads back as"
+		+ " the two tables - the write and the read agree on the format")
+	var written = _st_cfg()
+	var skeys: Array = Array(written.get_section_keys(STATS_SECTION))
+	skeys.sort()
+	check(skeys == [STATS_KEY_CLASSIC, STATS_KEY_NOBLE], tag + ": the `Stats` section holds EXACTLY the 2"
+		+ " keys the format names (" + str(skeys) + ") - no third table, no legacy twin of a table")
+	check(not Array(written.get_section_keys(STATS_LEGACY_SECTION)).has(STATS_KEY_LEGACY),
+		tag + ": and the `Gameplay` section keeps its speed key with NO stats key beside it - the old"
+		+ " key is not written, so an upgraded file cannot be read as two histories at once")
+	await _free_menu_app(app2)
+	# THE RESTART (part 2): the file the CLASSIC game wrote is read back by a THIRD app, so the two
+	# games and the two tables are checked across a boot, not inside one process.
+	var app3 = _make_menu_app()
+	await _menu_ready(app3)
+	check(_st_row(app3._stats.tables[Stats.MODE_CLASSIC]) == cls_tbl, tag + ": after the SECOND RESTART"
+		+ " the classic table is the classic game's history (" + str(_st_row(app3._stats.tables[0]))
+		+ ") - " + str(ce) + " counters for " + str(ce) + " classic events")
+	check(_st_row(app3._stats.tables[Stats.MODE_NOBLE]) == nob_tbl, tag + ": and the noble table is"
+		+ " STILL the variant game's history (" + str(_st_row(app3._stats.tables[1])) + ") - a classic"
+		+ " game survived a boot without touching the variant history, which is the todo's step-28 gate"
+		+ " in one line: 2 rounds in each mode, restart, the 2 tables stay separate")
+	await _free_menu_app(app3)
+	await _st_cfg_restore(backup, tag)
+
+
+# Poll the harness's own round count for a mode: a fixture that wants "one more round in the SAME
+# game" cannot call `_st_pw_game` again (that would tap PLAY and start a NEW game).
+# Poll the harness's own round count for a mode. `want` is a CUMULATIVE count of the mode's
+# `round_won` emissions, which is what a fixture that already measured 1 round end needs in order to
+# say "play on to 2" in the SAME game (calling `_st_pw_game` again would tap PLAY and start a NEW game).
+# NOT `_run_menu_rounds`, and that is a measured trap: that helper polls the suite's `_st_won` array,
+# which a P fixture does not fill (P counts per MODE in `_st_pw_won`), so every call returned at once on
+# the PREVIOUS fixture's leftover count - the run printed "0 of 2 round ends after 5 driven round(s)".
+func _st_pw_rounds(app, mode: int, want: int) -> void:
+	for _f in 4000:
+		if _st_pw_won[mode].size() >= want:
+			return
+		await get_tree().process_frame
+	check(false, "P rounds: " + str(_st_pw_won[mode].size()) + " round(s) of " + str(want)
+		+ " arrived in 4000 frames - app state at the stall: " + _st_pw_state(app))
+
+
+# The app-state line a stall prints: the state a fixture must not assume. A tree left PAUSED advances
+# `process_frame` (so a poll loop spins) while the game's `_process` never runs (so no play happens),
+# which is exactly the shape of "4000 frames, 0 round ends".
+func _st_pw_state(app) -> String:
+	var main: Node = app._main
+	var parts: Array = [
+		"tree.paused=" + str(app.get_tree().paused),
+		"_playing=" + str(bool(main._playing)),
+		"interrupted=" + str(bool(main.interrupted)),
+		"speed=" + str(int(app._level_selector._speed_level.level)),
+		"levels=" + str(_st_pw_levels(main)),
+		"hands=" + str(_hand_sizes(main)),
+		"start=" + str(app._start.visible),
+		"picker=" + str(app._game_mode.visible),
+		"game=" + str(main.visible),
+		"pause=" + str(app._pause.visible),
+		"stats=" + str(app._stats.visible),
+	]
+	return " ".join(parts)
+
+
+func _st_pw_levels(main: Node) -> Array:
+	var out: Array = []
+	for p in main._players:
+		out.append(int(p.ai_level))
+	return out
+
+
+# ---- P2: an old-format save is the player's CLASSIC history ---------------------------------
+# No game is needed: the migration is a load-time rule, so each case is "write this file, boot an
+# app, read the two tables". Every case also compares with `_st_expected_saved()`, the suite's own
+# copy of the rules, so an implementation change cannot be silently re-defined as "correct".
+func _test_sp_migration() -> void:
+	var tag := "P2 the old save migrates"
+	var backup := _st_cfg_backup()
+	var ai: Dictionary = {"P0": 4, "P1": 4, "P2": 3, "P3": 2}
+	# (a) + (b) the pre-variant 12-counter file: 6 label rows x (totals, wins)
+	var l12: Array = []
+	for i in STATS_LEGACY_LEN:
+		l12.append(100 + i)
+	await _st_cfg_write({STATS_LEGACY_SECTION: {"speed": 1, STATS_KEY_LEGACY: l12},
+		"AI_Level": ai}, tag)
+	var app = _make_menu_app()
+	await _menu_ready(app)
+	var want12: Array = []
+	for i in STATS_LEGACY_LEN:
+		want12.append(100 + i)
+	want12.append(0)  # the Level_5 win slot the old format had no room for
+	want12.append(0)  # the Disabled pair
+	var cls: Array = _st_row(app._stats.tables[Stats.MODE_CLASSIC])
+	var nob: Array = _st_row(app._stats.tables[Stats.MODE_NOBLE])
+	check(cls == want12, tag + ": a 12-counter `Gameplay/" + STATS_KEY_LEGACY + "` save lands in the"
+		+ " CLASSIC table at the SAME indices, padded with the slots it never had (" + str(cls) + ")")
+	check(_st_zero(nob), tag + ": and the NOBLE table opens at ZEROS - an old-format save is a classic"
+		+ " history; writing it into both tables would invent " + str(_sum_ints(l12))
+		+ " variant counters out of a file that never mentions a mode")
+	var expected: Array = _st_expected_saved()
+	check(cls == expected[Stats.MODE_CLASSIC] and nob == expected[Stats.MODE_NOBLE],
+		tag + ": the live tables equal the suite's OWN copy of the load rules for this file")
+	app._on_pause_stats_pressed()
+	_st_press_now(app._stats, "BackButton")
+	await await_frames(1)
+	check(_st_labels(app._stats) == _st_expect(want12), tag + ": the page SHOWS the migrated numbers in"
+		+ " the pre-variant pair format (" + str(_st_labels(app._stats)[0]) + ") - a migration the"
+		+ " player cannot read on the page is a migration that did not happen")
+	check(cls[0] == 100 and cls[1] == 101, tag + ": Human's (totals, wins) pair stays on slots 0/1 ("
+		+ str([cls[0], cls[1]]) + ") - padding appends, it does not re-index")
+	check(cls[10] == 110 and cls[11] == 111, tag + ": Level_5's pair is slots 10/11 as the old format"
+		+ " wrote them (" + str([cls[10], cls[11]]) + ")")
+	check(cls[12] == 0 and cls[13] == 0, tag + ": the padded slots are the Disabled pair (0/0), which a"
+		+ " 12-counter file never had a place for")
+	await _free_menu_app(app)
+
+	# (c) a 14-counter legacy file (the format the pre-step-28 build wrote) migrates unchanged
+	var l14: Array = []
+	for i in STATS_COUNT:
+		l14.append(200 + i)
+	await _st_cfg_write({STATS_LEGACY_SECTION: {"speed": 1, STATS_KEY_LEGACY: l14},
+		"AI_Level": ai}, tag)
+	var app2 = _make_menu_app()
+	await _menu_ready(app2)
+	check(_st_row(app2._stats.tables[Stats.MODE_CLASSIC]) == l14, tag + ": a 14-counter legacy save is"
+		+ " the classic table UNCHANGED (" + str(_st_row(app2._stats.tables[0]))
+		+ ") - the right length already, so the padding rule does not fire twice")
+	check(_st_zero(app2._stats.tables[Stats.MODE_NOBLE]), tag + ": and the noble history stays empty ("
+		+ str(_st_row(app2._stats.tables[1])) + ")")
+	await _free_menu_app(app2)
+
+	# (d) the new keys WIN over the legacy key
+	var newcls: Array = []
+	var newnob: Array = []
+	for i in STATS_COUNT:
+		newcls.append(7)
+		newnob.append(9)
+	await _st_cfg_write({STATS_LEGACY_SECTION: {"speed": 1, STATS_KEY_LEGACY: l12},
+		"AI_Level": ai,
+		STATS_SECTION: {STATS_KEY_CLASSIC: newcls, STATS_KEY_NOBLE: newnob}}, tag)
+	var app3 = _make_menu_app()
+	await _menu_ready(app3)
+	check(_st_row(app3._stats.tables[Stats.MODE_CLASSIC]) == newcls, tag + ": with BOTH new keys present"
+		+ " the legacy key is IGNORED (classic = all 7s, " + str(_st_row(app3._stats.tables[0]))
+		+ ") - migrating on every boot would double-count a history the file already has")
+	check(_st_row(app3._stats.tables[Stats.MODE_NOBLE]) == newnob, tag + ": and the noble key is read as"
+		+ " itself (all 9s, " + str(_st_row(app3._stats.tables[1])) + ")")
+	await _free_menu_app(app3)
+
+	# (e) a corrupt legacy length is NOT padded: 5 counters cannot become a 14-counter table
+	await _st_cfg_write({STATS_LEGACY_SECTION: {"speed": 1, STATS_KEY_LEGACY: [1, 2, 3, 4, 5]},
+		"AI_Level": ai}, tag)
+	var app4 = _make_menu_app()
+	await _menu_ready(app4)
+	check(_st_zero(app4._stats.tables[Stats.MODE_CLASSIC])
+			and _st_zero(app4._stats.tables[Stats.MODE_NOBLE]), tag + ": a 5-counter legacy save is"
+		+ " DROPPED to zeros (" + str(_st_row(app4._stats.tables[0])) + ") - padding is defined for the"
+		+ " ONE length the old format had (12), not for any length: padding a 5 would fill slots whose"
+		+ " labels promise numbers the file never held")
+	await _free_menu_app(app4)
+	await _st_cfg_restore(backup, tag)
+
+
+# ---- P3: the stale-size drop is PER TABLE ---------------------------------------------------
+# The rule a single-table loader cannot have: a file with a broken CLASSIC table must not take the
+# healthy NOBLE table down with it - and the mirror.
+func _test_sp_per_table_drop() -> void:
+	var tag := "P3 the size drop is per table"
+	var backup := _st_cfg_backup()
+	var ai: Dictionary = {"P0": 4, "P1": 4, "P2": 3, "P3": 2}
+	var good: Array = []
+	for i in STATS_COUNT:
+		good.append(50 + i)
+	var stale: Array = [1, 2, 3]  # a length that is neither 12 (the old format) nor 14 (the rule)
+	await _st_cfg_write({"AI_Level": ai, STATS_LEGACY_SECTION: {"speed": 1},
+		STATS_SECTION: {STATS_KEY_CLASSIC: stale, STATS_KEY_NOBLE: good}}, tag)
+	var app = _make_menu_app()
+	await _menu_ready(app)
+	check(_st_zero(app._stats.tables[Stats.MODE_CLASSIC]), tag + ": a 3-counter `Stats/"
+		+ STATS_KEY_CLASSIC + "` is dropped to zeros (" + str(_st_row(app._stats.tables[0]))
+		+ ") - the size rule is `2 * AI_Level.size()` == " + str(STATS_COUNT)
+		+ ", the same formula the pre-variant loader used")
+	check(_st_row(app._stats.tables[Stats.MODE_NOBLE]) == good, tag + ": and the NOBLE table of the SAME"
+		+ " file SURVIVES (" + str(_st_row(app._stats.tables[1])) + ") - a one-table loader drops both,"
+		+ " which deletes a healthy variant history because the classic one was mangled")
+	app._on_pause_stats_pressed()
+	_st_press_now(app._stats, "BackButton")
+	await await_frames(1)
+	check(_st_labels(app._stats) == _st_expect(_st_zeros(STATS_COUNT)), tag + ": the page opens on the"
+		+ " dropped classic table and SHOWS zeros (" + str(_st_labels(app._stats)[0])
+		+ ") - a drop the player can read is a drop, not a silent reset")
+	await _st_press(app._stats, "RightButton")
+	check(_st_labels(app._stats) == _st_expect(good), tag + ": one flip and the surviving table is on"
+		+ " screen (" + str(_st_labels(app._stats)[0]) + ") - the healthy history sits right next to the"
+		+ " dropped one, reachable and intact")
+	await _free_menu_app(app)
+
+	await _st_cfg_write({"AI_Level": ai, STATS_LEGACY_SECTION: {"speed": 1},
+		STATS_SECTION: {STATS_KEY_CLASSIC: good, STATS_KEY_NOBLE: stale}}, tag)
+	var app2 = _make_menu_app()
+	await _menu_ready(app2)
+	check(_st_row(app2._stats.tables[Stats.MODE_CLASSIC]) == good, tag + ": the mirror case keeps the"
+		+ " classic history (" + str(_st_row(app2._stats.tables[0])) + ")")
+	check(_st_zero(app2._stats.tables[Stats.MODE_NOBLE]), tag + ": and drops only the noble table - the"
+		+ " drop is a per-table rule in both directions, so no table's fate depends on the other's")
+	await _free_menu_app(app2)
+	await _st_cfg_restore(backup, tag)
+
+
+# ---- P4: the write target is the GAME, measured on a classic game --------------------------
+# O6 measures the hazard on a variant game; the hazard has a classic half, and step 28's rule is
+# symmetric. ONE game, ONE round, a browse in between - the counters of the same game, split.
+func _test_sp_classic_write_target() -> void:
+	var tag := "P4 a classic game files classic"
+	var backup := _st_cfg_backup()
+	await _st_cfg_delete(tag)
+	_st_pw_reset()
+	_menu_levels = [Player.AI_Level.Level_4, Player.AI_Level.Level_4,
+		Player.AI_Level.Level_3, Player.AI_Level.Level_2]
+	var app = _make_menu_app()
+	await _menu_ready(app)
+	var stats = app._stats
+	var main: Node = app._main
+	main.round_won.connect(_st_pw_note_won)
+	main.round_finished.connect(_st_pw_note_fin)
+	await _st_pw_game(app, "CLASSIC", Stats.MODE_CLASSIC, 1)
+	check(int(main.noble_family_index()) == Stats.MODE_CLASSIC, tag + ": the running classic game's own"
+		+ " index is the CLASSIC table (`noble_family_index()` == " + str(main.noble_family_index()) + ")")
+	app._on_pause_stats_pressed()
+	check(int(stats.mode) == Stats.MODE_CLASSIC, tag + ": opening the page during a classic game shows"
+		+ " the classic table - a page open pins the view to the running game")
+	await _st_press(stats, "RightButton")  # the player browses the NOBLE table mid-classic-game
+	check(int(stats.mode) == Stats.MODE_NOBLE, tag + ": the page shows NOBLE while a classic game runs")
+	check(int(main.noble_family_index()) == Stats.MODE_CLASSIC, tag + ": and the game's index did NOT"
+		+ " follow the page - the view is a view, and the counters do not live in it")
+	_st_press_now(stats, "BackButton")
+	await await_frames(1)
+	app._on_pause_resume_pressed()
+	await _st_pw_rounds(app, Stats.MODE_CLASSIC, 2)  # the SAME game plays on to its 2nd round end
+	await _st_pw_saved(app, tag)
+	var ce: int = _st_pw_events(Stats.MODE_CLASSIC)
+	var cls: Array = _st_row(stats.tables[Stats.MODE_CLASSIC])
+	var nob: Array = _st_row(stats.tables[Stats.MODE_NOBLE])
+	check(_sum_ints(cls) == ce, tag + ": MEASURED, " + str(_sum_ints(cls)) + " counters in the CLASSIC"
+		+ " table for " + str(_st_pw_won[Stats.MODE_CLASSIC].size()) + " `round_won` + "
+		+ str(_st_pw_fin[Stats.MODE_CLASSIC].size()) + " `round_finished` emissions = " + str(ce)
+		+ " - a classic game's counters land in the classic table")
+	check(_st_zero(nob), tag + ": and the NOBLE table - the table the player was LOOKING at when that"
+		+ " round ended - took NOTHING (" + str(nob) + "). THIS IS O6'S MIRROR: both sides file by the"
+		+ " game, so browsing cannot move a counter in either direction")
+	check(_st_cfg_vals(STATS_SECTION, STATS_KEY_CLASSIC) == cls, tag + ": and the file agrees with the"
+		+ " table it is saved from (" + str(_st_cfg_vals(STATS_SECTION, STATS_KEY_CLASSIC)) + ")")
+	main.round_won.disconnect(_st_pw_note_won)
+	main.round_finished.disconnect(_st_pw_note_fin)
+	await _free_menu_app(app)
+	await _st_cfg_restore(backup, tag)
+
+
+# ---- P5: the names, pinned on both sides ----------------------------------------------------
+# The suite spells the key names out (a file format is a contract) and the game spells them out.
+# P5 pins the two spellings against each other, so a rename on ONE side fails a check.
+func _test_sp_names() -> void:
+	var tag := "P5 the key names"
+	_menu_levels = [Player.AI_Level.Level_4, Player.AI_Level.Level_4,
+		Player.AI_Level.Level_3, Player.AI_Level.Level_2]
+	var app = _make_menu_app()
+	await _menu_ready(app)
+	check(String(app.STATS_SECTION) == STATS_SECTION, tag + ": the game writes section ["
+		+ String(app.STATS_SECTION) + "], the suite reads [" + STATS_SECTION + "]")
+	check(String(app.STATS_CLASSIC_KEY) == STATS_KEY_CLASSIC, tag + ": the classic key is `"
+		+ String(app.STATS_CLASSIC_KEY) + "` == `" + STATS_KEY_CLASSIC + "`")
+	check(String(app.STATS_NOBLE_KEY) == STATS_KEY_NOBLE, tag + ": the noble key is `"
+		+ String(app.STATS_NOBLE_KEY) + "` == `" + STATS_KEY_NOBLE + "`")
+	check(String(app.STATS_LEGACY_SECTION) == STATS_LEGACY_SECTION
+			and String(app.STATS_LEGACY_KEY) == STATS_KEY_LEGACY, tag + ": the legacy pair the game"
+		+ " reads is [" + String(app.STATS_LEGACY_SECTION) + "] / " + String(app.STATS_LEGACY_KEY)
+		+ " == the suite's [" + STATS_LEGACY_SECTION + "] / " + STATS_KEY_LEGACY + " - a rename on"
+		+ " either side strands a player's history")
+	check(int(app._main.noble_family_index()) == Stats.MODE_CLASSIC, tag + ": with no variant game"
+		+ " running `noble_family_index()` == " + str(app._main.noble_family_index())
+		+ " == MODE_CLASSIC")
+	app._main.noble_family = true
+	check(int(app._main.noble_family_index()) == Stats.MODE_NOBLE, tag + ": and for a variant game "
+		+ str(app._main.noble_family_index()) + " == MODE_NOBLE - the mode flag IS the table index, so"
+		+ " the write path needs no third source of truth")
+	app._main.noble_family = false
+	check(app._stats.tables.size() == Stats.MODE_COUNT
+			and app._stats.tables[Stats.MODE_CLASSIC].size() == STATS_COUNT
+			and app._stats.tables[Stats.MODE_NOBLE].size() == STATS_COUNT,
+		tag + ": " + str(Stats.MODE_COUNT) + " tables x " + str(STATS_COUNT) + " counters, measured on"
+		+ " the running app's own page - the width a key has to hold")
+	await _free_menu_app(app)
+
+
+func _test_stats_persistence() -> void:
+	print("\n########## TEST P (step 28): 2 save keys, a round's counters follow the GAME, an old ##########")
+	print("########## save migrates to classic, a stale length drops ONE table, 2 modes x 2 rounds ##########")
+	print("########## + 1 restart keep 2 separate histories, and a fresh save shows visible zeros ##########")
+	await _test_sp_names()
+	await _test_sp_two_keys()
+	await _test_sp_migration()
+	await _test_sp_per_table_drop()
+	await _test_sp_classic_write_target()

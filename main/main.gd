@@ -107,6 +107,17 @@ func is_drawing() -> bool:
 	return _drawing
 
 
+# Noble Family, todo §C.28: the ONE translation from a game's mode to the stats table that game's
+# history belongs to. `Stats.MODE_CLASSIC` / `Stats.MODE_NOBLE` are the table indices (step 26), and
+# this is the only place in the project that turns `noble_family` - a property of the DEAL, fixed when
+# the game started - into one of them. It exists so a counter can be filed by the mode the game was
+# dealt by, instead of by whichever table the stats page happens to show: step 27 gave the player two
+# arrows, i.e. a VIEW he can move at any moment, and a `round_won` arrives from the game, never from
+# the page. A page's view must never decide where a number is written.
+func noble_family_index() -> int:
+	return Stats.MODE_NOBLE if noble_family else Stats.MODE_CLASSIC
+
+
 # The panel's listener. `_drawing` is the guard: while a draw is pending it latches the reported
 # family index; with no draw pending the emission is inert - it cannot queue a second draw, because
 # `Main` is not awaiting anything and a family pop only ever happens in `human_draw_from_family`.

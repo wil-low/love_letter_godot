@@ -15,6 +15,18 @@ extends Node2D
 
 const OPTIONS_FILE := "user://options.cfg"
 
+# Noble Family variant, todo §C.28: the save carries ONE KEY PER MODE, so a variant game's counters
+# survive a restart as a variant history and a classic game's as a classic one. `Gameplay/totals_and_wins`
+# is retired as a write target (it stays a READ target, see `legacy_classic_stats`).
+const STATS_SECTION: String = "Stats"
+const STATS_CLASSIC_KEY: String = "classic"
+const STATS_NOBLE_KEY: String = "noble_family"
+const STATS_LEGACY_SECTION: String = "Gameplay"
+const STATS_LEGACY_KEY: String = "totals_and_wins"
+# The pre-variant save: 6 label rows (H12345) x 2 counters. A table is `2 * AI_Level.size()` == 14, so
+# an old save is 2 counters SHORT - see `legacy_classic_stats` for why the gap is tail padding.
+const STATS_LEGACY_SIZE: int = 12
+
 # Called when the node enters the scene tree for the first time.
 func _ready() -> void:
 	seed(random_seed if random_seed != 0 else Time.get_ticks_usec())
@@ -61,7 +73,12 @@ func save_config() -> void:
 	for i in _main._players.size():
 		config.set_value("AI_Level", "P" + str(i), _main._players[i].ai_level)
 	config.set_value("Gameplay", "speed", _level_selector._speed_level.level)
-	config.set_value("Gameplay", "totals_and_wins", _stats._totals_and_wins)
+	# BOTH tables, every save: a save that carried only the table of the mode the last game played
+	# would ERASE the other mode's history at the next boot, because `load_config()` rebuilds both
+	# tables out of this one file. Writing them per-save is also what makes a write to one mode
+	# observable as "the other file content did not change".
+	config.set_value(STATS_SECTION, STATS_CLASSIC_KEY, _stats.tables[Stats.MODE_CLASSIC])
+	config.set_value(STATS_SECTION, STATS_NOBLE_KEY, _stats.tables[Stats.MODE_NOBLE])
 	config.save(OPTIONS_FILE)
 
 
@@ -80,11 +97,47 @@ func load_config() -> bool:
 
 	var speed = clamp(config.get_value("Gameplay", "speed"), SpeedLevel._min_speed, SpeedLevel._max_speed)
 	_level_selector.set_levels(_main._players, speed)
-	_stats._totals_and_wins = config.get_value("Gameplay", "totals_and_wins", [])
-	# drop stats saved for a previous set of AI levels
-	if _stats._totals_and_wins.size() != 2 * Player.AI_Level.size():
-		_stats._on_reset_button_pressed()
+	load_stats(config)
 	return true
+
+
+# Noble Family, todo §C.28: read BOTH tables. The pre-variant rule "a save of the wrong length is not
+# your history" is KEPT, and it is applied PER TABLE: a corrupt/stale classic table must not delete a
+# good noble table (the pre-variant code could only ever drop "the" table, and it dropped it via the
+# Reset button, which is a player-facing action - a load path that resets a page is a page that clears
+# the player's history as a side effect of booting).
+func load_stats(config: ConfigFile) -> void:
+	var classic: Array = config.get_value(STATS_SECTION, STATS_CLASSIC_KEY, [])
+	var noble: Array = config.get_value(STATS_SECTION, STATS_NOBLE_KEY, [])
+	if classic.is_empty() and noble.is_empty():
+		# A save from BEFORE the variant has no per-mode key at all. Its history is the classic
+		# history - there is no other history it could be - so it migrates to the classic table.
+		classic = legacy_classic_stats(config)
+	_stats.tables[Stats.MODE_CLASSIC] = _stats.ints_of(classic)
+	_stats.tables[Stats.MODE_NOBLE] = _stats.ints_of(noble)
+	var counters := 2 * Player.AI_Level.size()  # 14, == STATS_COUNT in the suite
+	if _stats.tables[Stats.MODE_CLASSIC].size() != counters:
+		_stats.tables[Stats.MODE_CLASSIC] = _stats.empty_table()
+	if _stats.tables[Stats.MODE_NOBLE].size() != counters:
+		_stats.tables[Stats.MODE_NOBLE] = _stats.empty_table()
+
+
+# The migration: an old `Gameplay/totals_and_wins` save becomes the classic table. A 12-counter save
+# (the pre-variant format) is PADDED TO 14 at the TAIL, because the two slots a table has and such a
+# save lacks are the `Disabled` pair: `_on_round_won` writes `2 * level`, `AI_Level.Disabled` is -1, and
+# `2 * -1` == -2 == slot 12 of a 14-slot array (Godot counts a negative index from the end). So the
+# tail pair is exactly the pair no pre-variant game could ever write, and padding there keeps every
+# migrated counter on the index it already had - the migration moves no number, it only adds two zeros.
+# Any OTHER length is passed through untouched and dies in `load_stats()`'s per-table size drop: an
+# old-format save is migrated, a corrupt one is not.
+func legacy_classic_stats(config: ConfigFile) -> Array:
+	var legacy: Array = config.get_value(STATS_LEGACY_SECTION, STATS_LEGACY_KEY, [])
+	if legacy.size() == STATS_LEGACY_SIZE:
+		var padded: Array = legacy.duplicate()
+		padded.append(0)
+		padded.append(0)
+		return padded
+	return legacy
 
 
 func _on_level_selector_levels_changed(levels: Array[Player.AI_Level], speed: int) -> void:
@@ -190,9 +243,17 @@ func _on_pause_help_pressed() -> void:
 	_help.show()
 
 
+# Noble Family, todo §C.28: a counter is filed by the mode of the game that ENDED the round
+# (`Main.noble_family` is the deal table the game was dealt by, fixed at the deal - step 25), NOT by
+# the table the stats page is showing. Step 26 aliased `_totals_and_wins` to `tables[mode]` and step 27
+# put the player's own arrows on that `mode`, so a page view was the write target: browse the classic
+# table during a variant game, resume, and the variant round filed itself into classic (TEST O's O6
+# measured exactly that, and says it is the Check that flips when this lands - it lands here).
 func _on_round_won(level: Player.AI_Level) -> void:
-	_stats._totals_and_wins[2 * level] = clampi(_stats._totals_and_wins[2 * level] + 1, 0, 99999)
+	var tab: Array[int] = _stats.tables[_main.noble_family_index()]
+	tab[2 * level] = clampi(tab[2 * level] + 1, 0, 99999)
 
 
 func _on_round_finished(level: Player.AI_Level) -> void:
-	_stats._totals_and_wins[2 * level + 1] = clampi(_stats._totals_and_wins[2 * level + 1] + 1, 0, 99999)
+	var tab: Array[int] = _stats.tables[_main.noble_family_index()]
+	tab[2 * level + 1] = clampi(tab[2 * level + 1] + 1, 0, 99999)

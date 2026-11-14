@@ -324,7 +324,9 @@ presentation (one slide sound for the whole family batch, zero flights for it, t
 the deal), step 24 the MODE PICKER `game_mode/game_mode.tscn` (CLASSIC / NOBLE FAMILY / BACK, one
 signal per press, nothing persisted), step 26 the per-mode STATS tables (two 14-counter tables, the
 page's `mode`, the `_totals_and_wins` alias), step 27 the stats page's OWN mode switch (a C/F letter +
-Left/Right arrows in the page's left margin), step 31 joint move legality and L1 determinism). TEST A
+Left/Right arrows in the page's left margin), step 28 the SAVE and the WRITE TARGET (2 save keys, a
+round's counters filed by the game that played it, the 12-counter migration), step 31 joint move
+legality and L1 determinism). TEST A
 needs no
 `Main` scene - it drives the real `Deck` scene directly, 200 seeded deals per player count.
 
@@ -1147,6 +1149,11 @@ lost on the next launch. That is step 28 (per-mode keys + the 12-counter migrati
 already implied here: the legacy key is the CLASSIC table. The page's own mode picker (a segmented
 Classic / Noble Family control on the stats page) is step 27.
 
+**STEP 28 LANDED** (see TEST P): the save is 2 keys and the write paths ask the GAME, so this step's
+N3/N6 checks were re-measured against the new format - N6 is now the migration + per-table-drop fixture,
+and its "the noble table is zeros after a classic game" check became a DELTA check, because a file that
+HAS a noble key makes "zeros" a fixture assumption and not a fact.
+
 ### TEST O — the stats page's own mode switch: 1 letter + 2 arrows in the left margin; a flip browses and writes nothing (step 27)
 
 Step 27 (todo §C.27) gives the page the **picker** for the two tables step 26 built. `stats/stats.tscn`
@@ -1210,13 +1217,13 @@ pause page opens on F; mid-game the player CAN flip to the other history and rea
 the pause opener re-pins to the running game's mode, so the only path that writes to the wrong table is
 **flip + resume without reopening**; a flip NEVER changes `main.noble_family`; the switch is tappable
 inside a running game's pause page.
-- **O6 — the write target TODAY, 5 checks (the Check that FLIPS when step 28 lands).** Both tables are
+- **O6 — the write target is the GAME, 6 checks (step 27's Check, FLIPPED by step 28).** Both tables are
 zeroed for clean deltas, a variant 4p game runs on levels 2/3/2/3, the page is flipped to CLASSIC, and
-the game is resumed WITHOUT reopening the page. Measured: the round end lands **`sum(classic) ==
-round_won + round_finished` emissions** (6 for the measured round) and **`sum(noble) == 0`** - because
-`_totals_and_wins` IS `tables[mode]` (the page's view) and `_on_round_won` / `_on_round_finished` name
-no mode. After step 28 indexes those paths by `_main.noble_family_index()`, the noble sum must be the
-emission count and the classic sum 0.
+the game is resumed WITHOUT reopening the page. Measured now: **`sum(noble) == round_won +
+round_finished` emissions** and **`sum(classic) == 0`** — `_on_round_won` / `_on_round_finished` write
+`tables[_main.noble_family_index()]`, so browsing moves a VIEW and not a number. Step 27's version of
+this fixture measured the opposite (`sum(classic) == 6`, `sum(noble) == 0`) and said in its own text that
+it is the Check step 28 flips; the flip is recorded here, not silently rewritten.
 
 **Harness facts this step paid for (measured, not guessed):**
 
@@ -1270,9 +1277,122 @@ must READ are never the last ones.
 
 A clean tree prints **1260 PASS, 0 FAIL, exit 0** (BASE above: two runs, both 1260 PASS).
 
-**Not covered by this step (deliberately):** the WRITE target is still the page's view (O6 measures it)
-and the save is still ONE legacy key - both are step 28, which indexes the write paths by the running
-game's mode and migrates the 12-counter save.
+**Not covered by this step (deliberately):** the WRITE target is the GAME (O6 measured the hazard, step 28
+closed it - see TEST P) and the save is 2 keys with the 12-counter migration. Both landed in step 28;
+TEST P is the fixture, O6 and N6 are the two checks that flipped.
+
+### TEST P — the SAVE is 2 keys, a round's counters follow the GAME, and an old save migrates (step 28)
+
+Step 28 (todo §C.28) closes the two hazards steps 26 and 27 left open. In the product code it is small:
+`main/main.gd` gains **`noble_family_index() -> int`** (`Stats.MODE_NOBLE if noble_family else
+Stats.MODE_CLASSIC`, 3 lines + 1 doc line), and `application/application.gd` stops naming a table
+itself — `_on_round_won` / `_on_round_finished` write `_stats.tables[_main.noble_family_index()]`,
+`save_config()` writes **both** tables (`Stats/classic` + `Stats/noble_family`) and **stops** writing
+`Gameplay/totals_and_wins`, and a new `load_stats()` reads the 2 keys, **migrates** the pre-variant key
+into the classic table when the new keys are absent, pads the ONE length the old format had, normalizes
+what it loads to `Array[int]` (a `ConfigFile` returns `Array`), and applies the size rule
+**per table**. TEST P is **66 checks** in 5 fixtures; the same run also carries **O6 flipped** (5 checks
+→ 6, the Check step 27 said would flip) and **N6 re-measured** (11 checks, now the migration + drop
+fixture, its "noble is zeros" check rewritten as a delta). A clean tree prints **1327 PASS, 0 FAIL, 0
+script error, exit 0** (1260 at step 27: 66 + 1 = 67 new checks). TEST P runs **between TEST O and TEST
+N**: P DELETES and REWRITES `user://options.cfg`, and N6 reads that file at the start of N's tail, so
+the section that mutates the file can never sit after the section that reads it.
+
+- **P1 — the 2 save keys + 2 games + 2 restarts, 24 checks (the todo's gate).** The save file is removed
+so the app starts at a state the game knows (both tables zeros, the page printing `0 H 0`). A variant
+game plays **2 round ends** on levels 4/4/3/2: the file grows BOTH keys, `Stats/noble_family` equals the
+live noble table (`[0, 0, 0, 0, 1, 2, 1, 2, 0, 4, 0, 0, 0, 0]`), `Stats/classic` equals the live classic
+table **which is still zeros**, the noble sum is **10 == 2 `round_won` + 8 `round_finished` emissions**,
+and the save writes **no** legacy key. Mid-game the player peeks at the CLASSIC table through the page's
+own arrow: the index stays NOBLE, and the table he was looking at is **still zeros** — browsing moves a
+view. Then the **first restart**: a brand new app reads the file the variant game left, the classic table
+is the saved classic history and the noble table is the saved variant history, and a page with no game
+running opens on CLASSIC (the mode is picked per game, never persisted). A **classic** game of 2 round
+ends in that fresh app: the classic key converges to the live classic table
+(`[0, 0, 0, 0, 0, 2, 1, 2, 2, 4, 0, 0, 0, 0]`, **11 == 3 + 8** emissions), the noble table and key are
+**exactly** what the variant game left (sum 10 == 10), the file is a file the suite's **own copy of the
+load rules** reads back as the same two tables, `Stats` holds EXACTLY `["classic", "noble_family"]`, and
+`Gameplay` keeps its speed key with no stats key beside it. The **second restart** reads the file back
+unchanged — 2 games, 2 modes, 2 restarts, the 2 tables never mixed.
+- **P2 — the migration, 17 checks.** A 12-counter `Gameplay/totals_and_wins` file lands in the CLASSIC
+table at the SAME indices padded with the slots it never had (`[100 … 111, 0, 0]`) and the NOBLE table
+opens at **zeros** (writing the legacy numbers to both tables would invent 1266 variant counters out of
+a file that never mentioned a variant game); the live tables equal the suite's own copy of the rules;
+the page **shows** the migrated numbers (`100 H 101`) in the pre-variant pair format; Human's pair stays
+on slots 0/1; Level_5's pair stays on 10/11; the padded slots are the **Disabled** pair, the only pair a
+12-counter file had no place for. A 14-counter legacy save is the classic table **unchanged**
+(`[200 … 213]`) — the right length already, no padding. With BOTH new keys present the legacy key is
+**IGNORED** (new keys win: 7s and 9s), because migrating on every boot would double-count. A 5-counter
+legacy save is **dropped to zeros** — padding is defined for the ONE length the old format had, not for
+any length.
+- **P3 — the size rule is per table, 9 checks.** A 3-counter `Stats/classic` drops to zeros (the rule is
+`2 * Player.AI_Level.size()` == 14, the pre-variant rule) **and the NOBLE table of the same file
+survives** (`[50 … 63]`); a one-table loader drops both, which deletes a healthy variant history
+because a classic record is corrupt. The page opens on the dropped zeros, one flip shows the survivor.
+The mirror case (bad noble, good classic) is checked in the same fixture: the drop is per table in
+**both** directions, so no table's fate depends on the other's.
+- **P4 — a classic game files classic, 9 checks (O6's mirror).** The running classic game's index is 0;
+opening the page mid-game pins the view to the classic table; the player then flips to NOBLE **while the
+classic game runs** and the index does not follow the page; the round ends put **10 counters in the
+classic table for 2 `round_won` + 8 `round_finished` = 10** emissions, and the NOBLE table — the table
+the player was LOOKING at when those rounds ended — **took nothing**; the file agrees with the table it
+is saved from.
+- **P5 — the key names and the mode→index key, 7 checks.** The section/key/legacy-pair strings the game
+writes are the strings the suite reads (a rename on either side strands a player's history),
+`noble_family_index()` is 0 for a classic game and 1 for a variant game — **the mode flag IS the table
+index**, so the write path needs no third source of truth — and the width a key has to hold is measured
+on the running app's own page (2 tables × 14 counters).
+
+**Harness facts this step paid for (measured, not guessed):**
+
+1. **`ConfigFile` has ONE presence method in Godot 4.7.2: `has_section_key(section, key)`.** The first
+version of P's reader called `has_value`, which does not exist; the replacement, `is_section_key_present`
+(the name Godot 4 documentation uses for `ConfigFile`'s siblings), does not exist either. Dumping the
+methods of a real `ConfigFile` measured `has_section_key` present and `has_value`, `has_key`,
+`is_key_present`, `is_section_key_present` ABSENT. A call through a `Variant`-typed base is a runtime
+error, not a compile error, so `--check-only` stayed green across both bugs and the suite printed 15-16
+FAILs whose only cause was one helper line (harness fact 6 of TEST O, again).
+2. **A fixture with per-mode counters must poll per-mode counters.** `_run_menu_rounds()` — TEST M's
+driver — polls `_st_won`, the suite-wide list the shared `_on_round_won` handler feeds. P counts in
+`_st_pw_won[mode]`, so its first call returned instantly on the PREVIOUS fixture's leftovers and drove
+no rounds at all (measured: "0 of 2 after 5 driven round(s)"). P's driver polls `_st_pw_won[mode]` and
+connects its own handlers to the app's own `_main` (`round_won` / `round_finished` — the counters are
+counted on signals).
+3. **A SECOND game in the SAME app dies on `Main.resolve_effect`'s "Player N has 1 card" assertion** the
+first time the classic target modal resolves with `type Unknown` (measured in the log:
+`resolve_effect for Guard, player 2, type Unknown` → assertion → the game's coroutine is dead → 0 round
+ends in 4000 frames). It reproduces with step 28's changes REVERTED, so it is a pre-existing landmine of
+the raw-app harness: TEST M's post-exit classic game never walks into it because it counts PLAYS and
+never waits for a round end. A fixture that needs ROUND ENDS from a second game needs a fresh app, and
+that is what P1's restart chain does for a reason, not by style.
+4. **`save_config()` has exactly ONE caller in the game** — `save_stats.emit()` at `main/main.gd:879`
+(main.gd mentions `save_stats` twice: the signal declaration and that emit). So a round end is the only
+thing that writes the file, and a fixture can only poll a file a round end wrote.
+5. **A long poll burns the very counters it is measuring.** At `_speed = 0` a settled deal plays a full
+round in tens of frames, so a 2500-frame convergence poll let the live table drift past the harness's
+own tally (measured: the file reached the tables, the sums did not match the emissions). P's convergence
+budget is **600 frames**.
+6. **`Disabled` maps to `2 * -1 == -2`**, which in Godot's negative indexing is the table's TAIL — which
+is exactly where the migrated 12-counter file's two padded slots are, and the fixture names that
+coincidence (`P2 … the padded slots are the Disabled pair`).
+
+**The sabotages (each applied ALONE to the pristine tree, suite run, then the exact bytes restored —
+md5-checked, no `RESTORE MISMATCH`):**
+
+| # | Sabotage | suite | FAILs | Caught by |
+|---|---|---|---|---|
+| S1 | the counters ignore the game and always file CLASSIC (`tables[Stats.MODE_CLASSIC]`) | 1319 PASS | **8** | O6 ×3 (a variant game's round ends land in classic), P1 ×5 (the noble key/table, the sums, the restart pair) |
+| S2 | the save writes ONLY `Stats/classic` (the "one table per save" format) | 1319 PASS | **11** | P1 ×8 (the both-keys check, the noble key, the restart chain, the key list), N6 ×2, P4 ×1 |
+| S3 | the loader IGNORES the pre-variant key (no migration) | 1321 PASS | **6** | P2 ×6 (the migrated indices, the padded slots, the page, the suite's own copy of the rules) |
+| S4 | the migration pads at the HEAD (`[0, 0, 100 … 111]`) | 1321 PASS | **6** | P2 ×6 (Human's pair moves to slots 2/3, Level_5 to 12/13, the page, the rules copy) |
+| S5 | the size rule drops BOTH tables when ONE is stale | 1318 PASS | **9** | P3 ×3 (the survivor must live), P2 ×6 (a 5-counter legacy file drops the healthy noble table too) |
+| S6 | the mode → table MAPPING is swapped | 1309 PASS | **18** | N6 ×3, O6 ×4, P1 ×5, P4 ×4, P5 ×2 — every side of the step notices |
+
+**Not covered by this step (deliberately):** the save has no per-mode RESET separation to test beyond
+step 27's O4 (Reset clears the VISIBLE table, which is now also the game's table while a game runs), and
+the stats page cannot be opened on the mode a game will be played in from the MODE PICKER — `start_game()`
+pins it, which TEST N7 covers. Steps 29 (Noble Family help lines) and 30 (Noble Family smoke suite) are
+the next sections.
 
 ## tests/noble_family_smoke.tscn — Noble Family variant, whole games on the AI (steps 7, 11, 14)
 
