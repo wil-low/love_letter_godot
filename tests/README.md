@@ -1032,6 +1032,8 @@ at speed 0, audio muted: the "the variant plays and terminates" check, the twin 
     godot --headless --path . tests/noble_family_smoke.tscn                        # 4 players
     godot --headless --path . tests/noble_family_smoke.tscn -- --players=3 --rounds=40
     godot --headless --path . tests/noble_family_smoke.tscn -- --seed=999         # other deal/RNG
+    godot --headless --path . tests/noble_family_smoke.tscn -- --levels=1234      # one seat per AI level
+    godot --headless --path . tests/noble_family_smoke.tscn -- --seed=777 --log=1 > run.log
     godot --headless --path . tests/noble_family_smoke.tscn -- --print_moves=1   # move dumps
     echo $?   # 0 = the variant flowed, 1 = a check failed / the loop stalled
 
@@ -1059,12 +1061,91 @@ move names:
 6.67 · 35 / 156 / 3.9 - the same shape, the same family-out ends, so the joint enumeration did not
 break the flow, it only changed which card a seat draws and plays.)
 
-**Determinism (the step 12 gate):** two runs of `--players=4 --rounds=20` on the default seed print
+**Determinism (as step 11 measured it, superseded by the log below):** two runs of
+`--players=4 --rounds=20` on the default seed print
 byte-identical play logs (506 `new_turn` / `resolve_effect` / effect lines each); the same suite
 with `--seed=999` prints a different log (489 lines) - level 1's `valid_moves[0]` is deterministic,
 level 2's uniform pick is not. `--print_moves=1` dumps every enumerated move; in a 4p variant game
 every line carries its draw, e.g. `Move score 20: Baron (0), draw King (#2), keep King, tgt 0`, and
 a Baron turn on family `[Prince, Guard, King]` prints 37 moves (7 + 24 + 6).
+
+### Step 12 — the AI draw policies: every joint move legal, every level measured
+
+The paragraph above counted raw dump lines. Step 12 makes the claim about the **decisions**, plus a
+per-level legality rail, so the suite adds two things:
+
+**`--levels=` (one digit per seat, 1..5).** The default mix is `4432`; the suite now runs any mix, so
+the gate "levels 1-4 all play legal joint moves" is checked in real variant games with every level
+on the board (`--levels=1234`), not only in the hand-built list of rules TEST B. Level 5 (the random
+mix of 1-4) is accepted too.
+
+**`--log=1` — one line per play:** `LOG  r<round> s<seat> lvl<level> <Move>` (the `Move` line names
+the played card, the family card it drew, the card it kept, the target and the Guard's declared type).
+Nothing nondeterministic is in it - no timing, no board dumps. `Main._new_game()` seeds the global
+RNG per game (`seed(_random_seed)`), so a fixed seed is a **reproducible run**.
+
+**The joint-move legality rail** (`check_joint_move`, on the seat's own `move_chosen`): it runs at
+the moment the seat COMMITS its triple, which is *before* the chain animates the draw, so the family
+data and the 1-card hand the harness reads are exactly the state the move was chosen from. Every
+move is checked: it names a real family index and that slot's type; the played type is one of the
+pair `(active, family[f])` and `_leftover_type` is the other one; the Countess rule is obeyed
+(a Countess + man pair never plays the man); `_played_card` is the seat's hand node for an
+active-card play (`_played_card_idx == 0`) and **null** for a drawn-card play; the hand holds
+exactly 1 card; the target follows the type rules. The suite counts every move that passes, per
+AI level, and fails on any violation, on 0 checks, or on a configured level that made no play.
+
+The target rule the rail enforces is stated from the rules, **not** read from `Main._other_protected`
+- a rail that reads the enumerator's own flag agrees with a buggy enumerator. The rule is: naming a
+protected opponent is legal only when every other active seat is protected (Handmaid's edge case).
+The first version of this rail inverted that and reported 1 "illegal" move per 6-round run - the
+move was legal, the rail was wrong. A legality rail has to be able to disagree with production.
+
+Measured (40 rounds unless stated, seed as stated, every run prints `plays == joint moves verified
+legal` - the rail found 0 illegal moves):
+
+| run | seed | levels | plays | by level | family-out ends | exit |
+|---|---|---|---|---|---|---|
+| 4p canonical mix | 20260607 | `4432` | 326 | L4 166, L3 89, L2 71 | 2 | 0 |
+| 4p, one seat per level | 20260607 | `1234` | 330 | L1 79, L2 77, L3 91, L4 83 | 1 | 0 |
+| 4p, same levels, shuffled seats | 555 | `4321` | 336 | L1 78, L2 80, L3 87, L4 91 | 1 | 0 |
+| 4p, same levels, other seed | 999 | `1234` | 325 | L1 78, L2 72, L3 81, L4 94 | 1 | 0 |
+| 4p, all level 1 | 20260607 | `1111` | 335 | L1 335 | 3 | 0 |
+| 4p, all level 1 | 777 | `1111` | 302 | L1 302 | 0 | **1** (the family-out gate, see the note) |
+| 4p, all level 1, **120 rounds** | 777 | `1111` | 945 | L1 945 | 3 | 0 |
+| 4p, all level 2 | 20260607 | `2222` | 314 | L2 314 | 3 | 0 |
+| 4p, all level 2, other seed | 777 | `2222` | 319 | L2 319 | 3 | 0 |
+| 4p, level 5 (random mix) + 4 | 777 | `5454` | 335 | L5 169, L4 166 | 3 | 0 |
+| 3p, one seat per level | 20260607 | `123` | 283 | L1 88, L2 89, L3 106 | 1 | 0 |
+| 3p, all level 1 | 777 | `111` | 260 | L1 260 | 2 | 0 |
+| 2p, levels 1 + 4 | 20260607 | `14` | 166 | L1 80, L4 86 | 3 | 0 |
+| 2p, levels 1 + 4, other seed | 999 | `14` | 149 | L1 73, L4 76 | 2 | 0 |
+| 2p, all level 1 | 777 | `11` | 126 | L1 126 | 4 | 0 |
+
+**Log comparisons (the determinism gate).**
+
+| pair | result |
+|---|---|
+| `1234` seed 20260607, run twice | **byte-identical** (330 lines) |
+| `1111` seed 20260607, run twice | **byte-identical** (335 lines) |
+| `11` seed 777 (2p), run twice | **byte-identical** (126 lines) |
+| `1234` seed 20260607 vs seed 999 | **differ** |
+| `1111` seed 20260607 vs seed 777 | **differ** |
+| `2222` seed 20260607 vs seed 777 | **differ** |
+| `1111` vs `2222`, **same** seed 20260607 | **differ** — the deals are identical, only the policy differs |
+
+So a run is reproducible, a seed changes the game, and the **policy** changes the plays on a fixed
+deal. Level 1's fingerprint is exactly the todo's promise: **every one of its 335 plays draws family
+index `#0`** and plays the active card (`_played_card_idx == 0` in 78 of its 79 plays in the `1234`
+run - the 1 exception is the Countess forcing the drawn Countess). Levels 2/3/4 spread over all
+family indices (e.g. L2 `42/26/9` over `#0/#1/#2`) and play the drawn card about as often as the
+active one (`31/46` for L2, `44/47` for L3, `38/45` for L4): the drawn card is the *cheaper* half of
+the pair in level 3's picks, which is what its policy is.
+
+**The all-level-1 note:** with 4 seats and every seat on level 1, a 40-round run has 93 eliminations
+and **no** family-out end, so it fails the suite's "at least 1 round ran to the family-out end"
+gate. That is a property of the policy, not a stall: level 1 always takes family `#0`, which makes
+seats open Prince/Baron fights early, so rounds end by elimination. `--rounds=120` reaches 3
+family-out ends and exits 0; in 2p/3p the same policy produces family-out ends within 40 rounds.
 
 **The (draw, play) pairing (the step 11/12 gate):** `CountingMain._on_move_chosen` wraps the play
 chain itself (`Main` calls its own method, so the subclass override is what runs - the same trick

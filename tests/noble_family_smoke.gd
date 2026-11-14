@@ -9,6 +9,8 @@ extends Node2D
 #
 # Run:  godot --headless --path . tests/noble_family_smoke.tscn
 #       godot --headless --path . tests/noble_family_smoke.tscn -- --players=2 --rounds=40
+#       godot --headless --path . tests/noble_family_smoke.tscn -- --levels=1234   # one seat per AI level
+#       godot --headless --path . tests/noble_family_smoke.tscn -- --seed=777 --log=1 > run.log
 #       echo $?      # 0 = the variant games flowed, 1 = a check failed / the loop stalled
 #
 # Event counting. No production file is touched: `tests/counting_main.gd` (extends Main) is
@@ -55,6 +57,23 @@ extends Node2D
 # "audited and clean" from "never looked".
 # Suite-level: the requested round count is reached, at least 1 elimination happens, at least
 # 1 round runs all the way to the family-out end.
+#
+# Step 12 (the AI draw policies) adds two more rails:
+# - EVERY joint move is checked the moment the seat commits it (`count_play` is on `move_chosen`,
+#   which fires BEFORE the chain animates the draw, so the family data and the 1-card hand the
+#   harness reads are exactly the state the move was chosen from): the named family index exists
+#   and names that family card, the played card is one of the pair (active, family[f]) and the
+#   leftover is the other one, the Countess rule is obeyed, `_played_card` is the hand node for an
+#   active-card play and null for a drawn-card play, and the target follows the type rules.
+#   A move that passes is counted, per AI LEVEL - so "levels 1-4 all play legal joint moves" is a
+#   measurement (`--levels=1234` puts one seat of every level on the board), not an eyeball.
+# - `--log=1` prints one line per play (`LOG  r<round> s<seat> lvl<level> <Move>`). The game seeds
+#   its RNG per game (`Main._new_game()` -> `seed(_random_seed)`), so a fixed seed is a REPRODUCIBLE
+#   run: the same seed twice gives a byte-identical log (that is level 1 determinism -
+#   `valid_moves[0]` over the as-dealt family order), and a different seed gives a different one.
+#   Levels 1 and 2 look at no hand at all, so their logs are the policy's whole behaviour: a level 1
+#   log shows only `draw <family[0] type> (#0)` plays of the active card, a level 2 log spreads over
+#   several draw indices. The log prints no timing, no board dumps - only what a run decided.
 
 const MainScene := preload("res://main/main.tscn")
 const CountingMain := "res://tests/counting_main.gd"  # load()ed at runtime: preload() would make
@@ -67,12 +86,10 @@ const SEED: int = 20260607
 const PLAYERS: int = 4
 const ROUNDS: int = 40
 const FRAME_BUDGET: int = 200000
-const LEVELS: Array[Player.AI_Level] = [
-	Player.AI_Level.Level_4,
-	Player.AI_Level.Level_4,
-	Player.AI_Level.Level_3,
-	Player.AI_Level.Level_2,
-]
+# The seat levels, one digit per seat (`--levels=1234`): 1..5 = AI level 1..5. The default is the
+# step 7 mix (4/4/3/2); step 12's gate ("levels 1-4 all play legal joint moves") is the run that
+# puts every level on the board, so every level is measured in a real variant game.
+const LEVELS_SPEC: String = "4432"
 
 var plays: Array[int] = [0, 0, 0, 0]
 var fam_draws: Array[int] = [0, 0, 0, 0]
@@ -89,6 +106,14 @@ var _failures: int = 0
 var _unsettled_rounds: int = 0  # round ends that caught a discard/reveal animation in flight
 var _boundary_devs: int = 0  # piece-count deviations of exactly 1 (the abandoned play chain)
 var _left_violations: int = 0  # step 17: continuous audit violations reported by CountingMain
+# Step 12: the joint-move legality rail + the reproducible play log
+var main_ref = null  # the CountingMain instance, for the per-move checks
+var cur_round: int = 1  # the round a play belongs to (1-based, finished rounds + 1)
+var log_moves: bool = false
+var levels_spec: String = LEVELS_SPEC
+var legal_checked: int = 0
+var plays_by_level: Array[int] = [0, 0, 0, 0, 0, 0]  # index = Player.AI_Level value
+var legal_violations: Array[String] = []
 const KIND_NAMES: Array[String] = ["played card (table)", "hand card", "revealed family", "other container"]
 
 
@@ -101,6 +126,11 @@ func _ready() -> void:
 	var count: int = _arg("players", PLAYERS)
 	var target_rounds: int = _arg("rounds", ROUNDS)
 	var seed_value: int = _arg("seed", SEED)
+	levels_spec = _arg_str("levels", LEVELS_SPEC)
+	assert(levels_spec.length() >= 2 and levels_spec.length() <= 4,
+		"--levels takes one digit per seat, 2 to 4 digits")
+	var levels: Array[Player.AI_Level] = _levels_from_spec(levels_spec)
+	log_moves = _arg("log", 0) == 1
 	# `-- --print_moves=1` turns on Main's own move-list dump (the step 11 gate check: every
 	# variant move line shows the draw, `draw <Type> (#idx), keep <Type>`).
 	print_valid_moves = _arg("print_moves", 0) == 1
@@ -113,8 +143,9 @@ func _ready() -> void:
 	main.card_scene = card_scene
 	add_child(main)
 	main.noble_family = true
+	main_ref = main
 	for i in 4:
-		main._players[i].ai_level = LEVELS[i] if i < count else Player.AI_Level.Disabled
+		main._players[i].ai_level = levels[i] if i < count else Player.AI_Level.Disabled
 	for i in 4:
 		main._players[i].move_chosen.connect(count_play.bind(i))
 		main._players[i].card_played.connect(count_card_play.bind(i))
@@ -134,6 +165,7 @@ func _ready() -> void:
 			var actor_idx: int = main.round_end_actor[seen_rounds]
 			var start_actor: int = main.round_start_actor[seen_rounds]
 			seen_rounds += 1
+			cur_round = seen_rounds + 1  # the plays the harness sees next belong to the NEXT round
 			_rounds += 1
 			var elim: int = main.eliminations - elim_seen
 			var eliminated_this: Array = []  # the seats this round eliminated, by index
@@ -168,7 +200,8 @@ func _ready() -> void:
 	var avg: float = 0.0
 	if _rounds > 0:
 		avg = float(_plays_total) / _rounds
-	print("========== noble family smoke test (players=" + str(count) + ", levels 4/4/3/2) ==========")
+	print("========== noble family smoke test (players=" + str(count) + ", levels "
+		+ levels_spec + ") ==========")
 	print("rounds: " + str(_rounds) + ", games started: " + str(main.game_counter) +
 		", family-out ends (no elimination): " + str(_family_out_ends) +
 		", rounds with eliminations: " + str(_elim_rounds))
@@ -176,6 +209,8 @@ func _ready() -> void:
 		", prince plays: " + str(_prince_total) + ", avg plays/round: " + String.num(avg, 2) +
 		", max plays in a round: " + str(_max_plays) + " (no-Prince 4p round: " + str(count * fam) + ")")
 	print("family size per seat: " + str(fam) + ", scores: " + scores_str(main))
+	print("seat levels: " + levels_spec + " (1..4 = AI levels, 5 = random mix), joint moves verified"
+		+ " legal: " + str(legal_checked) + " by level: " + plays_by_level_str(levels_spec))
 	print("move/draw pairings verified: " + str(main.draws_checked) +
 		" - every move naming family card f drew family card f, checked inside its own play chain")
 	var kinds: Array = main.discards_by_kind
@@ -214,6 +249,20 @@ func _ready() -> void:
 	if _failures > 0:
 		fail(str(_failures) + " per-round rule check(s) failed")
 		ok = false
+	# step 12: the joint-move legality rail (every committed move checked in the state it was chosen
+	# from) and the per-level coverage the gate asks for ("levels 1-4 all play legal joint moves")
+	for msg in legal_violations:
+		fail("illegal joint move: " + msg)
+		ok = false
+	if legal_checked == 0:
+		fail("no joint move was checked - the legality rail never ran")
+		ok = false
+	for i in levels_spec.length():
+		var lvl: int = int(levels_spec[i])
+		if plays_by_level[lvl] == 0:
+			fail("no play was made with AI level " + str(lvl) + " - the level is on the board and never"
+				+ " chose a move, so its policy is not covered by this run")
+			ok = false
 	if ok:
 		print("PASS  " + str(_rounds) + " variant rounds (" + str(_family_out_ends) +
 			" family-out ends), " + str(_eliminations) + " eliminations, " + str(_plays_total) +
@@ -223,11 +272,112 @@ func _ready() -> void:
 
 func count_play(m: Move, seat: int) -> void:
 	plays[seat] += 1
+	# `move_chosen` only fires for AI seats, so the level is 1..5; the guard keeps a Disabled/human
+	# seat from indexing `plays_by_level` out of range if this rail is ever wired to a human game.
+	var lvl: int = int(main_ref._players[seat].ai_level)
+	if lvl >= 0:
+		plays_by_level[lvl] += 1
 	# `played_type()` works for a Noble Family move that plays the DRAWN family card, whose
 	# `Move._played_card` node is null at decision time.
 	if m.played_type() == Deck.CardType.Prince:
 		prince_plays += 1
 		_prince_total += 1
+	check_joint_move(m, seat)
+	if log_moves:
+		print("LOG  r" + str(cur_round) + " s" + str(seat) + " lvl"
+			+ str(int(main_ref._players[seat].ai_level)) + " " + str(m))
+
+
+# The step 12 gate, one joint move at a time: every (draw, play, target) triple a seat COMMITS is
+# legal in the state the seat chose it from. `move_chosen` fires before `_on_move_chosen()` animates
+# the draw, so `p.family` is the family the enumeration saw and the hand is the 1 active card.
+# The AI levels only ever pick an element of `Main.find_valid_moves()`'s list, so this is the rail
+# that proves the list itself - and the policy that filters it - produce legal plays, for every level.
+func check_joint_move(m: Move, seat: int) -> void:
+	var p = main_ref._players[seat]
+	var v: Array[String] = []
+	if not m.is_noble():
+		v.append("an AI move of the variant names no family draw (_drawn_family_idx == -1)")
+	var fam_idx: int = m._drawn_family_idx
+	var drawn_t: Deck.CardType = m._drawn_type
+	if fam_idx >= 0 and fam_idx < p.family_size() and p.family[fam_idx] != drawn_t:
+		v.append("names family[" + str(fam_idx) + "] as " + Deck.card_names[int(drawn_t)]
+			+ " but that slot is " + Deck.card_names[int(p.family[fam_idx])])
+	if p.hand.get_child_count() != 1:
+		v.append("decides with " + str(p.hand.get_child_count())
+			+ " cards in hand, the variant seat holds exactly the 1 active card")
+	var active_t: Deck.CardType = Deck.CardType.Unknown
+	if p.hand.get_child_count() > 0:
+		active_t = p.hand.get_child(0).type
+	var idx: int = m._played_card_idx
+	if idx != 0 and idx != 1:
+		v.append("_played_card_idx == " + str(idx) + ", 0 = the active card / 1 = the drawn one")
+	var played_t: Deck.CardType = m.played_type()
+	var pair: Array = [active_t, drawn_t]
+	if not pair.has(played_t):
+		v.append("plays " + Deck.card_names[int(played_t)] + ", which is neither the active card ("
+			+ Deck.card_names[int(active_t)] + ") nor the drawn one ("
+			+ Deck.card_names[int(drawn_t)] + ")")
+	if idx == 0 or idx == 1:
+		var want_keep: Deck.CardType = pair[1 - idx]
+		if m._leftover_type != want_keep:
+			v.append("keeps " + Deck.card_names[int(m._leftover_type)] + ", the pair (" + str(pair)
+				+ ") leaves " + Deck.card_names[int(want_keep)])
+	var forced: int = p.countess_restricted_types(active_t, drawn_t)
+	if forced != -1 and forced != idx:
+		v.append("plays the man of a Countess + man pair (Countess is forced, played idx " + str(idx)
+			+ ", forced idx " + str(forced) + ")")
+	if m._played_card != null and idx == 1:
+		v.append("carries a hand node for a play of the DRAWN card, which has no node yet")
+	if m._played_card != null and m._played_card.get_parent() != p.hand:
+		v.append("_played_card is not a card of this seat's hand")
+	# The target rule the rail enforces is production's own, stated from the rules and NOT from
+	# `Main._other_protected` (a rail that reads the enumerator's flag agrees with a buggy enumerator):
+	# a seat may name a PROTECTED opponent only when every other active seat is protected - the classic
+	# "everyone hid behind a Handmaid" case. With an unprotected opponent available, the protected one
+	# is not targetable.
+	var tgt: int = m._target_player
+	var all_others_protected: bool = true
+	for pl in main_ref._players:
+		if pl.is_active() and !pl.protected and pl.idx != seat:
+			all_others_protected = false
+	match played_t:
+		Deck.CardType.Guard:
+			if tgt == seat or tgt < 0 or tgt >= 4:
+				v.append("a Guard probes seat " + str(tgt) + ", which is not an opponent")
+			elif tgt < main_ref._players.size() and main_ref._players[tgt].protected \
+					and not all_others_protected:
+				v.append("a Guard probes protected seat " + str(tgt) + " while an unprotected opponent"
+					+ " is available")
+			elif m._target_type < Deck.CardType.Priest or m._target_type > Deck.CardType.Princess:
+				v.append("a Guard names " + Deck.card_names[int(m._target_type)]
+					+ ", the guessable types are Priest..Princess")
+		Deck.CardType.Priest, Deck.CardType.Baron, Deck.CardType.King:
+			if tgt == seat or tgt < 0 or tgt >= 4:
+				v.append(Deck.card_names[int(played_t)] + " targets seat " + str(tgt)
+					+ ", which is not an opponent")
+			elif tgt < main_ref._players.size() and main_ref._players[tgt].protected \
+					and not all_others_protected:
+				v.append(Deck.card_names[int(played_t)] + " targets protected seat " + str(tgt)
+					+ " while an unprotected opponent is available")
+		Deck.CardType.Prince:
+			if tgt < 0 or tgt >= 4:
+				v.append("a Prince targets seat " + str(tgt) + ", any active seat including self")
+			elif main_ref._players[tgt].protected:
+				v.append("a Prince targets protected seat " + str(tgt))
+		Deck.CardType.Handmaid, Deck.CardType.Countess, Deck.CardType.Princess:
+			if tgt != -1:
+				v.append(Deck.card_names[int(played_t)] + " targets seat " + str(tgt)
+					+ ", this card is played on self")
+	if tgt >= 0 and tgt < main_ref._players.size() and not main_ref._players[tgt].is_active():
+		v.append("targets seat " + str(tgt) + ", who is out of the round")
+	if v.is_empty():
+		legal_checked += 1
+		return
+	for msg in v:
+		# one line per violation, the move included: the log is the evidence, the count is the gate
+		legal_violations.append("r" + str(cur_round) + " s" + str(seat) + " lvl"
+			+ str(int(main_ref._players[seat].ai_level)) + " " + str(m) + ": " + msg)
 
 
 func count_card_play(c: Card, seat: int) -> void:
@@ -452,8 +602,38 @@ func _arg(name: String, def: int) -> int:
 	return def
 
 
+func _arg_str(name: String, def: String) -> String:
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--" + name + "="):
+			return a.split("=", false, 1)[1]
+	return def
+
+
+# `--levels=1234`: digit i is seat i's AI level (1..5, see Player.AI_Level - 5 = the random mix).
+func _levels_from_spec(spec: String) -> Array[Player.AI_Level]:
+	var out: Array[Player.AI_Level] = []
+	for i in spec.length():
+		var d: int = int(spec[i])
+		assert(d >= 1 and d <= 5, "--levels digits are 1..5 (AI levels)")
+		out.append(Player.AI_Level.Level_1 + (d - 1))
+	return out
+
+
 func scores_str(main) -> String:
 	var s := ""
 	for p in main._players:
 		s += str(p.idx) + ":" + str(p.score) + " "
+	return s
+
+
+# How many joint moves each AI level in the spec made, as `L1=12 L2=7 ...`.
+func plays_by_level_str(spec: String) -> String:
+	var s := ""
+	var seen: Array[int] = []
+	for i in spec.length():
+		var lvl: int = int(spec[i])
+		if seen.has(lvl):
+			continue
+		seen.append(lvl)
+		s += "L" + str(lvl) + "=" + str(plays_by_level[lvl]) + " "
 	return s
