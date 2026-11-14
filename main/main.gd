@@ -222,7 +222,7 @@ func _new_round() -> void:
 				p.family = families[seat]
 				# the human seat's private stack, refilled for the new round (instant, no animation -
 				# render_family() renders nothing on an AI seat, his family stays invisible)
-				p.render_family()
+				p.render_family()  # the deal's render (step 23)
 				seat += 1
 			else:
 				p.clear_family()

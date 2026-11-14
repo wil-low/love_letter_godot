@@ -319,8 +319,9 @@ Step 4 pins the **deal table** of `Deck.prepare_noble()`; later steps append scr
 the same file (step 14 round end, step 15 Prince family/widow/elimination, step 16 elimination
 reveal + discard accounting, step 17 the continuous `_left` audit on the real deck, step 18 the
 seat's own family stack node, step 19 the family draw modal, step 20 the human's turn-start draw
-through that modal, step 21 the human's Prince redraw through that modal, step 31 joint move legality
-and L1 determinism). TEST A needs no
+through that modal, step 21 the human's Prince redraw through that modal, step 23 the family DEAL
+presentation (one slide sound for the whole family batch, zero flights for it, the stack rendered at
+the deal), step 31 joint move legality and L1 determinism). TEST A needs no
 `Main` scene - it drives the real `Deck` scene directly, 200 seeded deals per player count.
 
 | player count | burn / widow | first-hand | family per seat | main pile leftovers |
@@ -862,6 +863,87 @@ the step 22 number. The nested run frees the classic game first — its AI seats
 every turn, and left running they steal random numbers from the scripted fixtures (measured: 16 plays
 where the standalone suite measures 19).
 
+
+### TEST K — the family deal presentation: one sound, zero flights, the stack is a view (step 23)
+
+Step 23 is a property of the **deal**: the 5/4/3 private family cards per seat appear **in one instant**
+(fill `family` + `render_family()`), only the first-hand cards animate, and the whole family batch makes
+**one** slide sound, not one per card. Production's part of it is a seam: `Main.deal_sound()`, which
+every deal sound in the game now asks for (`deal_card`, `deal_from_family`, the batch), so the batch rule
+has exactly one place to live and a harness can count it. Counting the *sound* is not available: Godot 4.7
+rejects an override of `AudioStreamPlayer.play()` ("The method `play()` overrides a method from native
+class `AudioStreamPlayer`" is a warning treated as an error), so `CountingMain.deal_sound()` counts the
+call and calls `super()` — the real `AudioStreamPlayer` plays, at the real call sites, on the real path.
+Counting the calls is not a proxy for the rule, it **is** the rule: `play()` RESTARTS its stream, so a
+per-card batch is `family_size × player_count` plays of one stream in one frame, each cutting the
+previous off — a stutter. **84 checks in four fixtures, K1..K4, every fixture run TWICE** (168 checks in
+the log; the batch rule is measured on the real deck, whose draws differ round to round, so a promise
+stated on two decks is not one lucky sample). Suite 879 → **1047 PASS / 0 FAIL / 0 script errors**, exit 0.
+
+**`Animator._speed = 0` is not a stop-the-clock switch** (the suite's convention: durations are
+multiplied by `_speed`, so at 0 a whole round collapses into frames). The todo's acceptance test is a wall
+clock at `_speed = 2` and `_speed = 5`, so K4 measures `Time.get_ticks_msec()` from `_new_round()` entry
+to the round's first turn, at 2p/3p/4p, with the **classic deal of the same seat count and speed as the
+control** — the control is what turns "1013 ms" into "the family batch added 0 ms".
+
+Counters added to `tests/counting_main.gd`: `deal_sounds` (seam calls); per round
+`(audio, pile_draws, family_draws)`; per deal first-hand flights and the **peak number of simultaneous
+card flights** (a counter around `deal_card`/`deal_from_family`, never a frame sample — at `_speed = 0` a
+frame can contain an entire deal); per-round setup ms; per deal main pile, `sum(_left)` and each seat's
+family size and stack node count. `set_inactive()` now marks the whole elimination window on
+`reveal_depth`, so the per-frame stack mirror *and* the `_left` audit skip a window whose transients are
+steps 16/19's property (an out seat with 3 family cards and no nodes is a legitimate frame inside an
+elimination, before `reveal_family()` runs).
+
+- **K1 — the real deck, 2p/3p/4p, 2 full rounds each** — the burn is applied **at the deal** (widow
+  3/1/0 cards and the widow node visible iff burn > 0), the family batch leaves the main pile at
+  **1 / 0 / 0** (`16 − burn − count × (1 + family)`), `sum(_left) == 16`, every live seat holds exactly 1
+  hand card and exactly `NOBLE_FAMILY_SIZE[count]` family cards. The deal animates **THE HAND**: `count`
+  flights = the `count` first-hand cards, and the **peak number of simultaneous flights is 1**. The deal
+  makes **`count + 1`** slide sounds = the first-hand flights + **1 for the whole 10/12/12-card batch**,
+  and in EVERY round of the game the round's sound count IS its animation count + 1:
+  `audio == first_hand + pile_draws + family_draws + 1` (measured 4p `[13 = 4+0+8+1] [12 = 4+0+7+1]`, 3p
+  `[10 = 3+0+6+1] [15 = 3+0+11+1]`, 2p `[10 = 2+0+7+1] [8 = 2+0+5+1]`), with 12/17/15 family draws in
+  those rounds — the batch sound is not the family's only sound, it is the deal's one extra beat. Every
+  seat of this fixture is an AI seat, so at the deal **no** seat renders a stack: the batch is data.
+- **K2 — the deal the player SEES (2p, seat 0 human, the Countess in his family)** — 16 = 3 burned + 2
+  first-hand + 10 family + 1 in the pile, so the batch is dealt **after** the burn, not from the undealt
+  tail; the widow IS the supply's first 3 cards and the families start at slot 5. Seat 0's stack is his
+  own `$Family` child and materializes all 5 family cards **at the deal**: 5 nodes == 5 family cards, in
+  as-dealt order (never sorted), cascade `x = 0, 9, 18, 27, 36` (9 px steps leave 2 px slivers on 11 px
+  cards), every node face-up, fully inside the 84×48 viewport, 0 `input_event` connections, 0 cards in it;
+  the AI seat's 5-card family makes **0 nodes** (the batch renders for the human only). Then the modal's
+  tap pops `family[2]`: family 4, hand 2, and the stack is 4 nodes **in the same frame** the pop happened;
+  the drawn Countess is NOT out of play (`_left` Countess 1 of 1 — `deal_from_family` decrements nothing).
+- **K3 — the stack is a VIEW, checked EVERY frame** (`_watch_family_view()`, 4 seats per frame; frames
+  inside a `discard()`/reveal window are SAMPLED — the reveal is exactly what the watcher must see — and
+  NOT judged). The contract: a human seat renders his family, an out seat renders what he left with, a
+  live AI seat renders nothing, **in the frame the data changed**. **K3a** = a real all-AI 4p game with one
+  Guard kill: 65 sampled frames, **0 violating frames**, 3 frames of the out seat's revealed 3-card stack,
+  150 frames of live AI families with 0 nodes, 18 frames in which the total family count changed (draws,
+  the elimination clear, the +12-card re-deal) and every one of them matched, 9 frames skipped.
+  **K3b** = a live human game with the modal rails (4 openings, 4 taps, 12 plays, a MID-EFFECT Prince draw,
+  the round end, the re-deal): 0 violating frames, 42 frames of the human's stack matching a non-empty
+  family, 201 frames of 3 AI seats with families and no pixels, 16 changed-total frames all matching, and
+  each of the 4 modal draws re-rendered the stack in the frame it shrank.
+- **K4 — the deal is timed on the wall clock, classic as the control** — `_speed = 2`: 4p **1013 ms**
+  (second pass 992), 3p **758 ms**, 2p **503 ms** = `first_hand × 0.5 / speed`; `_speed = 5`: 4p
+  **407 ms** (the todo's "under ~1 s at 4p"); the CLASSIC control at the same speed and seat count:
+  **1013 ms vs 1013 ms** at 4p and **503 ms vs 503 ms** at 2p — the family batch adds 0 ms of animation.
+  The timing is measured at 2 speeds so a change in `Animator`'s divisor cannot hide behind one number.
+
+| sabotage (main.gd) | measured FAILs | where |
+|---|---|---|
+| the batch sound played once per family DEAL (per seat) instead of once per round | **14** | K1 2p/3p/4p deal sound (`count + 1` → `2 × count`), the per-round identity in every round of every fixture, K2 |
+| the family batch made NO sound at all | **14** | the same checks, the other direction (`audio == animation count`, the identity's `+1` missing) |
+| the family batch ANIMATED (one 0.4 s beat per family card, at `_speed > 1`) | **6** | K4 only: 4p 1820 ms vs 1013, 3p 1365 vs 750, 2p 910 vs 502 + the classic-control identity. **0** checks notice it in any per-round snapshot |
+| the deal fills the family data and forgets `render_family()` | **10** | K2 (0 nodes vs 5 family cards, the as-dealt order, the cascade) + K3b (the human's frames; the draw that shrinks a stack that was never built) |
+
+The `_speed > 1` condition in the third sabotage matters for the harness, not for the game: the suite's
+normal fixtures run at `_speed = 0`, so an unconditional 0.4 s beat per family card makes the suite take
+over 300 s (measured: killed at the 300 s timeout with 63 checks in). The timing fixtures are the only
+ones that must pay a real timer — which is exactly why step 23 is gated by K4's wall clock and not by a
+frame count.
 
 ## tests/noble_family_smoke.tscn — Noble Family variant, whole games on the AI (steps 7, 11, 14)
 
