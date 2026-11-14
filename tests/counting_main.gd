@@ -113,6 +113,56 @@ var _round_open: bool = false  # the running round has a baseline
 var discard_depth: int = 0  # >0: a discard() animation is in flight (transient double view)
 var reveal_depth: int = 0  # >0: revealed family nodes exist next to the family data
 
+# ─── Step 23: the family deal presentation ──────────────────────────────────────────────────
+# What step 23 promises is a property of the DEAL, so it is recorded from inside the deal:
+#
+# 1. ONE slide sound for the whole family batch (`Main.deal_sound()` in `_new_round()`, not one per
+#    family card). Counting it needs a seam, and the seam production already has: EVERY deal sound in
+#    the game is asked for through `Main.deal_sound()`, so the harness overrides THAT and counts the
+#    calls, then calls `super()` - the real `AudioStreamPlayer` plays, at the real call sites, on the
+#    real path. (A `play()` override on an AudioStreamPlayer subclass is not an option: Godot 4.7
+#    rejects it - "The method play() overrides a method from native class AudioStreamPlayer" is a
+#    warning treated as an error - so the only way to count a sound is to count the call that asks for
+#    it, which is exactly what a batch rule is about.)
+#    Per round: `sounds == first_hand + pile_draws + family_draws + family_batch`, and the variant's
+#    batch term is EXACTLY 1 (the classic branch has no families, so its batch term is 0 - the pair is
+#    what pins "one sound for the batch": a per-card batch would make the term 12).
+# 2. How long the deal takes, at the speed the game is played at. `_new_round()` IS the deal and the
+#    round's FIRST turn is the first thing that runs after it settled, so the gap between those two
+#    stamps is what a player waits through. The noble deal animates ONLY the first-hand cards (the
+#    families are data + a stack, materialized in one instant), so the noble gap equals the classic
+#    gap: the family batch adds 0 ms of animation. Measured at `_speed = 2` (the setting menu calls
+#    speed 1) and at `_speed = 5`, plus the classic control at the same speed and seat count.
+# 3. How many card flights ever run at once. Every deal/draw path animates one card at a time
+#    (`deal_card`, `deal_from_family`), so the peak is 1; an animated family deal would show 5/4/3.
+#    It is a counter around `super()`, not a frame sampler: at `_speed = 0` a whole round can resolve
+#    inside ONE frame, so a per-frame peak reads 0 (the progress-notes lesson).
+var deal_sounds: int = 0  # every `deal_sound()` call of the game (the batch term is the part of it no card flight asked for)
+var setup_ms: Array[int] = []  # per round: ms from `_new_round()` entry to that round's FIRST turn
+var deal_states: Array = []  # per round: what the DEAL left behind, sampled at that round's FIRST turn
+var round_deal_stats: Array = []  # per round end: {audio, first_hand, pile_draws, family_draws, batch, setup_ms}
+var inflight_max: int = 0  # the most card flights that ever ran at the same time
+var _setup_t0: int = -1
+var _inflight: int = 0
+var _base_audio: int = 0  # the counters as `_new_round()` found them (a round's own deal is INSIDE
+var _base_fh: int = 0     # its own delta, so the base is taken BEFORE the deal, at `_new_round()` entry)
+var _base_pile: int = 0
+var _base_fam: int = 0
+
+
+# Todo step 23: the deal's sound, counted at the seam production asks for it through. `super()` runs,
+# so the sound itself is the production one, played at the production call sites.
+func deal_sound() -> void:
+	deal_sounds += 1
+	super()
+
+
+func _family_draw_sum() -> int:
+	var n: int = 0
+	for i in family_draws.size():
+		n += int(family_draws[i])
+	return n
+
 
 func _copy_ints(src) -> Array[int]:
 	# elementwise copy: the source is often a Variant Array read from a snapshot
@@ -217,7 +267,28 @@ func audit_left(tag: String) -> void:
 # round (the live `_deck._left` is already re-dealt by then): the supply at the round's deal, the
 # cumulative discard counters at the round end, and whether a discard/reveal animation made the
 # moment transient (then the harness skips the accounting checks for that round and counts it).
+# The step 23 deal record: the deltas of this round's counters, measured against the stamps
+# `_new_round()` took at its own entry (so the round's OWN deal - the animated first-hand cards, the
+# family batch sound and every family draw of the round - is inside the delta), plus the wall-clock of
+# the deal that opened this round.
+func _record_deal_stats() -> void:
+	var fam_sum: int = _family_draw_sum()
+	var audio: int = deal_sounds - _base_audio
+	var fh: int = first_hand_deals - _base_fh
+	var pile: int = pile_draws - _base_pile
+	var fam: int = fam_sum - _base_fam
+	round_deal_stats.append({
+		"audio": audio,
+		"first_hand": fh,
+		"pile_draws": pile,
+		"family_draws": fam,
+		"batch": audio - fh - pile - fam,  # the sound(s) the deal made that NO card animation asked for
+		"setup_ms": setup_ms[setup_ms.size() - 1] if not setup_ms.is_empty() else -1,
+	})
+
+
 func _record_round_end() -> void:
+	_record_deal_stats()
 	var left: Array[int] = _copy_ints(_deck._left)
 	var left_sum: int = 0
 	for v in left:
@@ -277,9 +348,17 @@ func reset_audit() -> void:
 func set_inactive(p: Player, reveal_hand: bool = true) -> void:
 	eliminations += 1
 	eliminated_seats.append(p.idx)
+	# Todo step 23: the elimination is a WINDOW, not an instant - `set_inactive` clears the seat's face,
+	# then reveals the hand, then the family, then discards both, then clears the family data, and every
+	# one of those steps leaves a state a frame sampler could read as "the stack does not mirror the
+	# data" (an out seat with 3 family cards and no nodes exists for the frames before `reveal_family`
+	# runs). The per-frame mirror watcher skips these frames (step 16/19 own the reveal window); the
+	# `_left` audit already skips them for the same reason.
+	reveal_depth += 1
 	# must await: every caller in main.gd does `await set_inactive(...)`, and calling a coroutine
 	# without await would let the game run on past the elimination
 	await super(p, reveal_hand)
+	reveal_depth -= 1
 
 
 func reveal_out_family(p: Player, show: bool = true) -> Node2D:
@@ -409,6 +488,36 @@ func resolve_effect() -> void:
 	})
 
 
+# The state a round's DEAL leaves behind (todo step 23). The counters are cumulative on purpose: a
+# round's own deal is inside them, so the harness takes the delta against `round_deal_stats`.
+func _deal_snapshot() -> Dictionary:
+	var fams: Array = []
+	var stacks: Array = []
+	var hands: Array = []
+	for p in _players:
+		fams.append(p.family_size())
+		stacks.append(p.family_root.get_child_count())
+		hands.append(p.hand.get_child_count())
+	var left: Array = []
+	var left_sum: int = 0
+	for n in _deck._left.size():
+		left.append(_deck._left[n])
+		left_sum += int(_deck._left[n])
+	return {
+		"fams": fams,
+		"stacks": stacks,
+		"hands": hands,
+		"main_pile": _deck._cards.size(),
+		"widow": _deck._widow_cards.size(),
+		"widow_visible": bool(_deck._widow.visible),
+		"left": left,
+		"left_sum": left_sum,
+		"audio": deal_sounds,
+		"first_hand": first_hand_deals,
+		"setup_ms": setup_ms[setup_ms.size() - 1] if not setup_ms.is_empty() else -1,
+	}
+
+
 func _snapshot() -> Dictionary:
 	var fams: Array = []
 	var hands: Array = []
@@ -456,7 +565,22 @@ func deal_card(p: Player, allow_widow: bool = false,
 		pile_draws += 1  # this one pops the main pile / the widow
 	else:
 		first_hand_deals += 1
+	_inflight += 1
+	inflight_max = maxi(inflight_max, _inflight)
 	await super(p, allow_widow, card_type)
+	_inflight -= 1
+
+
+# Todo step 23: the round's deal. The wall-clock stamps and the per-round counter bases are taken at
+# its ENTRY (before `_build_deck()`/`prepare_noble()` and before the animated first-hand cards), the
+# deal is measured around `super()`, and the flight peak is a counter, not a frame sample.
+func _new_round() -> void:
+	_setup_t0 = Time.get_ticks_msec()
+	_base_audio = deal_sounds
+	_base_fh = first_hand_deals
+	_base_pile = pile_draws
+	_base_fam = _family_draw_sum()
+	await super()
 
 
 # Turn counting, so a harness can say how long a round was: `new_turn()` is called once per turn,
@@ -465,6 +589,16 @@ func deal_card(p: Player, allow_widow: bool = false,
 func new_turn():
 	if _round_start < 0:
 		_round_start = _cur_player
+		if _setup_t0 >= 0:
+			# the deal of this round, measured on the wall clock: `_new_round()` entry -> its FIRST turn
+			setup_ms.append(Time.get_ticks_msec() - _setup_t0)
+			_setup_t0 = -1
+		# The deal as the round's first seat sees it before it draws anything: family sizes, stack node
+		# counts, the piles the burn left behind, `_left`, and the deal's sound count. Sampled HERE
+		# (`new_turn()` runs at the tail of `_new_round()`, before the seat draws or plays) because at
+		# `_speed = 0` the whole deal + the first turn can resolve inside one frame, so a harness poll
+		# cannot catch the dealt state from outside.
+		deal_states.append(_deal_snapshot())
 	_turn_counts[_cur_player] += 1
 	if not _round_open:
 		# the FIRST turn of a round: `_new_round()` has dealt the supply and discarded the previous
@@ -488,10 +622,13 @@ func _begin_play_selection(p: Player) -> void:
 func deal_from_family(p: Player, family_idx: int) -> void:
 	family_draws[p.idx] += 1
 	family_draw_idx[p.idx].append(family_idx)
+	_inflight += 1
+	inflight_max = maxi(inflight_max, _inflight)
 	# the index too: a Noble Family move names the family card it draws (step 11), so a harness can
 	# compare the indices a seat's played moves named with the indices actually drawn. A seat's
 	# family reveal on elimination is `reveal_family`, which draws every remaining card in order
 	await super(p, family_idx)
+	_inflight -= 1
 
 
 # The move/draw pairing, checked INSIDE the play chain (`Main` calls its own method, so the

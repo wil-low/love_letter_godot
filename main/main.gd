@@ -226,6 +226,16 @@ func _new_round() -> void:
 				seat += 1
 			else:
 				p.clear_family()
+		# Todo step 23: the family batch gets ONE slide sound for the WHOLE batch, not one per card.
+		# The families are not animated - 5/4/3 cards per seat appear as data + a face-up stack in one
+		# instant - so a per-card sound would be `family_size * player_count` plays of the same stream
+		# in one frame (an AudioStreamPlayer restarts on every `play()`, so they would cancel each other
+		# and sound like a stutter). It plays AFTER the animated first-hand cards, so it is the last beat
+		# of the deal - the family batch is the sound that says "your family is there, your turn".
+		# It lands after them for the same reason: `play()` restarts the stream, so a batch sound played
+		# BEFORE the deals would be cut off by the first first-hand card.
+		if seat > 0:
+			deal_sound()
 	else:
 		_deck.prepare(_player_count)
 		for p in _players:
@@ -234,11 +244,22 @@ func _new_round() -> void:
 	new_turn()
 
 
+# Todo step 23: the deal's sound, asked for in ONE place. The rule it encodes is the batch rule: a
+# slide belongs to a deal EVENT, not to a card. A flying card asks for one (`deal_card`,
+# `deal_from_family`), and the Noble Family batch - 5/4/3 cards per seat appearing as data plus a
+# face-up stack in a single instant - asks for exactly ONE for the whole batch, because `play()`
+# restarts its stream, so a slide per family card in one frame would cut itself off into a stutter.
+# Every deal sound in the game goes through here, which is also what makes "one sound for the batch"
+# a countable property (see `CountingMain.deal_sound`).
+func deal_sound() -> void:
+	_deal_audio_player.play()
+
+
 # When `card_type` is given, deal that exact card instead of popping the top of the deck:
 # the Noble Family first-hand cards are pre-dealt by Deck.prepare_noble(). Nothing is
 # popped and `_left` is untouched - a first-hand card leaves the supply only when it is played.
 func deal_card(p: Player, allow_widow: bool = false, card_type: Deck.CardType = Deck.CardType.Unknown) -> void:
-	_deal_audio_player.play()
+	deal_sound()
 	var src: Sprite2D
 	if card_type == Deck.CardType.Unknown:
 		var result := _deck.pop(allow_widow)
@@ -277,7 +298,7 @@ func deal_from_family(p: Player, family_idx: int) -> void:
 	if _drawing:
 		push_warning("deal_from_family: seat " + str(p.idx) + " draws family[" + str(family_idx)
 			+ "] while a family modal is open - the seat that is choosing is the only one allowed to draw")
-	_deal_audio_player.play()
+	deal_sound()
 	var card_type: Deck.CardType = p.pop_family(family_idx)
 	# the stack is a view of the data, so it shrinks with the pop - before the card starts to fly,
 	# so what is left in the stack is exactly what the seat still holds

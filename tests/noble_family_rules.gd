@@ -269,6 +269,7 @@ func _ready() -> void:
 	await _test_human_modal()
 	await _test_prince_human_modal()
 	await _test_modal_rails()
+	await _test_deal_presentation()
 	await await_frames(1)
 
 	print("\n==========================")
@@ -4287,3 +4288,431 @@ func _test_rails_exit_paths() -> void:
 	_check_left_audit(main, tag + " new round")
 	main.queue_free()
 	await await_frames(2)
+
+
+# ----------------------------------------------------------------------------------------
+# TEST K (todo step 23): the family DEAL presentation
+#
+# Step 23's Do line is four promises, and every one of them is a property of the DEAL, so every one
+# is measured from inside it, on the production deal path - the `CountingMain` deal record
+# (`deal_states`, `round_deal_stats`, `setup_ms`, `inflight_max`, `deal_audio`):
+#
+#   1. the first-hand card stays ANIMATED, exactly one animated card per live seat, and the deal's
+#      peak of simultaneous flights is 1 - a family batch in flight would make it 5/4/3 (K1);
+#   2. the families are dealt INSTANTLY - data + a face-up stack, no card flies - so the variant's
+#      deal costs the CLASSIC deal's wall-clock time, at the speeds the menu offers (K4);
+#   3. ONE slide sound for the family BATCH, not one per family card - the audio identity
+#      `audio == first_hand + pile_draws + family_draws + 1` per round (K1);
+#   4. `render_family()` after EVERY family change - turn-start draw, mid-effect draw, elimination
+#      reveal + clear, round re-deal - pinned PER FRAME (K3), because a missed re-render is invisible
+#      to a per-round snapshot: the next change re-renders and repairs the nodes. Only a frame-by-frame
+#      comparison of the stack against the family data can see it.
+# ----------------------------------------------------------------------------------------
+const NOBLE_MAIN_LEFT: Array[int] = [0, 0, 1, 0, 0]  # index = player count: 16 - burn - count*(1+family)
+
+
+# A real-deck fixture: all seats AI, `noble_family` set, CountingMain installed.
+func _deal_main(count: int, noble: bool):
+	var main = MainScene.instantiate()
+	var card_scene: PackedScene = main.card_scene  # `set_script` resets exported vars: save/restore
+	main.set_script(load(CountingMainScript))
+	main.card_scene = card_scene
+	add_child(main)
+	main.noble_family = noble
+	for i in 4:
+		main._players[i].ai_level = Player.AI_Level.Level_1 if i < count else Player.AI_Level.Disabled
+	return main
+
+
+func _test_deal_presentation() -> void:
+	print("\n########## TEST K: the family DEAL presentation (todo step 23) ##########")
+	for count: int in [4, 3, 2]:
+		print("--- TEST K1 (real deck, " + str(count)
+			+ "p: the deal animates the HAND, the family batch is ONE sound, the flight peak is 1) ---")
+		await _test_deal_batch(count)
+	print("--- TEST K2 (2p human seat: the burn is applied AT THE DEAL, the whole 5-card stack at once) ---")
+	await _test_deal_burn_stack()
+	print("--- TEST K3 (the stack mirrors the family data EVERY frame: draw, reveal, clear, re-deal) ---")
+	await _test_family_view_ai()
+	await _test_family_view_human()
+	print("--- TEST K4 (the deal is timed on the wall clock at _speed 2 and 5, classic as the control) ---")
+	await _test_deal_timing()
+	for count: int in [4, 3, 2]:
+		await _test_deal_batch(count)
+	await _test_deal_burn_stack()
+	await _test_family_view_ai()
+	await _test_family_view_human()
+	await _test_deal_timing()
+
+
+# ---- K1: the real deck at every seat count - the deal table, the piles, the batch sound, the peak ----
+func _test_deal_batch(count: int) -> void:
+	var tag := "K1 " + str(count) + "p"
+	var fam: int = Deck.NOBLE_FAMILY_SIZE[count]
+	var burn: int = Deck.NOBLE_BURN[count]
+	var main = _deal_main(count, true)
+	await main.init_players(SEED)
+	await await_until(func() -> bool: return main.round_deal_stats.size() >= 2, 40000)
+	check(main.round_deal_stats.size() >= 2 and main.deal_states.size() >= 1, tag + ": 2 full rounds of"
+		+ " the REAL deck reached on real timers (" + str(main.round_deal_stats.size()) + " round ends,"
+		+ " " + str(main.deal_states.size()) + " deals recorded, " + str(main.effect_log.size())
+		+ " plays, " + str(main.eliminations) + " eliminations) - the batch sound, the deal table and"
+		+ " the flight peak are measured on the production deal, not on a scripted supply")
+	if main.deal_states.is_empty():
+		check(false, tag + ": the deal was recorded at the round's first turn")
+		main.queue_free()
+		await await_frames(2)
+		return
+	var d: Dictionary = main.deal_states[0]
+	var fams: Array = d["fams"]
+	var stacks: Array = d["stacks"]
+	var hands: Array = d["hands"]
+	var want_fams := true
+	var want_hands := true
+	var want_stacks := true
+	for i in 4:
+		want_fams = want_fams and int(fams[i]) == (fam if i < count else 0)
+		want_hands = want_hands and int(hands[i]) == (1 if i < count else 0)
+		want_stacks = want_stacks and int(stacks[i]) == 0
+	check(want_fams, tag + ": the deal put exactly " + str(fam) + " family cards in every live seat ("
+		+ str(fams) + ") - NOBLE_FAMILY_SIZE[" + str(count) + "] = " + str(fam) + ", dealt round-robin")
+	check(want_hands, tag + ": every live seat holds EXACTLY 1 hand card at the deal (" + str(hands)
+		+ ") - the first-hand card, dealt by the ANIMATED `deal_card`, and it is not part of the family")
+	check(want_stacks, tag + ": at the deal NO seat renders a family stack (" + str(stacks) + ") - every"
+		+ " seat of this fixture is an AI seat: the deal makes pixels for the human's own family and for"
+		+ " nobody else's, because the family is PRIVATE (step 15)")
+	check(int(d["widow"]) == burn and bool(d["widow_visible"]) == (burn > 0), tag + ": the burn is"
+		+ " applied AT THE DEAL - widow " + str(d["widow"]) + " cards for the " + str(burn)
+		+ " the " + str(count) + "p deal burns, and the widow node is visible "
+		+ str(bool(d["widow_visible"])) + " exactly when it holds cards (4p burns nothing, so 4p has no"
+		+ " widow to see)")
+	check(int(d["main_pile"]) == NOBLE_MAIN_LEFT[count], tag + ": the main pile keeps "
+		+ str(d["main_pile"]) + " cards, expected " + str(NOBLE_MAIN_LEFT[count])
+		+ " = 16 - " + str(burn) + " burned - " + str(count) + " x (1 first-hand + " + str(fam)
+		+ " family) - the burn, the first-hand cards and the family batch all leave the MAIN PILE (step 3)")
+	check(int(d["left_sum"]) == TOTAL_CARDS, tag + ": sum(_left) == " + str(d["left_sum"])
+		+ " at the deal - the deal takes nothing out of PLAY: 16 cards are dealt and none is out of play"
+		+ " yet (step 4, step 19)")
+	var audio: int = int(d["audio"])
+	var fh: int = int(d["first_hand"])
+	check(fh == count, tag + ": " + str(fh) + " animated card flights at the deal = the " + str(count)
+		+ " first-hand cards - the deal animates THE HAND, not the family")
+	check(audio == count + 1, tag + ": the deal made " + str(audio) + " slide sounds = " + str(count)
+		+ " first-hand flights + 1 for the WHOLE " + str(count * fam)
+		+ "-card family batch - ONE `deal_sound()` per round, not one per family card. A per-card deal"
+		+ " would call it " + str(count * fam) + " times in ONE frame: AudioStreamPlayer.play() RESTARTS"
+		+ " its stream, so the batch would stutter and cut itself off, which is exactly why the family"
+		+ " batch is not animated card by card")
+	var rows_ok := true
+	var rows := ""
+	for r in main.round_deal_stats:
+		var st: Dictionary = r
+		var cards: int = int(st["first_hand"]) + int(st["pile_draws"]) + int(st["family_draws"])
+		rows_ok = rows_ok and int(st["audio"]) == cards + 1 and int(st["batch"]) == 1 \
+			and int(st["first_hand"]) == count
+		rows += " [audio " + str(st["audio"]) + " = " + str(st["first_hand"]) + " first-hand +"
+		rows += str(st["pile_draws"]) + " pile + " + str(st["family_draws"]) + " family +"
+		rows += str(st["batch"]) + " batch]"
+	check(rows_ok, tag + ": in BOTH rounds the round's sound count IS its animation count + 1:" + rows
+		+ " - every family DRAW (a turn start, a Prince redraw) flies its own card and makes its own"
+		+ " sound, the batch the deal materialized in one instant makes one, and nothing else is audible."
+		+ " Counted through the seam production asks for the sound (`Main.deal_sound()`), so a 12-card"
+		+ " per-card batch would read 13 sounds, not 5")
+	check(int(main.inflight_max) == 1, tag + ": the most card flights that ever ran at the same time is"
+		+ " " + str(main.inflight_max) + ", measured with a counter around every `deal_card`/"
+		+ "`deal_from_family` and NEVER sampled per frame (at `_speed = 0` a whole round resolves inside"
+		+ " one frame, so a frame sampler reads 0): the family batch never flies a card, and an animated"
+		+ " family deal would put " + str(count * fam) + " flights in this peak")
+	var fam_sum: int = 0
+	for r in main.round_deal_stats:
+		fam_sum += int((r as Dictionary)["family_draws"])
+	check(fam_sum > 0, tag + ": " + str(fam_sum) + " family draws in the 2 rounds - the batch sound is"
+		+ " NOT the family's only sound: the family cards the batch made invisible-for-free are drawn one"
+		+ " card at a time, each with its own flight and its own slide")
+	main.queue_free()
+	await await_frames(2)
+
+
+# ---- K2 (2p, human seat): the burn, the piles and the WHOLE 5-card stack at the deal ----
+func _test_deal_burn_stack() -> void:
+	var tag := "K2"
+	var main = _scripted_main_human(2, NOBLE_2P_STACK, NOBLE_2P_STACK_LEFT)
+	await main.init_players(SEED)
+	await await_until(func() -> bool: return main.deal_states.size() >= 1, 40000)
+	if main.deal_states.is_empty():
+		check(false, tag + ": the 2p deal was recorded")
+		main.queue_free()
+		await await_frames(2)
+		return
+	var d: Dictionary = main.deal_states[0]
+	var p0 = main._players[0]
+	var p1 = main._players[1]
+	check(int(d["fams"][0]) == 5 and int(d["fams"][1]) == 5, tag + ": 2p dealt a FULL 5-card family to"
+		+ " each seat WITH THE BURN APPLIED - 16 = 3 burned + 2 first-hand + 10 family + 1 left in the"
+		+ " pile, so the family batch is dealt AFTER the burn, not from the undealt tail")
+	check(int(d["widow"]) == 3 and bool(d["widow_visible"]) and int(d["main_pile"]) == 1, tag
+		+ ": at the deal the widow holds the 3 burned cards and is VISIBLE (widow " + str(d["widow"])
+		+ ", main pile " + str(d["main_pile"]) + ") - 2p burns 3 into the widow pile (the Prince fallback)"
+		+ " and keeps 1 card in the main pile")
+	var widow_names: Array = []
+	for t in main._deck._widow_cards:
+		widow_names.append(Deck.card_names[int(t)].strip_edges())
+	check(widow_names == ["Guard", "Guard", "Guard"], tag + ": the widow IS the supply's FIRST 3 cards ("
+		+ str(widow_names) + ") - burn = pop_front() x 3, taken before any seat is dealt, and the seats'"
+		+ " families start at slot 5")
+	check(int(d["stacks"][0]) == 5, tag + ": the human's stack materialized ALL 5 family cards AT THE"
+		+ " DEAL (" + str(d["stacks"][0]) + " nodes, family " + str(int(d["fams"][0]))
+		+ ") - the family is dealt in ONE instant: no card flies, and the stack is what makes the batch"
+		+ " visible the moment the round opens, before the seat draws a single card")
+	check(int(d["stacks"][1]) == 0 and int(d["fams"][1]) == 5, tag + ": the AI seat's full 5-card family"
+		+ " makes 0 nodes - `render_family()` is called for the human only at the deal")
+	_check_stack_p(tag + " at the deal", p0, ["Guard", "Guard", "Guard", "Guard", "Countess"],
+		[0, 9, 18, 27, 36])
+	check(int(d["left_sum"]) == TOTAL_CARDS, tag + ": sum(_left) == " + str(d["left_sum"])
+		+ " at the deal - the burn, the first-hand cards and the 10-card family batch decremented nothing")
+	check(int(d["audio"]) == 3, tag + ": the 2p deal made 3 slide sounds = 2 animated first-hand cards +"
+		+ " 1 for the 10-card family batch - one sound for the batch at 2p too, where the batch is the"
+		+ " biggest of the game (5 + 5 cards)")
+	# the first turn-start draw: the row shrinks in the SAME frame the family card is popped
+	await _human_draw(main, 2)
+	# the tap commits the draw; the drawn card lands in the hand when its flight ends
+	var landed: int = 0
+	while landed < 300 and not (int(p0.family_size()) == 4 and int(p0.hand.get_child_count()) == 2):
+		await get_tree().process_frame
+		landed += 1
+	check(int(p0.family_size()) == 4 and int(p0.hand.get_child_count()) == 2, tag + ": the turn-start"
+		+ " draw popped family[2] and built the 2-card hand (family " + str(p0.family_size())
+		+ ", hand " + str(int(p0.hand.get_child_count())) + ", settled in " + str(landed)
+		+ " frames) - step 12's pop, asked for by step 21's modal")
+	_check_stack_p(tag + " after the turn-start draw", p0, ["Guard", "Guard", "Guard", "Countess"],
+		[0, 9, 18, 27])
+	check(int(main._deck._left[int(Deck.CardType.Countess)]) == 1, tag + ": the drawn Countess is NOT out"
+		+ " of play (_left Countess = " + str(main._deck._left[int(Deck.CardType.Countess)])
+		+ " of 1) - `deal_from_family` decrements nothing (step 19): a family draw is a private hand, not"
+		+ " a play, and no `play`/`discard` path runs on it")
+	main.queue_free()
+	await await_frames(2)
+
+
+# ---- K3: the stack is a MIRROR of the family data in every frame ----
+func _view_watcher() -> Dictionary:
+	return {"frames": 0, "skips": 0, "changes": 0, "private": 0, "human": 0, "reveal": 0,
+		"violations": [], "prev": -1, "stop": false}
+
+
+# `render_family()` after EVERY family change, pinned frame by frame. A missed call is INVISIBLE to a
+# per-round snapshot - the NEXT change re-renders and repairs the nodes - so the only way to see it is
+# to compare, on every frame, the nodes a seat shows with the family data it owns:
+#
+#   want = family size   for the human seat (his stack IS his family, step 15)
+#   want = family size   for an OUT seat (the elimination reveal, step 16)
+#   want = 0            for a live AI seat (the family is private, step 15)
+#
+# Frames with a `discard()` in flight are SKIPPED, not counted: `discard()` materializes nodes next to
+# the data for a few frames (the progress-notes rule: hand/family cards at `discard()` time), and step
+# 16/19 pin that window - step 23 must not fight it. A whole elimination window (`set_inactive`: the
+# seat's face is cleared, THEN hand and family are revealed, THEN discarded, THEN the data is cleared)
+# is skipped for the same reason - an out seat with 3 family cards and no nodes is a legitimate frame
+# inside it. Frames with the family modal OPEN are SAMPLED: the panel's row cards live in the
+# FamilySelector node, so an open panel must not touch the stack.
+func _watch_family_view(main, w) -> void:
+	while int(w["frames"]) < 40000 and not bool(w["stop"]):
+		w["frames"] = int(w["frames"]) + 1
+		var window: bool = int(main.discard_depth) > 0 or int(main.reveal_depth) > 0
+		if window:
+			# a discard/reveal window: `discard()` materializes nodes next to the data and an elimination
+			# reveals hand+family, discards them and clears the data. Frames INSIDE a window are SAMPLED
+			# (the reveal is exactly what this watcher must see) but they are NOT judged: their transient
+			# states are step 16/19's property, not step 23's.
+			w["skips"] = int(w["skips"]) + 1
+		var total: int = 0
+		for i in 4:
+			var p: Player = main._players[i]
+			var data: int = p.family_size()
+			var nodes: int = p.family_root.get_child_count()
+			total += data
+			var want: int = data if (p.is_human() or not p.is_active()) else 0
+			if nodes != want and not window:
+				w["violations"].append("frame " + str(w["frames"]) + " seat " + str(i) + ": " + str(nodes)
+					+ " nodes vs " + str(data) + " family cards, want " + str(want) + " (active "
+					+ str(p.is_active()) + ", human " + str(p.is_human()) + ", family " + family_str(p)
+					+ ")")
+			if data > 0 and nodes == 0 and p.is_active() and not p.is_human():
+				w["private"] = int(w["private"]) + 1
+			if data > 0 and nodes == data and p.is_human():
+				w["human"] = int(w["human"]) + 1
+			if data > 0 and nodes == data and not p.is_active():
+				w["reveal"] = int(w["reveal"]) + 1
+		if int(w["prev"]) >= 0 and total != int(w["prev"]):
+			w["changes"] = int(w["changes"]) + 1
+		w["prev"] = total
+		await get_tree().process_frame
+	w["stop"] = true
+
+
+# K3a: an all-AI game with ONE elimination - the reveal, the clear, the round end and the re-deal,
+# every one of them a `render_family()` call site, all sampled frame by frame.
+func _test_family_view_ai() -> void:
+	var tag := "K3a"
+	var main = _scripted_main(4, NOBLE_4P_GUARD_KILL, NOBLE_4P_GUARD_KILL_LEFT)
+	var wv = _view_watcher()
+	_watch_family_view(main, wv)
+	await _settle_deal(main)
+	var settle: int = 0
+	while main.effect_log.size() < 1 and settle < 400:
+		await get_tree().process_frame
+		settle += 1
+	var kill: int = int(main.eliminations)
+	settle = 0
+	while main.round_end_actor.size() < 1 and settle < 2000:
+		await get_tree().process_frame
+		settle += 1
+	var ends: int = int(main.round_end_actor.size())
+	settle = 0
+	while main.deal_states.size() < 2 and settle < 2000:
+		await get_tree().process_frame
+		settle += 1
+	var redeals: int = int(main.deal_states.size())
+	wv["stop"] = true
+	await await_frames(2)
+	check(int(main.eliminations) == kill and kill == 1 and main.round_end_actor.size() >= 1
+		and main.deal_states.size() >= 2, tag + ": the fixture ran play 1 (the Guard that kills seat 1),"
+		+ " the round end and the re-deal (" + str(main.effect_log.size()) + " plays, " + str(kill)
+		+ " elimination, " + str(ends) + " round end(s), " + str(redeals) + " deals recorded) - the"
+		+ " watcher sampled the elimination reveal and the round transition, not a settled board")
+	check(int(wv["frames"]) >= 40, tag + ": " + str(wv["frames"]) + " frames sampled in one real game"
+		+ " (skipped " + str(wv["skips"]) + " frames with a discard/reveal in flight) - the mirror"
+		+ " contract is checked EVERY frame, the only sampling that can see a missed `render_family()`")
+	check((wv["violations"] as Array).is_empty(), tag + ": in EVERY sampled frame each seat's family"
+		+ " stack equalled what it should (" + str(wv["violations"]) + ") - the human shows his"
+		+ " family, an out seat shows what he left, a live AI seat shows nothing, and every family change"
+		+ " (draw, reveal, clear, re-deal) left the stack matching in the SAME frame it changed the data:"
+		+ " `render_family()` runs at all four call sites, never one frame late")
+	check(int(wv["reveal"]) >= 1, tag + ": " + str(wv["reveal"]) + " frames show an OUT seat's stack"
+		+ " equal to the family he left with (seat 1: 3 cards, revealed face-up by `reveal_family`) -"
+		+ " step 23's render runs on the elimination path too: the reveal is SAMPLED (it happens inside"
+		+ " the elimination window, which is not judged) and its nodes leave with the data")
+	check(int(wv["private"]) >= 1, tag + ": " + str(wv["private"]) + " frames show a live AI seat with a"
+		+ " non-empty family and 0 nodes - the mirror is selective: it renders families, never leaks them")
+	check(int(wv["changes"]) >= 5, tag + ": the total family count changed on " + str(wv["changes"])
+		+ " frames (family draws, the elimination clear, the +12-card re-deal) and on EVERY one of them"
+		+ " the stacks matched: each change is a `render_family()` call site - step 12's turn-start draw,"
+		+ " step 21's modal draw, step 16's reveal, step 15's re-deal - and step 23 is the render that"
+		+ " must follow each one")
+	check(int(wv["skips"]) >= 1, tag + ": " + str(wv["skips"]) + " frames were skipped for a discard/reveal"
+		+ " in flight - the harness does not pretend the elimination's own window (reveal, discard, clear)"
+		+ " is a mirror violation (step 16/19 own it); skipping is what keeps this gate honest")
+	main.queue_free()
+	await await_frames(2)
+
+
+# K3b: the human seat, with the modal rails open - the stack under a panel, under mid-effect draws and
+# under a round transition. The taps come from `_watch_rails`, the same rails step 22 runs.
+func _test_family_view_human() -> void:
+	var tag := "K3b"
+	var main = _scripted_main_human(4, NOBLE_4P_RAILS, NOBLE_4P_RAILS_LEFT)
+	var w = _rail_watcher(NOBLE_4P_RAILS_TAPS)
+	var wv = _view_watcher()
+	await _rails_settle(main, w)
+	_watch_family_view(main, wv)
+	await _human_play_idx(main, 1, 0, Deck.CardType.Unknown, -1, tag + " r1 play 1")
+	await _human_play_idx(main, 0, 1, Deck.CardType.Unknown, -1, tag + " r1 play 2")
+	var settle: int = 0
+	while main.round_end_actor.size() < 1 and settle < 500:
+		await get_tree().process_frame
+		settle += 1
+	var ends: int = main.round_end_actor.size()
+	await main._on_round_over_pressed()
+	await _rails_redeal(main, w)
+	await _human_play_idx(main, 0, 1, Deck.CardType.Unknown, -1, tag + " r2 play 1")
+	var taps: int = int(w["tapped"].size())
+	var opens: int = int(w["openings"])
+	w["stop"] = true
+	wv["stop"] = true
+	await await_frames(2)
+	check(main.round_end_actor.size() >= 1 and int(w["openings"]) >= 3 and taps >= 3, tag + ": the"
+		+ " fixture ran 2 rounds with the modal rails live (" + str(ends) + " round end(s), " + str(opens)
+		+ " openings, " + str(taps) + " taps, " + str(main.effect_log.size()) + " plays) - the mirror is"
+		+ " sampled on the human seat DURING the panel's life, not after it closes")
+	check((wv["violations"] as Array).is_empty(), tag + ": in EVERY frame of a live human game -"
+		+ " including every frame a family modal is OPEN (" + str(opens) + " openings),"
+		+ " every turn-start tap, the mid-effect Prince draw inside a play chain, the round end and the"
+		+ " re-deal - seat 0's stack equalled his family data and the 3 AI seats showed nothing ("
+		+ str(wv["violations"]) + " of " + str(wv["frames"]) + " frames): the panel's row cards live in"
+		+ " the FamilySelector node, so an open modal never touches the stack, and a draw that pops a"
+		+ " family card re-renders the stack in the same frame")
+	check(int(wv["human"]) >= 15, tag + ": " + str(wv["human"]) + " frames show the human's stack"
+		+ " matching his family data with a NON-EMPTY family - the cascade the player reads is not a"
+		+ " snapshot of the deal, it is kept in step with every draw for the whole round")
+	check(int(wv["private"]) >= 1, tag + ": " + str(wv["private"]) + " frames show the 3 AI seats with"
+		+ " families and no pixels - a human game with the modal open stays a private game")
+	check(int(wv["changes"]) >= 5, tag + ": " + str(wv["changes"]) + " frames changed the family totals"
+		+ " (2 rounds of draws + the +12 re-deal) and every one of them matched - the row the modal shows"
+		+ " and the stack the seat shows are the SAME data, re-rendered at every change, which is what"
+		+ " step 22's `row == live family data` check relies on")
+	check(int(main.family_draws[0]) >= 3, tag + ": seat 0 drew " + str(main.family_draws[0])
+		+ " family cards through the modal in 2 rounds - each one re-rendered his stack, and the stack"
+		+ " matched in the frame it shrank (step 12's pop, step 21's tap, step 23's render)")
+	_check_no_leak(main, tag + " end")
+	main.queue_free()
+	await await_frames(2)
+
+
+# ---- K4: the deal is timed on the wall clock, at the speeds the menu offers, classic as the control --
+func _time_first_deal(count: int, noble: bool, speed: float) -> int:
+	var main = _deal_main(count, noble)
+	Animator._speed = speed
+	await main.init_players(SEED)
+	await await_until(func() -> bool: return main.setup_ms.size() >= 1, 60000)
+	var ms: int = int(main.setup_ms[0]) if main.setup_ms.size() > 0 else -1
+	Animator._speed = 0.0
+	main.queue_free()
+	await await_frames(2)
+	return ms
+
+
+func _test_deal_timing() -> void:
+	var tag := "K4"
+	var n4: int = 0
+	var c4: int = 0
+	var n2: int = 0
+	var c2: int = 0
+	var n3: int = 0
+	var n4f: int = 0
+	n4 = await _time_first_deal(4, true, 2.0)
+	c4 = await _time_first_deal(4, false, 2.0)
+	n2 = await _time_first_deal(2, true, 2.0)
+	c2 = await _time_first_deal(2, false, 2.0)
+	n3 = await _time_first_deal(3, true, 2.0)
+	n4f = await _time_first_deal(4, true, 5.0)
+	# The flight of ONE first-hand card is `Animator._move_duration(0.5)` = 0.5 / speed seconds, and the
+	# deal awaits them one after another, so the deal of `count` seats costs count x that at speed 2.
+	var want4: int = int(round(count_ms(4, 2.0)))
+	var want2: int = int(round(count_ms(2, 2.0)))
+	var want3: int = int(round(count_ms(3, 2.0)))
+	var want4f: int = int(round(count_ms(4, 5.0)))
+	check(n4 >= want4 - 100 and n4 <= want4 + 500, tag + ": the 4p variant deal took " + str(n4)
+		+ " ms at Animator._speed 2 (the menu speed labelled 3), expected ~" + str(want4) + " ms = 4"
+		+ " animated first-hand cards x 0.5/2 s - the deal IS the first-hand animation, on REAL timers,"
+		+ " measured `_new_round()` entry -> the round's FIRST turn")
+	check(n3 >= want3 - 100 and n3 <= want3 + 500, tag + ": the 3p deal took " + str(n3) + " ms at speed"
+		+ " 2, expected ~" + str(want3) + " ms = 3 first-hand flights (12 family cards, 0 extra flights)")
+	check(n2 >= want2 - 100 and n2 <= want2 + 500, tag + ": the 2p deal took " + str(n2)
+		+ " ms at speed 2, expected ~" + str(want2) + " ms = 2 first-hand flights (10 family cards, the"
+		+ " biggest batch of the game, 0 extra flights)")
+	check(n4f >= want4f - 100 and n4f <= want4f + 400, tag + ": the 4p deal took " + str(n4f)
+		+ " ms at speed 5, expected ~" + str(want4f) + " ms - under a second at 4p on the fastest speed"
+		+ " the menu offers, exactly the todo's `under ~1s at 4p`")
+	check(abs(n4 - c4) <= 200 and abs(n2 - c2) <= 200, tag + ": the variant deal costs the CLASSIC deal"
+		+ " the same wall-clock time - 4p " + str(n4) + " ms vs " + str(c4)
+		+ " ms, 2p " + str(n2) + " ms vs " + str(c2) + " ms at speed 2 - the family batch adds 0 ms of"
+		+ " animation: the 12/10/8 family cards are DATA + one stack render, materialized in the instant"
+		+ " the round opens, so the player waits for exactly the " + str(4) + " first-hand cards he"
+		+ " already waits for in classic")
+	check(n4f < n4, tag + ": the same 4p deal runs " + str(n4f) + " ms at _speed 5 vs " + str(n4)
+		+ " ms at _speed 2 - the timing follows the speed setting, so the family deal is measured on the"
+		+ " speed the game is played at, not on `_speed = 0` where a whole round collapses into frames")
+
+
+func count_ms(count: int, speed: float) -> float:
+	return count * (0.5 / speed) * 1000.0
