@@ -1,0 +1,74 @@
+[gd_scene load_steps=3 format=3 uid="uid://bnoblyfamode01"]
+
+[ext_resource type="Script" path="res://game_mode/game_mode.gd" id="1_gmode"]
+[ext_resource type="LabelSettings" uid="uid://bqe2prdrlv84l" path="res://tres/label_settings.tres" id="2_lset"]
+
+[node name="GameMode" type="Node2D"]
+visible = false
+script = ExtResource("1_gmode")
+
+[node name="Title" type="Label" parent="."]
+offset_top = 4.0
+offset_right = 84.0
+offset_bottom = 10.0
+text = "CHOOSE MODE"
+label_settings = ExtResource("2_lset")
+horizontal_alignment = 1
+
+[node name="ClassicRow" type="Label" parent="."]
+offset_left = 4.0
+offset_top = 16.0
+offset_right = 80.0
+offset_bottom = 22.0
+text = "CLASSIC"
+label_settings = ExtResource("2_lset")
+horizontal_alignment = 1
+
+[node name="ClassicButton" type="Button" parent="ClassicRow"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+flat = true
+
+[node name="NobleRow" type="Label" parent="."]
+offset_left = 4.0
+offset_top = 26.0
+offset_right = 80.0
+offset_bottom = 32.0
+text = "NOBLE FAMILY"
+label_settings = ExtResource("2_lset")
+horizontal_alignment = 1
+
+[node name="NobleButton" type="Button" parent="NobleRow"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+flat = true
+
+[node name="BackRow" type="Label" parent="."]
+offset_left = 4.0
+offset_top = 36.0
+offset_right = 80.0
+offset_bottom = 42.0
+text = "BACK"
+label_settings = ExtResource("2_lset")
+horizontal_alignment = 1
+
+[node name="BackButton" type="Button" parent="BackRow"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+flat = true
+
+[connection signal="pressed" from="ClassicRow/ClassicButton" to="." method="_on_classic_pressed"]
+[connection signal="pressed" from="NobleRow/NobleButton" to="." method="_on_noble_family_pressed"]
+[connection signal="pressed" from="BackRow/BackButton" to="." method="_on_back_pressed"]

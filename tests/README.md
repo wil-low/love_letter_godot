@@ -321,7 +321,8 @@ reveal + discard accounting, step 17 the continuous `_left` audit on the real de
 seat's own family stack node, step 19 the family draw modal, step 20 the human's turn-start draw
 through that modal, step 21 the human's Prince redraw through that modal, step 23 the family DEAL
 presentation (one slide sound for the whole family batch, zero flights for it, the stack rendered at
-the deal), step 31 joint move legality and L1 determinism). TEST A needs no
+the deal), step 24 the MODE PICKER `game_mode/game_mode.tscn` (CLASSIC / NOBLE FAMILY / BACK, one
+signal per press, nothing persisted), step 31 joint move legality and L1 determinism). TEST A needs no
 `Main` scene - it drives the real `Deck` scene directly, 200 seeded deals per player count.
 
 | player count | burn / widow | first-hand | family per seat | main pile leftovers |
@@ -944,6 +945,83 @@ normal fixtures run at `_speed = 0`, so an unconditional 0.4 s beat per family c
 over 300 s (measured: killed at the 300 s timeout with 63 checks in). The timing fixtures are the only
 ones that must pay a real timer — which is exactly why step 23 is gated by K4's wall clock and not by a
 frame count.
+
+### TEST L — the mode picker: 3 rows, closed until opened, one signal per press, no state (step 24)
+
+Step 24 is a **scene**, `game_mode/game_mode.tscn`, with no caller yet (step 25 wires it into
+`application.gd`), so TEST L pins the scene itself: its shape, its open/close contract, its signal
+contract, its **lack of state**, and the rects a thumb has to hit. **38 checks in five fixtures,
+L1..L5.** Suite 1047 → **1085 PASS / 0 FAIL / 0 script errors**, exit 0.
+
+The shape is the `start.tscn` pattern: a `Label` row per choice with **one flat, full-area `Button`**
+child. The rows read **CLASSIC** (y 16..22), **NOBLE FAMILY** (26..32), **BACK** (36..42); a flat
+button adds Godot's 1 px content margin, so the tap rects are **x 4..80** at **y 15..23, 25..33,
+35..43** — 76×8 board px = **608×64 real px** at the 8× viewport scale, inside 84×48, with a 2 px gap
+between the rows, title above the first row and BACK clear of the bottom edge.
+
+- **L1 — the shape** — exactly 3 rows (the Labels that own exactly one child; the Title owns none),
+  the texts in reading order, **4 Labels + 3 Buttons and nothing else** in 7 nodes (no Panel,
+  LineEdit, TextureButton, Sprite, Timer, ColorRect), every Button `flat`, every Button's global rect
+  covering its row's rect (the whole word is the target, not the ink), one Button per row, all rows
+  centered.
+- **L2 — closed until opened** — the root is hidden at `_ready()` **and** every row is hidden; **no
+  Button is `is_visible_in_tree()`**, which is the engine's own input gate (a Control that is not
+  visible in the tree gets no mouse input at all), so "nothing tappable while closed" is measured, not
+  asserted. `show_rows()` opens root + all 3 rows, all 3 targets become visible-in-tree in the SAME
+  open (the todo's Check: all three rows tappable in 84×48), and re-opening is idempotent — 3 rows, no
+  duplicates, no extra node. **Deviation, measured:** `func show()` is a **parse error** in Godot 4.7
+  ("The method `show()` overrides a method from native class `CanvasItem`", a warning treated as an
+  error, verified with a probe script), so the todo's `show()` is implemented as `show_rows()`; the
+  suite proves the consequence by calling the NATIVE `show()` — the root opens, every row stays hidden,
+  i.e. the native call is not an opening path and the rows are the gate.
+- **L3 — one press, one signal, the panel already gone** — pressing each row emits **exactly one**
+  signal, in **its own** signal, and the recorded panel visibility **inside the emit** is `false`:
+  `hide()` runs **before** `emit()`, the todo's handler shape, so a menu never stays on top of a dealing
+  game. BACK emits `back_pressed` **only** — BACK is not a mode, and a BACK that also emitted a mode
+  would start the game the player just refused. After a press no row is visible in the tree, so a
+  second real tap has **no target**. The scene's API is 3 **parameterless** signals named
+  `classic_pressed` / `noble_family_pressed` / `back_pressed` (`get_signal_list()`): the picker reports
+  WHICH row, never a mode value, a player count or a level.
+- **L4 — it stores nothing** — 3 visits / 3 presses / 3 signals: the picker is reusable across games,
+  which is what the todo's Check (PLAY → NOBLE FAMILY → exit → PLAY → CLASSIC) needs. After that, no
+  row's text changed, no row's alpha changed, no node was added, and the scene declares **zero script
+  variables** (property list filtered by `PROPERTY_USAGE_SCRIPT`), so "the mode is **not persisted**" is
+  structural: there is no `_last_mode` for anything to save.
+- **L5 — the geometry** — every label and every tap rect inside 84×48, every rect ≥ 48×8 board px, the
+  three rects **non-overlapping** (overlapping rows let BACK steal a CLASSIC press, and a mis-press
+  starts a whole game), stacked in reading order, and every row's text measured with the game's own
+  `LabelSettings` font: **NOBLE FAMILY = 48 px of the 76 px available** at 7 px, so the menu needs no
+  second line and no smaller font than the rest of the UI.
+
+Harness facts this step cost:
+- **Headless cannot tap a Control.** `Window.push_input()` delivers nothing here: the headless window is
+  **64×64** (measured), so a coordinate mapped through the 8× viewport scale is outside the window and
+  the event is dropped. A `Button` row's real tap **is** its `pressed` signal (this scene has no Area2D,
+  unlike the cards), so the fixtures drive the scene with `emit_signal("pressed")` — the same connection
+  the engine's GUI input drives — and prove the *tappability* with `is_visible_in_tree()`, the engine's
+  own gate. The eyes-on tap stays in the manual gate (step 34).
+- **A `LabelSettings` is not a theme item**: `get_theme_font_size("font_size")` reports the 16 px theme
+  default while the label draws with 7 px. Text-width checks read `label.label_settings.font` /
+  `.font_size`.
+- **`get_signal_list()` signal dicts key `args`, not `arguments`** — the harness hit that as a
+  `SCRIPT ERROR: Invalid access to property or key 'arguments'`, which SKIPPED the check it was in
+  (neither PASS nor FAIL, 37 checks printed where 38 are written). The step-23 rule earned its keep:
+  a green suite must be `grep -c "SCRIPT ERROR"` **0**, not "0 FAIL".
+
+| sabotage (game_mode.gd / .tscn) | measured FAILs | where |
+|---|---|---|
+| rows NOT hidden at `_ready()` (the `_hide_rows()` call deleted) | **1** | L2's row-visibility check — the root's own `hide()` is a separate line, so "the panel is closed" alone does NOT prove the rows are |
+| `show_rows()` shows the root only | **3** | L2 (rows-shown, all-3-targets-visible-in-tree, the idempotent re-open measured 0 rows) |
+| handlers `emit()` BEFORE `hide()` | **4** | L3 ×3 (the emit-time visibility, NOBLE, BACK, all read `…:true`) + L4's 3-visit record |
+| the CLASSIC row emits twice per press | **3** | L3 (exactly-one-signal, the emit-time record) + L4's 3-visit record |
+| a press REMEMBERS the mode (`var last_mode` + the pressed row dimmed to 0.4) | **2** | L4 (the alpha table `[100, 40, 100]` and the script-variable census `["last_mode", "last_mark"]`) |
+| the NOBLE FAMILY row moved onto the CLASSIC row (`.tscn` y 26..32 → 20..26) | **2** | L5 (the overlap check, the reading-order check). **Not** the inside-board check: y 20..26 is inside 84×48 — "on the board" and "not on top of another row" are two different properties |
+
+**Harness trap this step paid for:** the scene was still **untracked** when the `.tscn` sabotage ran, so
+`git checkout -- game_mode/game_mode.tscn` restored NOTHING (git does not know the file) and the sabotage
+stayed in the tree until it was restored by hand. `git status` prints a scene as ONE path
+(`?? game_mode/`), which hides that fact — commit a new scene **before** sabotaging it, the same rule
+step 11 learned for test code.
 
 ## tests/noble_family_smoke.tscn — Noble Family variant, whole games on the AI (steps 7, 11, 14)
 

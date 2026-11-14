@@ -36,6 +36,14 @@ extends Node2D
 # the right-handed seats, inside the 84 x 48 viewport, zero input connections, rendered ONLY for the
 # human seat (an AI family is data, never pixels), shrunk by every draw and refilled by every re-deal.
 #
+# TEST L (todo step 24) pins the MODE PICKER `game_mode/game_mode.tscn`: 3 rows (CLASSIC / NOBLE
+# FAMILY / BACK) in the `start.tscn` shape - a Label row + ONE flat, full-area Button - closed at
+# `_ready()`, opened by `show_rows()`, one signal per press, the panel hidden BEFORE the choice is
+# emitted, zero rows visible in the tree while closed (the engine's own input gate = the "nothing
+# tappable" proof), and NO script variables at all, because the mode is chosen per game and never
+# persisted. Geometry is measured as global rects inside 84 x 48, non-overlapping, ordered, with the
+# text width vs the row width at the game's 7 px font.
+#
 # TEST I (todo step 21) pins the Prince REDRAW of a HUMAN seat: a family card is NEVER picked for a
 # human seat, mid-effect or at a turn start. A human target's redraw runs the SAME modal path a turn
 # start runs (`Main.human_draw_from_family()`), in both shapes the Prince branch reaches - a self-Prince
@@ -54,6 +62,7 @@ const MainScene := preload("res://main/main.tscn")
 const PlayerScene := preload("res://player/player.tscn")
 const FakeDeckScript := preload("res://tests/fake_deck.gd")
 const FamilySelectorScene := preload("res://family_selector/family_selector.tscn")
+const GameModeScene := preload("res://game_mode/game_mode.tscn")
 const CountingMainScript := "res://tests/counting_main.gd"  # load()ed at runtime: preload() of a
 # script that extends Main is a cyclic dependency (this harness preloads main.tscn)
 
@@ -270,6 +279,7 @@ func _ready() -> void:
 	await _test_prince_human_modal()
 	await _test_modal_rails()
 	await _test_deal_presentation()
+	await _test_game_mode()
 	await await_frames(1)
 
 	print("\n==========================")
@@ -4716,3 +4726,385 @@ func _test_deal_timing() -> void:
 
 func count_ms(count: int, speed: float) -> float:
 	return count * (0.5 / speed) * 1000.0
+
+# ----------------------------------------------------------------------------------------
+# TEST L (todo step 24): the mode picker `game_mode/game_mode.tscn` - the scene PLAY opens before a
+# game starts. Three rows in the `start.tscn` shape (a Label row + ONE flat, full-area Button),
+# closed until `application.gd` opens it, ONE signal per press, the panel hidden BEFORE the choice is
+# reported, nothing tappable while it is closed, and NO state stored: the todo's fixed rule is that
+# the mode is chosen per game and never persisted, so the picker must have nowhere to keep a mode.
+# ----------------------------------------------------------------------------------------
+const GM_ROWS: Array = ["CLASSIC", "NOBLE FAMILY", "BACK"]
+const USAGE_SCRIPT: int = 4096  # Godot 4 exposes PropertyUsageFlags as ints; 4096 = a script variable
+
+var gm_notes: Array[String] = []
+
+
+func _test_game_mode() -> void:
+	print("\n########## TEST L: the mode picker (step 24) - 3 rows, closed until opened, ONE ##########")
+	print("########## signal per press, hide BEFORE emit, no marks, no state, taps inside 84x48 ##########")
+	await _test_gm_shape()
+	await _test_gm_open()
+	await _test_gm_press()
+	await _test_gm_stateless()
+	await _test_gm_geometry()
+
+
+func _gm_panel():
+	var panel = GameModeScene.instantiate()
+	add_child(panel)
+	await await_frames(1)
+	return panel
+
+
+func _gm_free(panel) -> void:
+	panel.queue_free()
+	await await_frames(2)
+
+
+# The 3 menu rows = the Labels that own exactly one child (the Button); the Title has no child
+func _gm_rows(panel) -> Array:
+	var out: Array = []
+	for ch in panel.get_children():
+		if ch is Label and (ch as Control).get_child_count() == 1:
+			out.append(ch)
+	out.sort_custom(_gm_cmp_y)
+	return out
+
+
+func _gm_cmp_y(a, b) -> bool:
+	return (a as Control).position.y < (b as Control).position.y
+
+
+func _gm_texts(rows: Array) -> Array:
+	var out: Array = []
+	for r in rows:
+		out.append((r as Label).text)
+	return out
+
+
+func _gm_button(row) -> BaseButton:
+	for ch in (row as Node).get_children():
+		if ch is BaseButton:
+			return ch as BaseButton
+	return null
+
+
+func _gm_mods(rows: Array) -> Array:
+	var out: Array = []
+	for r in rows:
+		out.append(int(int((r as CanvasItem).modulate.a * 100)))
+	return out
+
+
+func _gm_classes(node: Node) -> Array:
+	var out: Array = []
+	for ch in node.get_children():
+		out.append(str(ch.get_class()))
+		out.append_array(_gm_classes(ch))
+	return out
+
+
+func _gm_count_class(classes: Array, wanted: String) -> int:
+	var n: int = 0
+	for c in classes:
+		if str(c) == wanted:
+			n += 1
+	return n
+
+
+# The rows are Buttons, so a real tap IS the `pressed` signal (this scene has no Area2D, unlike the
+# cards): emitting the signal drives the SAME connection the engine's GUI input drives.
+func _gm_press(btn: BaseButton) -> void:
+	btn.emit_signal("pressed")
+
+
+# Records the panel's OWN visibility at the instant the choice is reported - the hide-then-emit order
+# of the todo's handlers is only visible from inside the emit
+func _gm_note(tag: String, panel) -> void:
+	gm_notes.append(tag + ":" + str((panel as CanvasItem).visible))
+
+
+# The rendered width of a row's text: the LabelSettings resource is what the game's labels draw with
+# (a LabelSettings is NOT a theme item, so get_theme_font_size would report the 16 px default)
+func _gm_text_w(lbl) -> int:
+	var fs: int = 7
+	var f: Font = null
+	if (lbl as Label).label_settings != null:
+		fs = (lbl as Label).label_settings.font_size
+		f = (lbl as Label).label_settings.font
+	if f == null:
+		f = (lbl as Control).get_theme_font("font")
+	return int(ceil(f.get_string_size((lbl as Label).text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x))
+
+
+# L1: the shape - 3 rows, 1 flat full-area Button each, 7 nodes, nothing else
+func _test_gm_shape() -> void:
+	var tag := "L1"
+	var panel = await _gm_panel()
+	var rows: Array = _gm_rows(panel)
+	check(rows.size() == 3, tag + ": the picker has EXACTLY 3 rows (measured " + str(rows.size())
+		+ ") - 4 rows would be a mode the todo does not define, 2 rows would make a mode unreachable")
+	check(_gm_texts(rows) == GM_ROWS, tag + ": the rows read CLASSIC, NOBLE FAMILY, BACK top-to-bottom "
+		+ "(measured " + str(_gm_texts(rows)) + ") - the player reads the mode he is about to play, "
+		+ "not an icon")
+	var classes: Array = _gm_classes(panel)
+	check(_gm_count_class(classes, "Label") == 4 and _gm_count_class(classes, "Button") == 3
+		and classes.size() == 7, tag + ": the whole scene is 4 Labels + 3 Buttons and NOTHING else - "
+		+ "no Panel, LineEdit, TextureButton, Sprite, Timer, ColorRect (measured " + str(classes)
+		+ "): the start page shape, 7 nodes on an 84 x 48 board")
+	var flat_all: bool = true
+	var full_area: bool = true
+	for r in rows:
+		var btn: BaseButton = _gm_button(r)
+		if btn == null:
+			flat_all = false
+			full_area = false
+			continue
+		if !btn.flat:
+			flat_all = false
+		var rr: Rect2 = (r as Control).get_global_rect()
+		var br: Rect2 = btn.get_global_rect()
+		if !(br.position.x <= rr.position.x and br.position.y <= rr.position.y and br.end.x >= rr.end.x
+			and br.end.y >= rr.end.y):
+			full_area = false
+	check(flat_all, tag + ": every row's Button is `flat` - the picker has NO chrome, exactly like "
+		+ "PLAY/SETTINGS/STATS/HELP; a framed button does not fit an 8 px row")
+	check(full_area, tag + ": every row's Button covers its FULL row rect - the whole word is the tap "
+		+ "target, not the ink of the text, so a tap beside a centered label still presses the row")
+	check(_gm_button(rows[0]) != null and _gm_button(rows[1]) != null and _gm_button(rows[2]) != null,
+		tag + ": every row owns EXACTLY ONE Button - a Label with 0 children is a caption the player "
+		+ "cannot press, and 2 Buttons in a row is two ways to press the same mode")
+	var centered: bool = true
+	for r in rows:
+		if int((r as Label).horizontal_alignment) != 1:
+			centered = false
+	check(centered, tag + ": every row is centered (the game's menus are) - a left-aligned row on an "
+		+ "84 px board puts the tap target where the player is not looking")
+	await _gm_free(panel)
+
+
+# L2: closed until opened - and the engine's own visibility gate is what keeps it inert
+func _test_gm_open() -> void:
+	var tag := "L2"
+	var panel = await _gm_panel()
+	var rows: Array = _gm_rows(panel)
+	check(!panel.visible, tag + ": the picker is CLOSED at _ready() - a picker that is visible at scene"
+		+ " setup is a picker the player can press while the start page owns the screen")
+	var rows_hidden: bool = true
+	for r in rows:
+		rows_hidden = rows_hidden and !(r as Control).visible
+	check(rows_hidden, tag + ": every ROW is hidden at _ready(), not only the panel - the todo's "
+		+ "`_ready() hides all rows until show()`")
+	var tappable: bool = false
+	for r in rows:
+		tappable = tappable or _gm_button(r).is_visible_in_tree()
+	check(!tappable, tag + ": with the rows hidden NO Button is visible in the tree, so the engine "
+		+ "gives all 3 zero mouse input - the closed picker is inert by the engine's visibility gate, "
+		+ "not by a flag we have to remember to check")
+	check(panel.has_method("show_rows"), tag + ": the picker exposes show_rows() as its opening path")
+	panel.call("show_rows")
+	await await_frames(1)
+	var rows_shown: bool = true
+	var tappable2: bool = true
+	for r in rows:
+		rows_shown = rows_shown and (r as Control).visible
+		tappable2 = tappable2 and _gm_button(r).is_visible_in_tree()
+	check(panel.visible, tag + ": show_rows() opens the panel")
+	check(rows_shown, tag + ": show_rows() opens all 3 rows together - a half-shown picker (2 rows of "
+		+ "3) hides a mode")
+	check(tappable2, tag + ": all 3 Buttons are visible in the tree in the SAME open, so CLASSIC, "
+		+ "NOBLE FAMILY and BACK are all pressable in one visit - the todo's Check (all three rows "
+		+ "tappable in 84 x 48), measured through the engine's own input gate")
+	panel.call("show_rows")
+	await await_frames(1)
+	check(panel.visible and _gm_rows(panel).size() == 3, tag + ": show_rows() is IDEMPOTENT - PLAY, "
+		+ "BACK, PLAY again shows the same 3 rows: no duplicated rows, no stacked panel, no extra node")
+	var shown_rows: int = 0
+	for r in _gm_rows(panel):
+		if (r as Control).visible:
+			shown_rows += 1
+	check(shown_rows == 3, tag + ": the idempotent re-open shows 3 rows, not 4, 5 or 6 (measured "
+		+ str(shown_rows) + ") - the picker rebuilds nothing, it just shows what the scene has")
+	panel.call("_hide_rows")
+	panel.hide()
+	await await_frames(1)
+	var native_opens_rows: bool = false
+	for r in rows:
+		if (r as Control).visible:
+			native_opens_rows = true
+	panel.show()
+	await await_frames(1)
+	check(panel.visible and !native_opens_rows, tag + ": the NATIVE CanvasItem.show() opens the root "
+		+ "only and leaves every row hidden - DEVIATION from the todo wording, measured: `func show()`"
+		+ " is a PARSE ERROR in Godot 4.7 (overrides a method from native class CanvasItem, a warning "
+		+ "treated as error), so show_rows() is the only opening path and rows are the gate")
+	await _gm_free(panel)
+
+
+# L3: one press = one signal = one closed panel, and the panel is gone BEFORE the choice is reported
+func _test_gm_press() -> void:
+	var tag := "L3"
+	var panel = await _gm_panel()
+	panel.connect("classic_pressed", _gm_note.bind("classic", panel))
+	panel.connect("noble_family_pressed", _gm_note.bind("noble", panel))
+	panel.connect("back_pressed", _gm_note.bind("back", panel))
+	var rows: Array = _gm_rows(panel)
+	panel.call("show_rows")
+	await await_frames(1)
+	gm_notes.clear()
+	_gm_press(_gm_button(rows[0]))
+	check(gm_notes.size() == 1, tag + ": pressing the CLASSIC row emits EXACTLY ONE signal (measured "
+		+ str(gm_notes) + ") - a double emit would ask application.gd to start two games")
+	check(gm_notes.size() == 1 and gm_notes[0] == "classic:false", tag + ": and the panel is ALREADY "
+		+ "HIDDEN at the instant the choice is reported (hide() first, emit second, the todo's handler "
+		+ "shape) - a menu that stays open while a game deals cards is a stuck overlay")
+	check(!panel.visible, tag + ": the press closed the panel by itself - application.gd only wires "
+		+ "handlers, so a panel that relied on its listener to hide it would sit on the board")
+	gm_notes.clear()
+	panel.call("show_rows")
+	await await_frames(1)
+	_gm_press(_gm_button(rows[1]))
+	check(gm_notes.size() == 1 and gm_notes[0] == "noble:false", tag + ": pressing NOBLE FAMILY emits "
+		+ "noble_family_pressed ONLY - no classic, no back (measured " + str(gm_notes) + ")")
+	gm_notes.clear()
+	panel.call("show_rows")
+	await await_frames(1)
+	_gm_press(_gm_button(rows[2]))
+	check(gm_notes.size() == 1 and gm_notes[0] == "back:false", tag + ": pressing BACK emits "
+		+ "back_pressed ONLY - BACK is NOT a mode: it reports no choice and application.gd shows the "
+		+ "start page; a BACK that also emitted a mode would start the game the player just refused")
+	var inert: bool = true
+	for r in rows:
+		if _gm_button(r).is_visible_in_tree():
+			inert = false
+	check(inert, tag + ": after a press every row is out of the tree's input again, so a second real "
+		+ "tap has NO target - one visit reports one mode, and the panel cannot be pressed twice")
+	var found: Array = []
+	var arity_ok: bool = true
+	for s in panel.get_signal_list():
+		var nm: String = str(s.name)
+		if nm == "classic_pressed" or nm == "noble_family_pressed" or nm == "back_pressed":
+			found.append(nm)
+			if int((s.args as Array).size()) != 0:
+				arity_ok = false
+	found.sort()
+	check(found.size() == 3 and arity_ok, tag + ": the picker's API is 3 parameterless signals named "
+		+ "classic_pressed / noble_family_pressed / back_pressed (measured " + str(found) + ") - the "
+		+ "names the todo fixes for application.gd to wire, and NO payload: the picker reports WHICH "
+		+ "row, it does not report a mode value, a player count or a level")
+	await _gm_free(panel)
+
+
+# L4: the picker stores nothing - no last mode, no mark, no node added by a press
+func _test_gm_stateless() -> void:
+	var tag := "L4"
+	var panel = await _gm_panel()
+	var rows: Array = _gm_rows(panel)
+	var texts_before: Array = _gm_texts(rows)
+	var mods_before: Array = _gm_mods(rows)
+	var classes_before: Array = _gm_classes(panel)
+	panel.connect("classic_pressed", _gm_note.bind("classic", panel))
+	panel.connect("noble_family_pressed", _gm_note.bind("noble", panel))
+	panel.connect("back_pressed", _gm_note.bind("back", panel))
+	gm_notes.clear()
+	for i in 3:
+		panel.call("show_rows")
+		await await_frames(1)
+		_gm_press(_gm_button(_gm_rows(panel)[i]))
+		await await_frames(1)
+	var joined: String = ""
+	for n in gm_notes:
+		joined = joined + str(n) + " "
+	check(joined == "classic:false noble:false back:false ", tag + ": 3 visits, 3 presses, 3 signals, "
+		+ "each in its OWN signal and each after its own hide (measured '" + joined + "') - the picker "
+		+ "is reusable across games: PLAY -> NOBLE FAMILY -> exit -> PLAY -> CLASSIC is the todo's "
+		+ "Check, and it needs a panel that resets, not a panel that remembers")
+	check(_gm_texts(_gm_rows(panel)) == texts_before, tag + ": no row's text changed after 3 presses -"
+		+ " no LAST MODE line, no tick, no moved selection sprite (measured " + str(_gm_texts(rows))
+		+ "): the mode is NOT remembered, per the fixed rule `mode is not persisted`")
+	check(_gm_mods(_gm_rows(panel)) == mods_before, tag + ": no row is dimmed, lit, greyed or "
+		+ "highlighted by a press (measured " + str(_gm_mods(_gm_rows(panel))) + " vs "
+		+ str(mods_before) + "): a highlighted last mode IS a persisted mode, on screen")
+	check(_gm_classes(panel) == classes_before, tag + ": 3 presses added NO nodes - no banner, "
+		+ "checkmark, Timer, Label, tooltip (measured " + str(_gm_classes(panel)) + ")")
+	var script_vars: Array = []
+	for p in panel.get_property_list():
+		if (int(p.usage) & USAGE_SCRIPT) != 0:
+			script_vars.append(str(p.name))
+	check(script_vars.is_empty(), tag + ": the scene declares NO script variables at all (measured "
+		+ str(script_vars) + ") - there is nowhere to keep a mode, so `not persisted` is STRUCTURAL: "
+		+ "no `_last_mode`, no exported default, no ConfigFile write in a menu scene")
+	await _gm_free(panel)
+
+
+# L5: the geometry a thumb has to hit - 3 rows inside 84 x 48, non-overlapping, ordered, readable
+func _test_gm_geometry() -> void:
+	var tag := "L5"
+	var panel = await _gm_panel()
+	var rows: Array = _gm_rows(panel)
+	panel.call("show_rows")
+	await await_frames(1)
+	var inside_rows: bool = true
+	var inside_btns: bool = true
+	var rects: Array = []
+	var row_report: Array = []
+	for r in rows:
+		var rr: Rect2 = (r as Control).get_global_rect()
+		var br: Rect2 = _gm_button(r).get_global_rect()
+		rects.append(br)
+		row_report.append(str((r as Label).text) + " row[" + str(int(rr.position.x)) + ","
+			+ str(int(rr.position.y)) + "]-[" + str(int(rr.end.x)) + "," + str(int(rr.end.y))
+			+ "] tap[" + str(int(br.position.x)) + "," + str(int(br.position.y)) + "]-["
+			+ str(int(br.end.x)) + "," + str(int(br.end.y)) + "]")
+		if !(rr.position.x >= 0 and rr.end.x <= 84 and rr.position.y >= 0 and rr.end.y <= 48):
+			inside_rows = false
+		if !(br.position.x >= 0 and br.end.x <= 84 and br.position.y >= 0 and br.end.y <= 48):
+			inside_btns = false
+	print("      " + str(row_report))
+	check(inside_rows, tag + ": every row label lies INSIDE the 84 x 48 viewport - a clipped row is a "
+		+ "word a player cannot finish reading on a phone")
+	check(inside_btns, tag + ": every tap target lies INSIDE the 84 x 48 viewport - the todo's Check "
+		+ "(all three rows tappable in 84 x 48), measured as the Buttons' global rects")
+	var big: bool = true
+	for br in rects:
+		if !((br as Rect2).size.x >= 48 and (br as Rect2).size.y >= 8):
+			big = false
+	check(big, tag + ": every tap target is at least 48 x 8 board px = 384 x 64 REAL px at the 8x "
+		+ "viewport scale - the same target size the start page rows give PLAY/STATS/HELP")
+	var no_overlap: bool = true
+	for i in rects.size():
+		for j in rects.size():
+			if i != j and (rects[i] as Rect2).intersects(rects[j] as Rect2):
+				no_overlap = false
+	check(no_overlap, tag + ": the 3 tap rects do NOT overlap - overlapping rows make BACK steal a "
+		+ "CLASSIC press (and a mis-press starts a whole game)")
+	var ordered: bool = true
+	for i in rects.size() - 1:
+		if (rects[i] as Rect2).end.y > (rects[i + 1] as Rect2).position.y:
+			ordered = false
+	check(ordered, tag + ": the rows are stacked in reading order with a gap between the tap targets "
+		+ "(CLASSIC above NOBLE FAMILY above BACK) - the last row's target ends inside the board, so "
+		+ "no row is under the screen edge")
+	var fits: bool = true
+	var width_report: Array = []
+	for r in rows:
+		var w: int = _gm_text_w(r)
+		var room: int = int((r as Control).get_rect().size.x)
+		width_report.append(str((r as Label).text) + "=" + str(w) + "/" + str(room))
+		if w > room:
+			fits = false
+	check(fits, tag + ": every row's text FITS its label rect at the game's 7 px font (measured "
+		+ str(width_report) + ") - NOBLE FAMILY is the longest word the picker prints and it needs "
+		+ "48 of the 76 px available, so the menu needs no second line, no smaller font and no"
+		+ " landscape-only layout")
+	var title: Control = panel.get_node("Title") as Control
+	var title_rect: Rect2 = title.get_global_rect()
+	check(title_rect.end.x <= 84 and title_rect.position.y >= 0, tag + ": the title label is inside "
+		+ "the board too")
+	check(title_rect.end.y <= (rects[0] as Rect2).position.y, tag + ": the title sits ABOVE the first "
+		+ "mode row - the picker reads title, then the two modes, then BACK; a title between the rows "
+		+ "is a row a player reads as a mode")
+	check((rects[2] as Rect2).end.y <= 48, tag + ": the BACK row is the LAST thing on the panel and "
+		+ "it clears the bottom edge - the player always has a way out, on screen, at the bottom")
+	await _gm_free(panel)
