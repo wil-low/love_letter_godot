@@ -1,6 +1,7 @@
 extends Node2D
 
 @onready var _start: Start = $Start
+@onready var _game_mode: GameMode = $GameMode
 @onready var _main: Main = $Main
 @onready var _level_selector: LevelSelector = $LevelSelector
 @onready var _stats: Stats = $Stats
@@ -100,9 +101,34 @@ func _on_main_menu_pressed() -> void:
 	_pause.show()
 
 
+# Noble Family variant, todo step 25: PLAY no longer starts a game, it opens the mode picker. The
+# whole "which mode" decision lives here (`Main.noble_family` is set BEFORE `init_players`, which is
+# what reads it in `_new_round`); the picker scene stores nothing, so this file is the only place a
+# mode exists.
 func _on_start_play_pressed() -> void:
+	_start.hide()
+	_game_mode.show_rows()
+
+
+# The body `_on_start_play_pressed()` used to run: the game is only started once a mode is chosen.
+func start_game() -> void:
 	_main.show()
 	_main.init_players(random_seed if random_seed != 0 else Time.get_ticks_usec())
+
+
+func _on_game_mode_classic() -> void:
+	_main.noble_family = false
+	start_game()
+
+
+func _on_game_mode_noble_family() -> void:
+	_main.noble_family = true
+	start_game()
+
+
+# BACK is a refusal, not a mode: no game starts, the start page comes back, and no mode is remembered.
+func _on_game_mode_back() -> void:
+	_start.show()
 
 
 func _on_start_settings_pressed() -> void:
@@ -116,6 +142,9 @@ func _on_pause_resume_pressed() -> void:
 
 func _on_pause_exit_pressed() -> void:
 	_main.interrupted = true
+	# The mode is per game and never persisted (todo §C fixed rules), so leaving a game for the menu
+	# clears it: the next PLAY must pick a mode again, and the default is classic.
+	_main.noble_family = false
 	_main.get_tree().paused = false
 	_start.show()
 

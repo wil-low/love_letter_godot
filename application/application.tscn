@@ -7,6 +7,7 @@
 [ext_resource type="PackedScene" uid="uid://benc3e03kmvd0" path="res://stats/stats.tscn" id="5_5prqa"]
 [ext_resource type="PackedScene" uid="uid://b8o5ucmniyq87" path="res://help/help.tscn" id="5_hn6yr"]
 [ext_resource type="PackedScene" uid="uid://cnutq3ty1kcof" path="res://pause/pause.tscn" id="5_nscpw"]
+[ext_resource type="PackedScene" uid="uid://bnoblyfamode01" path="res://game_mode/game_mode.tscn" id="6_gmode"]
 
 [node name="Application" type="Node2D" unique_id=653458706]
 script = ExtResource("1_cwjks")
@@ -31,6 +32,10 @@ visible = false
 process_mode = 3
 visible = false
 
+[node name="GameMode" parent="." unique_id=1945187377 instance=ExtResource("6_gmode")]
+process_mode = 3
+visible = false
+
 [connection signal="help_pressed" from="Start" to="." method="_on_start_help_pressed"]
 [connection signal="play_pressed" from="Start" to="." method="_on_start_play_pressed"]
 [connection signal="settings_pressed" from="Start" to="." method="_on_start_settings_pressed"]
@@ -46,3 +51,6 @@ visible = false
 [connection signal="help_pressed" from="Pause" to="." method="_on_pause_help_pressed"]
 [connection signal="resume_pressed" from="Pause" to="." method="_on_pause_resume_pressed"]
 [connection signal="stats_pressed" from="Pause" to="." method="_on_pause_stats_pressed"]
+[connection signal="back_pressed" from="GameMode" to="." method="_on_game_mode_back"]
+[connection signal="classic_pressed" from="GameMode" to="." method="_on_game_mode_classic"]
+[connection signal="noble_family_pressed" from="GameMode" to="." method="_on_game_mode_noble_family"]

@@ -152,6 +152,50 @@ var _base_fam: int = 0
 
 # Todo step 23: the deal's sound, counted at the seam production asks for it through. `super()` runs,
 # so the sound itself is the production one, played at the production call sites.
+var left_audits_total: int = 0  # cumulative `left_audits` at every audit - TEST M reports it
+
+
+# TEST M (todo step 25) seam: the mode must be set BEFORE the deal is decided, because `_new_round()`
+# reads `noble_family` exactly once, there. `init_players()` is the call that decides a deal, so the
+# flag is recorded on its ENTRY - a handler that set the mode after the call records the old value.
+# The panel state is recorded in the same snapshot: the deal must not run under an open menu.
+var init_calls: int = 0
+var init_seams: Array = []  # per init_players() ENTRY: {noble, interrupted, main_visible,
+# picker_visible, start_visible, rows_in_tree} (-1 = this Main has no mode picker around it)
+
+
+# A coroutine override that AWAITS the parent: production calls `init_players()` WITHOUT `await` (in
+# `Application.start_game()` and in the `speed_run` boot path) and the parent IS a coroutine, so that
+# stays exactly as it was; but the fixtures call `await main.init_players(seed)` and depend on the await
+# covering the whole deal chain. A plain `super()` here makes the override non-coroutine, the await
+# returns at once, and every deal-settling fixture reads a game that has not been dealt yet (it showed
+# up as empty families and `575 plays`). `await super(...)` keeps the parent's coroutine resumable.
+func init_players(random_seed: int) -> void:
+	init_calls += 1
+	var par: Node = get_parent()
+	var gm: Node = null
+	var st: Node = null
+	if par != null:
+		gm = par.get_node_or_null("GameMode")
+		st = par.get_node_or_null("Start")
+	var rows := -1
+	if gm != null:
+		rows = 0
+		for row: String in ["ClassicRow", "NobleRow", "BackRow"]:
+			var r: Node = gm.get_node_or_null(row)
+			if r != null and (r as Control).is_visible_in_tree():
+				rows += 1
+	init_seams.append({
+		"noble": noble_family,
+		"interrupted": interrupted,
+		"main_visible": visible,
+		"picker_visible": (gm != null and gm.visible),
+		"start_visible": (st != null and st.visible),
+		"rows_in_tree": rows,
+	})
+	await super(random_seed)
+
+
 func deal_sound() -> void:
 	deal_sounds += 1
 	super()

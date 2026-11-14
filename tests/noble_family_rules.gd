@@ -51,6 +51,12 @@ extends Node2D
 # elimination paths that open NO panel: a 3p hit with an empty family draws THE WIDOW, a 4p hit with an
 # empty family and no widow eliminates him, and an eliminated seat with an empty family reveals NOTHING.
 #
+# TEST M (todo step 25) pins the MODE-MENU WIRING in `application.{gd,tscn}` on the REAL application
+# scene: PLAY opens the picker and starts NOTHING, a row press sets `Main.noble_family` BEFORE
+# `start_game()` -> `init_players()` runs (the deal table is chosen by that flag, read once), BACK
+# starts no game and sets no mode, Exit-to-menu CLEARS the mode and a following CLASSIC press deals a
+# classic round with NO families and NO family draws, and `speed_run` bypasses the menu, classic-only.
+#
 # TEST A deliberately needs no Main scene at all, so the deal table is pinned
 # independently of the game loop.
 #
@@ -280,6 +286,7 @@ func _ready() -> void:
 	await _test_modal_rails()
 	await _test_deal_presentation()
 	await _test_game_mode()
+	await _test_mode_menu()
 	await await_frames(1)
 
 	print("\n==========================")
@@ -5108,3 +5115,407 @@ func _test_gm_geometry() -> void:
 	check((rects[2] as Rect2).end.y <= 48, tag + ": the BACK row is the LAST thing on the panel and "
 		+ "it clears the bottom edge - the player always has a way out, on screen, at the bottom")
 	await _gm_free(panel)
+
+
+
+# ----------------------------------------------------------------------------------------
+# TEST M (todo step 25): the mode menu is WIRED into the application.
+#
+# TEST L pinned the picker SCENE. This pins the WIRING - the two things a scene cannot pin by itself:
+# (1) the ORDER of the mode decision, and (2) that a menu press is the ONLY thing that starts a game.
+#
+#  1. `Main.noble_family` must be set BEFORE `init_players()` runs, because `init_players()` ->
+#     `_new_game()` -> `_new_round()` READS the flag once, at the deal, to choose the deal table.
+#     Sampling the flag after a row press cannot tell "set then start" from "start then set", so
+#     `tests/counting_application.gd` records the flag at the ENTRY of `start_game()` and of
+#     `init_players()`.
+#  2. PLAY opens the picker and starts NOTHING (0 `start_game()` calls, 0 deals); BACK starts nothing
+#     and sets no mode; a ROW press is the only path that deals; Exit-to-menu CLEARS the mode (the
+#     picker stores nothing - TEST L, zero script variables - so the application is the only place a
+#     mode can be cleared); `speed_run` bypasses the menu and stays classic-only.
+#
+# Five fixtures, the four gates plus the speed-run boot path:
+#   M1 PLAY -> the picker, and nothing else.
+#   M2 NOBLE row -> a VARIANT game: family 3 per seat in 4p, every turn-start draw from a family,
+#      zero pile draws, the move/draw pairing and the `_left` audit clean.
+#   M3 BACK -> the start page, no game.
+#   M4 variant game -> in-game menu -> Exit -> PLAY -> CLASSIC: the mode is cleared, the deal is the
+#      CLASSIC one (no families anywhere, main pile 9 + widow 3 in 4p, draws from the pile, zero
+#      family draws), and the counters are measured as DELTAS of the classic game only.
+#   M5 `speed_run` boots straight into a classic game, menu untouched.
+#
+# Fixture technique: the REAL `application.tscn`, instrumented by `set_script` with
+# `tests/counting_application.gd` (the seams) and `tests/counting_main.gd` (the event recorders). The
+# scene's own PLAY / row / Exit buttons are pressed by emitting their `pressed` signal - the same
+# connection the engine's GUI input drives (a headless window is 64x64, so a real tap is never
+# delivered; see TEST L).
+# ----------------------------------------------------------------------------------------
+const AppScene := preload("res://application/application.tscn")
+const CountingAppScript := "res://tests/counting_application.gd"  # load()ed at runtime: preload()
+# of a script that extends Application is a cyclic dependency with the preload of application.tscn
+const GM_BUTTONS: Dictionary = {"CLASSIC": "ClassicRow/ClassicButton",
+	"NOBLE": "NobleRow/NobleButton", "BACK": "BackRow/BackButton"}
+const NOBLE_FAMILY_4P: int = 3  # Deck.NOBLE_FAMILY_SIZE[4]
+const CLASSIC_4P_MAIN: int = 11  # classic 4p: 16 - burn 1 - 4 first-hand cards
+const CLASSIC_4P_WIDOW: int = 1  # classic burns 1 in 3p/4p (the variant burns NOTHING in 4p)
+
+
+# Build and settle are SEPARATE functions: a Player's `ai_level` setter writes `@onready` sprites, so
+# levels can only be applied once the node is in the tree, which makes the settle half a coroutine;
+# and Godot 4 rejects a call to a coroutine without `await`. The levels travel in `_menu_levels`.
+var _menu_levels: Array = []
+
+
+func _test_mode_menu() -> void:
+	print("\n########## TEST M: the mode menu wiring (step 25) - PLAY opens the picker and starts ##########")
+	print("########## NOTHING, a row press sets the mode BEFORE the deal, BACK starts no game, ##########")
+	print("########## Exit-to-menu CLEARS the mode, `speed_run` bypasses the menu, classic-only ##########")
+	await _test_menu_play()
+	await _test_menu_noble_game()
+	await _test_menu_back()
+	await _test_menu_exit_classic()
+	await _test_menu_speed_run()
+
+
+func _make_menu_app(speed_run: bool = false):
+	var app = AppScene.instantiate()
+	var main: Node = app.get_node("Main")
+	var card_scene: PackedScene = main.card_scene  # `set_script` resets exported vars: save/restore
+	main.set_script(load(CountingMainScript))
+	main.card_scene = card_scene
+	var exports: Dictionary = {}  # ... and so do the Application's own exports
+	for k: String in ["random_seed", "speed_run", "print_memory", "print_valid_moves"]:
+		exports[k] = app.get(k)
+	app.set_script(load(CountingAppScript))
+	for k: String in exports:
+		app.set(k, exports[k])
+	app.speed_run = speed_run
+	add_child(app)
+	return app
+
+
+func _menu_ready(app) -> void:
+	await await_frames(1)
+	# `Application._ready()` -> `load_config()` restores the SAVED speed (2.0 = speed level 1) and the
+	# SAVED levels (the saved file has a HUMAN seat 0, which parks a headless game at a tap), and it
+	# runs AFTER this suite set `_speed = 0`, so the fixture pins both once the node is in the tree.
+	Animator._speed = 0
+	for i in 4:
+		app._main._players[i].ai_level = _menu_levels[i]
+
+
+func _free_menu_app(app) -> void:
+	if app.get_tree().paused:
+		app.get_tree().paused = false  # a tree left paused stops every later fixture's frames
+	app.queue_free()
+	await await_frames(2)
+
+
+# ---- the presses: the scene's own buttons, the way TEST L presses them ----------------------
+func _tap_start_play(app) -> void:
+	(app._start.get_node("PlayLabel/PlayButton") as BaseButton).emit_signal("pressed")
+	await await_frames(1)
+
+
+func _tap_row(app, row: String) -> void:
+	var gm: Node = app.get_node("GameMode") as Node
+	(gm.get_node(GM_BUTTONS[row]) as BaseButton).emit_signal("pressed")
+	await await_frames(1)
+
+
+func _tap_pause_exit(app) -> void:
+	(app._pause.get_node("ExitLabel/ExitButton") as BaseButton).emit_signal("pressed")
+	await await_frames(1)
+
+
+func _picker_targets(app) -> int:
+	var gm: Node = app.get_node("GameMode") as Node
+	var n := 0
+	for row: String in ["ClassicRow", "NobleRow", "BackRow"]:
+		if (gm.get_node(row) as Control).is_visible_in_tree():
+			n += 1
+	return n
+
+
+# ---- measured quantities ---------------------------------------------------------------------
+func _fam_sizes(main: Node) -> Array:
+	var out: Array = []
+	for p in main._players:
+		out.append(p.family_size())
+	return out
+
+
+func _hand_sizes(main: Node) -> Array:
+	var out: Array = []
+	for p in main._players:
+		out.append(p.hand.get_child_count())
+	return out
+
+
+func _sum_ints(vals: Array) -> int:
+	var s := 0
+	for v in vals:
+		s += int(v)
+	return s
+
+
+# Cumulative counters of a Main node. A fixture that switches modes inside ONE application instance
+# (which is exactly what M4 must do, because the mode-reset gate only exists in that sequence) has
+# counters that mix two games, so every variant-only claim is measured as a DELTA.
+func _counters(main: Node) -> Dictionary:
+	return {
+		"plays": main.effect_log.size(),
+		"fam_draws": _sum_ints(main.family_draws),
+		"pile_draws": main.pile_draws,
+		"audits": main.left_audits,
+		"viols": main.left_violations.size(),
+		"pairings": main.draws_checked,
+		"mismatches": main.draw_mismatches.size(),
+	}
+
+
+func _delta(now: Dictionary, base: Dictionary) -> Dictionary:
+	var out: Dictionary = {}
+	for k: String in now:
+		out[k] = int(now[k]) - int(base[k])
+	return out
+
+
+func _settle_menu_deal(app, fam: int, main_cards: int) -> void:
+	var main: Node = app._main
+	# The settle is defined by the DEAL TABLE the fixture expects, not by "some frames": `init_players()`
+	# does not await the deal, and at `_speed = 0` the whole deal + the first turn can settle inside a
+	# few frames, so the poll waits for the exact state the mode is supposed to produce.
+	var dealt := func() -> bool:
+		# The main pile is a CEILING, not an equality: after the deal every turn draws from it, so a
+		# poll that demands the exact deal-time count can race past it and time out. The family size and
+		# the 1-card hand are the exact part of a deal table; the pile only ever shrinks from its
+		# deal-time size.
+		var ready: bool = main._deck._cards.size() <= main_cards
+		for p in main._players:
+			if p.is_active():
+				ready = ready and p.hand.get_child_count() == 1
+				ready = ready and p.family_size() == fam
+		return ready
+	await await_until(dealt, 6000)
+
+
+func _run_menu_plays(app, wanted: int) -> void:
+	var main: Node = app._main
+	for _f in 12000:
+		if main.effect_log.size() >= wanted:
+			return
+		await get_tree().process_frame
+
+
+# ---- M1: PLAY opens the picker and starts NOTHING ------------------------------------------
+func _test_menu_play() -> void:
+	var tag := "M1 PLAY"
+	var app = _make_menu_app()
+	_menu_levels = [Player.AI_Level.Level_4, Player.AI_Level.Level_4,
+		Player.AI_Level.Level_3, Player.AI_Level.Level_2]
+	await _menu_ready(app)
+	var main: Node = app._main
+	check(app._start.visible and !app._main.visible, tag + ": at boot the start page is on screen "
+		+ "and no game is shown")
+	check(!app._game_mode.visible and _picker_targets(app) == 0, tag + ": the picker is CLOSED at boot "
+		+ "and nothing on it is tappable (0 rows visible in the tree = the engine's own input gate)")
+	check(app.play_presses == 0 and app.start_game_calls == 0 and main.init_calls == 0, tag
+		+ ": nothing pressed, no game started, no deal run")
+	check(!app._main.noble_family, tag + ": no mode is set at boot")
+
+	await _tap_start_play(app)
+	check(app.play_presses == 1, tag + ": PLAY reached the application exactly ONCE")
+	check(app.start_game_calls == 0 and main.init_calls == 0, tag + ": PLAY started NO game and dealt "
+		+ "NO cards - neither `start_game()` nor `init_players()` ran, which is the whole point of "
+		+ "step 25: PLAY no longer starts a game, it opens a menu")
+	check(!app._start.visible, tag + ": PLAY hid the start page")
+	check(app._game_mode.visible and _picker_targets(app) == 3, tag + ": PLAY opened the picker with "
+		+ "all 3 rows tappable (CLASSIC / NOBLE FAMILY / BACK)")
+	check(!app._main.visible, tag + ": the game stays hidden while the menu is open")
+	check(!app._main.noble_family, tag + ": PLAY set NO mode - the flag is set by a ROW, never by PLAY")
+	await _free_menu_app(app)
+
+
+# ---- M2: the NOBLE FAMILY row starts a VARIANT game, mode set BEFORE the deal ---------------
+func _test_menu_noble_game() -> void:
+	var tag := "M2 NOBLE row"
+	var app = _make_menu_app()
+	_menu_levels = [Player.AI_Level.Level_4, Player.AI_Level.Level_4,
+		Player.AI_Level.Level_3, Player.AI_Level.Level_2]
+	await _menu_ready(app)
+	await _tap_start_play(app)
+	await _tap_row(app, "NOBLE")
+	var main: Node = app._main
+	check(app.start_game_calls == 1 and main.init_calls == 1, tag + ": a row press is what starts a "
+		+ "game - ONE `start_game()`, ONE deal")
+	check(app.start_seams.size() == 1 and main.init_seams.size() == 1, tag + ": both seams recorded "
+		+ "exactly one entry")
+	var sh: Dictionary = app.start_seams[0]
+	var seam: Dictionary = main.init_seams[0]
+	check(bool(sh["noble"]), tag + ": `Main.noble_family` is TRUE ON ENTRY to `start_game()` - the "
+		+ "handler handed the mode over BEFORE asking for the game")
+	check(bool(seam["noble"]), tag + ": and it is STILL true on entry to `init_players()`, i.e. at the "
+		+ "moment the deal is decided: `_new_round()` reads the flag exactly once, there. A flag set "
+		+ "after this call would deal a CLASSIC round inside the game the player chose as Noble Family")
+	check(bool(seam["main_visible"]), tag + ": the game is shown at the deal")
+	check(!bool(seam["picker_visible"]) and int(seam["rows_in_tree"]) == 0, tag + ": the picker is "
+		+ "CLOSED at the deal and zero rows are tappable - a menu still open while cards are dealing "
+		+ "is a stuck overlay, and a row a player can press mid-deal starts a second game")
+	check(!bool(seam["start_visible"]), tag + ": the start page is gone at the deal")
+	check(!bool(seam["interrupted"]), tag + ": the new game cleared the interrupted flag of the "
+		+ "previous one (`init_players()` resets it), so the suspended chain of an exited game cannot "
+		+ "resume inside the new game")
+	check(main.noble_family, tag + ": the game that is running is the variant")
+
+	await _settle_menu_deal(app, NOBLE_FAMILY_4P, 0)
+	check(_fam_sizes(main) == [3, 3, 3, 3], tag + ": the deal table the picker chose is the VARIANT "
+		+ "one - family 3 per seat in 4p (5 / 4 / 3 for 2 / 3 / 4 players), not the classic empty one")
+	check(_hand_sizes(main) == [1, 1, 1, 1], tag + ": 1 first-hand card per seat")
+	check(_sum_ints(main._deck._left) == TOTAL_CARDS, tag + ": `sum(_left) == 16` at the deal (the "
+		+ "family and the first-hand cards are out of the main pile, not out of play)")
+	check(main._deck._widow_cards.size() == 0 and !main._deck._widow.visible, tag + ": 4p burns "
+		+ "nothing, so there is NO widow pile")
+	check(!main._deck._main.visible and main._deck._cards.size() == 0, tag + ": 4p leaves 0 cards in "
+		+ "the main pile, so the pile is hidden")
+
+	await _run_menu_plays(app, 6)
+	var c: Dictionary = _counters(main)
+	check(int(c["plays"]) >= 6, tag + ": the variant game PLAYS on its own (" + str(c["plays"])
+		+ " plays)")
+	check(int(c["fam_draws"]) >= 6, tag + ": every turn start drew from a FAMILY " + str(main.family_draws)
+		+ " - the mandatory draw is the family, not a pile")
+	check(int(c["pile_draws"]) == 0, tag + ": NO pile draw in a 4p variant game (no main pile, no widow)")
+	check(int(c["pairings"]) >= 6 and int(c["mismatches"]) == 0, tag + ": every move's named family "
+		+ "card is the card the same chain drew (" + str(c["pairings"]) + " pairings, 0 mismatches)")
+	check(int(c["audits"]) > 0 and int(c["viols"]) == 0, tag + ": the `_left` audit ran "
+		+ str(c["audits"]) + " times with 0 violations through the picker-started game")
+	check(_sum_ints(main._deck._left) < TOTAL_CARDS, tag + ": cards have left play, so the supply has "
+		+ "shrunk from 16 to " + str(_sum_ints(main._deck._left)))
+	await _free_menu_app(app)
+
+
+# ---- M3: BACK returns to the start page and starts nothing ----------------------------------
+func _test_menu_back() -> void:
+	var tag := "M3 BACK"
+	var app = _make_menu_app()
+	_menu_levels = [Player.AI_Level.Level_4, Player.AI_Level.Level_4,
+		Player.AI_Level.Level_3, Player.AI_Level.Level_2]
+	await _menu_ready(app)
+	var main: Node = app._main
+	await _tap_start_play(app)
+	await _tap_row(app, "BACK")
+	check(app.start_game_calls == 0 and main.init_calls == 0, tag + ": BACK started NO game and dealt "
+		+ "NO cards")
+	check(app.start_seams.is_empty() and main.init_seams.is_empty(), tag + ": BACK reached NEITHER seam")
+	check(!app._main.noble_family, tag + ": BACK set NO mode - a refusal is not a mode choice")
+	check(app._start.visible, tag + ": BACK brought the start page back")
+	check(!app._game_mode.visible and _picker_targets(app) == 0, tag + ": the picker closed and "
+		+ "nothing on it is tappable")
+	check(!app._main.visible, tag + ": no game is shown")
+	await _tap_start_play(app)
+	check(app.play_presses == 2 and _picker_targets(app) == 3, tag + ": PLAY opens the picker AGAIN "
+		+ "after a BACK, with all 3 rows - a menu that refuses to re-open is a dead end")
+	await _free_menu_app(app)
+
+
+# ---- M4: Exit-to-menu CLEARS the mode, then PLAY -> CLASSIC plays CLASSIC -------------------
+func _test_menu_exit_classic() -> void:
+	var tag := "M4 Exit -> CLASSIC"
+	var app = _make_menu_app()
+	_menu_levels = [Player.AI_Level.Level_4, Player.AI_Level.Level_4,
+		Player.AI_Level.Level_3, Player.AI_Level.Level_2]
+	await _menu_ready(app)
+	var main: Node = app._main
+	await _tap_start_play(app)
+	await _tap_row(app, "NOBLE")
+	await _settle_menu_deal(app, NOBLE_FAMILY_4P, 0)
+	await _run_menu_plays(app, 4)
+	check(main.noble_family and _sum_ints(_fam_sizes(main)) > 0, tag + ": the game in progress IS the "
+		+ "variant (families exist: " + str(_fam_sizes(main)) + "), so the reset below is measurable")
+	check(app.start_game_calls == 1, tag + ": exactly one game has started so far")
+
+	main.emit_signal("menu_pressed")  # the in-game menu button's own signal
+	await await_frames(1)
+	check(app.get_tree().paused and !main.visible and app._pause.visible, tag + ": the in-game menu "
+		+ "paused the tree, hid the game and showed the pause page")
+	await _tap_pause_exit(app)
+	check(!app.get_tree().paused, tag + ": Exit un-paused the tree - a tree left paused stops every "
+		+ "later game, the player's and the next fixture's")
+	check(app._start.visible, tag + ": Exit brought the start page back")
+	check(!main.noble_family, tag + ": Exit-to-menu CLEARED the mode. The picker stores nothing (TEST "
+		+ "L: zero script variables), so the application is the ONLY place a mode can be cleared, and "
+		+ "the fixed rule is that a mode is chosen per game and never persists - a variant flag left "
+		+ "on the Main node would make the NEXT game a variant game the player never chose")
+
+	await _tap_start_play(app)
+	check(main.init_calls == 1 and app.start_game_calls == 1, tag + ": PLAY opened the picker and "
+		+ "still started nothing")
+	await _tap_row(app, "CLASSIC")
+	check(main.init_seams.size() == 2, tag + ": the CLASSIC row ran a second deal")
+	var seam: Dictionary = main.init_seams[1]
+	check(!bool(seam["noble"]), tag + ": `Main.noble_family` is FALSE AT THE DEAL - the flag is set "
+		+ "before `init_players()` runs, so the deal reads the cleared value and deals classic")
+	check(bool(seam["main_visible"]) and !bool(seam["picker_visible"]) and int(seam["rows_in_tree"])
+		== 0, tag + ": at that deal the game is shown and the picker is closed, unpressable")
+	await _settle_menu_deal(app, 0, CLASSIC_4P_MAIN)
+	# The audit baseline belongs to a ROUND, and this variant game was abandoned MID-ROUND, so the new
+	# classic game inherits it: `audit_left()` would compare a FRESH 16-card supply against the discards
+	# of a game that no longer exists (it showed up as "Guard: _left == 5, expected 2"). `reset_audit()`
+	# closes the inherited round, so the classic game is audited against ITS OWN deal.
+	main.reset_audit()
+	var base: Dictionary = _counters(main)
+	var plays_base: int = main.effect_log.size()
+	var d: Dictionary = _delta(_counters(main), base)
+	check(_fam_sizes(main) == [0, 0, 0, 0], tag + ": a classic game has NO family DATA anywhere - the "
+		+ "variant data model is inert in classic mode (and the human seat's stack renders from that "
+		+ "data, so inert data that is never cleared is a visible ghost family)")
+	check(_hand_sizes(main) == [1, 1, 1, 1], tag + ": classic deals 1 card per seat")
+	check(main._deck._main.visible and main._deck._cards.size() > 0
+		and main._deck._cards.size() <= CLASSIC_4P_MAIN, tag + ": classic 4p keeps the main pile "
+		+ "VISIBLE and dealt - " + str(main._deck._cards.size()) + " cards in it, at most "
+		+ str(CLASSIC_4P_MAIN) + " (16 - burn 1 - 4 first-hand, then one per turn's draw) - the pile "
+		+ "a classic turn draws from, where the 4p VARIANT has NOTHING")
+	check(main._deck._widow_cards.size() == CLASSIC_4P_WIDOW and main._deck._widow.visible, tag
+		+ ": classic 4p burns 1, so the widow is a live pile (the 4p VARIANT has no widow at all) - "
+		+ str(main._deck._widow_cards.size()) + " cards, visible " + str(main._deck._widow.visible))
+	await _run_menu_plays(app, plays_base + 6)
+	d = _delta(_counters(main), base)
+	check(int(d["plays"]) >= 6, tag + ": the classic game played " + str(d["plays"]) + " more cards")
+	check(int(d["fam_draws"]) == 0, tag + ": and NO family draw in a classic game (delta from the "
+		+ "classic deal: " + str(d["fam_draws"]) + ")")
+	check(int(d["pile_draws"]) >= 4, tag + ": its draws came from the PILE (" + str(d["pile_draws"])
+		+ " pile draws), exactly as before step 25")
+	var vlist: Array = main.left_violations
+	var first_violation := ""
+	if not vlist.is_empty():
+		first_violation = "; first: " + str(vlist[0])
+	check(int(d["viols"]) == 0, tag + ": 0 `_left` violations in the classic game (" + str(d["audits"])
+		+ " audits" + first_violation + ")")
+	await _free_menu_app(app)
+
+
+# ---- M5: `speed_run` bypasses the menu and stays classic-only ------------------------------
+func _test_menu_speed_run() -> void:
+	var tag := "M5 speed_run"
+	var app = _make_menu_app(true)
+	_menu_levels = [Player.AI_Level.Level_1, Player.AI_Level.Level_2,
+		Player.AI_Level.Level_3, Player.AI_Level.Level_4]
+	await _menu_ready(app)
+	var main: Node = app._main
+	check(app.play_presses == 0 and app.start_game_calls == 0, tag + ": the speed run never pressed "
+		+ "PLAY and never called `start_game()` - it boots straight into `init_players(42)`, so the "
+		+ "menu cannot be a speed-run dependency")
+	check(main.init_calls == 1, tag + ": it dealt exactly one game, from `_ready()`")
+	check(!app._game_mode.visible, tag + ": the picker never opened")
+	check(!app._main.noble_family, tag + ": the speed run is CLASSIC-only (todo §C: `speed_run` stays "
+		+ "classic-only - the classic suites gate on this run)")
+	await _settle_menu_deal(app, 0, CLASSIC_4P_MAIN)
+	check(_fam_sizes(main) == [0, 0, 0, 0], tag + ": no families in a speed run")
+	check(main._deck._main.visible, tag + ": the main pile is in play (the classic supply)")
+	await _run_menu_plays(app, 6)
+	var c: Dictionary = _counters(main)
+	check(int(c["plays"]) >= 6, tag + ": the speed run played " + str(c["plays"]) + " cards")
+	check(int(c["fam_draws"]) == 0 and int(c["pile_draws"]) > 0, tag + ": and it drew from piles only ("
+		+ str(c["pile_draws"]) + " pile draws, 0 family draws)")
+	await _free_menu_app(app)

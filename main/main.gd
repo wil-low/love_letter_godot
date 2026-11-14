@@ -237,6 +237,14 @@ func _new_round() -> void:
 		if seat > 0:
 			deal_sound()
 	else:
+		# Classic mode never deals a family, and a game is not the only state this node has ever known:
+		# the mode is picked PER GAME and never persisted, so a classic game can start right after a
+		# variant one (Exit-to-menu -> PLAY -> CLASSIC). Family data left over from that game is inert -
+		# no classic path reads it - but it is NOT invisible: the human seat's stack is rendered from it
+		# (`Player.render_family()`), so a stale family would sit on the table through a classic game.
+		# Clearing here is a no-op in a classic-only app (the arrays are empty), so classic is untouched.
+		for p in _players:
+			p.clear_family()
 		_deck.prepare(_player_count)
 		for p in _players:
 			if p.is_active():
