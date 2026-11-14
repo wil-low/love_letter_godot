@@ -5,7 +5,7 @@ extends Node2D
 @onready var _main: Main = $Main
 @onready var _level_selector: LevelSelector = $LevelSelector
 @onready var _stats: Stats = $Stats
-@onready var _help: Node2D = $Help
+@onready var _help: Help = $Help
 @onready var _pause: Node2D = $Pause
 
 @export var random_seed: int = 0
@@ -230,6 +230,12 @@ func _on_pause_stats_pressed() -> void:
 
 
 func _on_start_help_pressed() -> void:
+	# Noble Family, todo §C.29: Help is opened per VISIT, so the variant pages are re-pinned on every
+	# open from the mode that is actually set. From the START page no game is running, and Exit-to-menu
+	# clears the mode, so this is `false` here by fact - the line states the rule ("the pages follow
+	# the game"), it does not hardcode a mode, and a Start Help opened while a mode somehow survives
+	# shows the variant rules instead of lying about them.
+	_help.variant_active = _main.noble_family
 	_help.invoker = _start
 	_help.show()
 
@@ -239,6 +245,9 @@ func _on_help_back_pressed() -> void:
 
 
 func _on_pause_help_pressed() -> void:
+	# Opened from the PAUSE menu, the pages belong to the game that is running: a variant game shows
+	# the 4 Noble Family pages, a classic game shows the 17 classic ones (todo §C.29).
+	_help.variant_active = _main.noble_family
 	_help.invoker = _pause
 	_help.show()
 

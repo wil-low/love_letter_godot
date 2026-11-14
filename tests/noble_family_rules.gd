@@ -102,6 +102,19 @@ extends Node2D
 # in tests/README.md - so a 2-instance swing from one fixture is NOT something this suite can measure;
 # the cycle is avoided for the reason the harness states, not because a leak counter proved it.
 #
+# TEST Q (todo step 29) pins the NOBLE FAMILY HELP pages. The gate is "the rules text matches the
+# implemented numbers", and BOTH halves are measurements: the Setup page's digits are matched against
+# CONTIGUOUS RUNS derived from `Deck.NOBLE_BURN` / `Deck.NOBLE_FAMILY_SIZE` and the 16-card arithmetic
+# (so a page that says "4 / 1 / 0" fails, and so does a page that stops printing the main-pile row),
+# and the page list is walked as a RING with the scene's own Left/Right buttons in BOTH modes -
+# exactly ONE page visible per frame, it is a REACHABLE page (`is_visible_in_tree()`), a classic sweep
+# visits the 17 pre-variant pages BY NAME AND ORDER and never touches the 4 variant ones, a variant
+# sweep visits all 21, and a mode switch WHILE A PAGE IS OPEN clamps the cursor to the nearest
+# reachable index (a variant page -> 'Game End', a card page -> no move at all). Q6 pins the plumbing
+# on the real app: the flag travels from `Main.noble_family` at EVERY open, so a variant game's Pause
+# Help has 21 pages, a classic game's Pause Help and the Start Help have 17, Back returns to the
+# invoker, and the page a player closed on is what the next open clamps.
+#
 # TEST A deliberately needs no Main scene at all, so the deal table is pinned
 # independently of the game loop.
 #
@@ -114,6 +127,8 @@ const PlayerScene := preload("res://player/player.tscn")
 const FakeDeckScript := preload("res://tests/fake_deck.gd")
 const FamilySelectorScene := preload("res://family_selector/family_selector.tscn")
 const GameModeScene := preload("res://game_mode/game_mode.tscn")
+const HelpScene := preload("res://help/help.tscn")  # TEST Q (step 29): the Help page is a SCENE of the
+# app, so the suite measures the scene the app instantiates, not a hand-built page list
 const CountingMainScript := "res://tests/counting_main.gd"  # load()ed at runtime: preload() of a
 # script that extends Main is a cyclic dependency (this harness preloads main.tscn)
 
@@ -339,6 +354,11 @@ func _ready() -> void:
 	# test has to produce an old-format file, which is the player's own file), and it writes the player's
 	# file back at the end of every fixture. N6 reads that file at its start, so P must land before N.
 	await _test_stats_persistence()
+	# TEST Q (step 29) runs right after P and BEFORE N / M for the suite's own reason (the M5 lesson: a
+	# redirected run loses the TAIL of stdout, so the sections whose evidence must be READ go earlier).
+	# Q also opens the real app's Help page, and P has already restored `user://options.cfg` by now, so
+	# Q's app fixtures read the player's save, not P's synthetic old-format file.
+	await _test_help_pages()
 	# TEST N is placed BEFORE TEST M, not appended at the end of the list: Godot's stdout is block-buffered
 	# when it is redirected, and the suite's LAST few kilobytes of prints are gone from the log (measured:
 	# the committed suite's log ends at M4's last check and its M5 checks and its summary line are missing,
@@ -7196,3 +7216,634 @@ func _test_stats_persistence() -> void:
 	await _test_sp_migration()
 	await _test_sp_per_table_drop()
 	await _test_sp_classic_write_target()
+
+# ----------------------------------------------------------------------------------------
+# TEST Q (todo step 29): the NOBLE FAMILY HELP pages.
+#
+# The step 29 gate is "the rules text matches the implemented numbers", and BOTH halves of it are
+# measurable, so Q measures both:
+#   * the NUMBERS are derived from the code that deals - `Deck.NOBLE_BURN`, `Deck.NOBLE_FAMILY_SIZE`
+#     and the 16-card arithmetic for the main-pile leftovers - never typed into a check, and matched
+#     against the digit runs the page's own Label prints. A page that says "4 / 1 / 0" fails.
+#   * the REACHABILITY is measured as a RING the scene's own Left/Right buttons walk, in BOTH modes:
+#     every frame shows EXACTLY ONE page, it is a REACHABLE page (`is_visible_in_tree()`, the
+#     engine's own gate), a classic sweep never touches a variant page, a variant sweep visits all 22
+#     in scene order, and the arrows' own visibility is what bounds the ring (no wrap, as today).
+# The mode switch is the new failure mode the todo's Check names ("paging never lands on a hidden
+# page"), so Q4 switches modes WHILE A PAGE IS OPEN and measures the clamp: a player parked on a
+# variant page who re-opens Help in a classic game lands on 'Game End', the nearest reachable page -
+# not on page 0, not on an invisible index, not on two pages at once.
+# Q6 pins the plumbing on the REAL app: the flag travels from `Main.noble_family` at every page open
+# (Pause Help inside a variant game = 21 pages, Start Help and a classic game's Pause Help = 17), the
+# Back row returns to the invoker, and Exit-to-menu's cleared mode re-pins the next open to classic.
+# ----------------------------------------------------------------------------------------
+const Q_VARIANT_PAGES: Array = ["Family Setup", "Family Turn", "Family Out", "Family Ends"]
+const Q_CLASSIC_PAGES: int = 17  # MEASURED in Q1: the pre-variant list, 9 rules pages + 8 card pages
+const Q_ALL_PAGES: int = 21  # == Q_CLASSIC_PAGES + 4, the scene's page count AFTER step 29
+const Q_CLASSIC_NAMES: Array = ["About", "Deck", "Setup", "Turn", "Deduction", "Elimination",
+	"Round End", "Scoring", "Game End", "Guard", "Priest", "Baron", "Handmaid", "Prince",
+	"King", "Countess", "Princess"]  # the 17 pages step 29 must NOT rename, remove or reorder
+const Q_HELP_ROW: String = "HelpLabel/HelpButton"  # the Start's and the Pause's own Help row
+const Q_NAME_CAP_EXTRA: int = 1  # see `_q_name_cap`: 1 px of clearance, in board px
+
+
+func _test_help_pages() -> void:
+	print("\n########## TEST Q (step 29): the 4 variant Help pages - 21 in the scene, 17 in a ##########")
+	print("########## classic game, the numbers on the Setup page ARE the deal table, paging never ##########")
+	print("########## lands on a hidden page, and the app pins the pages to the game on every open ##########")
+	await _test_help_shape()
+	await _test_help_classic_ring()
+	await _test_help_variant_ring()
+	await _test_help_clamp()
+	await _test_help_text()
+	await _test_help_app()
+
+
+# ---- the panel and its pages ------------------------------------------------------------------
+func _help_panel():
+	var panel = HelpScene.instantiate()
+	add_child(panel)
+	await await_frames(1)
+	return panel
+
+
+func _help_free(panel) -> void:
+	panel.queue_free()
+	await await_frames(1)
+
+
+func _q_pages(panel) -> Array:
+	return (panel.get_node("Pages") as Node).get_children()
+
+
+func _q_names(pages: Array) -> Array:
+	var out: Array = []
+	for p in pages:
+		out.append(String(p.name))
+	return out
+
+
+func _q_names_at(panel, idxs: Array) -> Array:
+	var out: Array = []
+	for i in idxs:
+		out.append(String(_q_pages(panel)[int(i)].name))
+	return out
+
+
+func _q_flags(panel) -> Array:  # the `variant_only` tag of every page, in scene order
+	var out: Array = []
+	for p in _q_pages(panel):
+		out.append(bool(p.get("variant_only")))
+	return out
+
+
+func _q_shown(panel) -> Array:  # the pages the engine can see, i.e. the page(s) a player reads
+	var out: Array = []
+	for p in _q_pages(panel):
+		if (p as CanvasItem).is_visible_in_tree():
+			out.append(String(p.name))
+	return out
+
+
+func _q_page(panel, name: String):  # a page node by name
+	for p in _q_pages(panel):
+		if String(p.name) == name:
+			return p
+	return null
+
+
+func _q_active(panel) -> int:  # `_active_page` is the page script's own view cursor
+	return int(panel.get("_active_page"))
+
+
+func _q_press(panel, side: String) -> void:
+	# the scene's OWN arrows, pressed the way a finger presses them (TEST L / TEST M technique).
+	# `side` is "Left" / "Right": `get_node()` is CASE-SENSITIVE, so "leftButton" is no node at all.
+	(panel.get_node(side + "Button") as BaseButton).emit_signal("pressed")
+	await await_frames(1)
+
+
+func _q_walk(panel, side: String, times: int, out: Array) -> int:
+	# Walk the ring with the scene's own arrow, sampling the VISIBLE pages AFTER each press - the
+	# samples are the pages the presses LANDED on, which is what paging has to be measured on.
+	# Returns the count of frames that showed 0 or 2+ pages.
+	var crowded: int = 0
+	for i in times:
+		await _q_press(panel, side)
+		var shown: Array = _q_shown(panel)
+		if shown.size() != 1:
+			crowded += 1
+			out.append("<" + str(shown.size()) + ">")
+		else:
+			out.append(shown[0])
+	return crowded
+
+
+func _q_unique(vals: Array) -> Array:
+	var out: Array = []
+	for v in vals:
+		if !out.has(v):
+			out.append(v)
+	return out
+
+
+func _q_block(names: Array) -> Array:  # the scene indices of the 4 variant pages
+	var out: Array = []
+	for i in names.size():
+		if Q_VARIANT_PAGES.has(names[i]):
+			out.append(i)
+	return out
+
+
+func _q_arrow(panel, side: String) -> Control:
+	return panel.get_node(side + "Button") as Control
+
+
+# ---- Q1: the scene - 21 pages, 4 of them tagged, in one block, with no card art --------------
+func _test_help_shape() -> void:
+	var tag := "Q1 Help scene"
+	var panel = await _help_panel()
+	var pages: Array = _q_pages(panel)
+	var names: Array = _q_names(pages)
+	check(names.size() == Q_ALL_PAGES, tag + ": the scene holds " + str(names.size())
+		+ " pages == " + str(Q_CLASSIC_PAGES) + " classic + 4 variant - the variant pages are ADDED, "
+		+ "they replace NOTHING (a classic player who wants the Countess rule still has it)")
+	var block: Array = _q_block(names)
+	check(block == [9, 10, 11, 12], tag + ": the 4 variant pages are ONE block right after 'Game End'"
+		+ " (index 8) and before the first card page, so the rules pages stay together and the card"
+		+ " list keeps its place (measured block " + str(block) + ")")
+	check(_q_names_at(panel, block) == Q_VARIANT_PAGES, tag + ": the block reads Family Setup / Family"
+		+ " Turn / Family Out / Family Ends top-to-bottom == the todo's 4 pages, in the todo's order"
+		+ " (measured " + str(_q_names_at(panel, block)) + ")")
+	check(_q_unique(names).size() == names.size(), tag + ": every page has a UNIQUE name ("
+		+ str(_q_unique(names).size()) + " unique of " + str(names.size()) + ") - two pages named"
+		+ " alike is a page the player cannot tell from the other")
+	var flags: Array = _q_flags(panel)
+	var vflags: Array = []
+	var cflags: Array = []
+	for i in names.size():
+		if Q_VARIANT_PAGES.has(names[i]):
+			vflags.append(flags[i])
+		else:
+			cflags.append(flags[i])
+	check(vflags.size() == 4 and vflags.count(true) == 4, tag + ": all 4 variant pages carry"
+		+ " `variant_only == true` - the tag IS what makes a page a variant page, so a page without it"
+		+ " is a classic page the variant mode has no business hiding")
+	check(cflags.size() == Q_CLASSIC_PAGES and cflags.count(true) == 0, tag + ": NO classic page carries"
+		+ " the tag (" + str(cflags.count(true)) + " of " + str(cflags.size()) + ") - a variant game"
+		+ " shows the " + str(Q_CLASSIC_PAGES) + " rules a classic player reads, it does not replace"
+		+ " them with 4 variant ones")
+	var odd: Array = []
+	for p in pages:
+		if (p as Node).get_child_count() != 3:
+			odd.append(String(p.name) + ":" + str((p as Node).get_child_count()))
+	check(odd.is_empty(), tag + ": every page is the game's ONE page widget (Card sprite + Name + "
+		+ "Description, 3 children) - no page grew a panel, a button or a third Label (odd " + str(odd) + ")")
+	var art: Array = []
+	var texts: Array = []
+	for i in names.size():
+		var p = pages[i]
+		var sprite: Sprite2D = p.get_node("Card") as Sprite2D
+		var rules_page: bool = i < 9 or Q_VARIANT_PAGES.has(names[i])
+		if bool(p.get("show_card")) == rules_page:  # a rules page shows NO card, a card page shows ONE
+			art.append(String(p.name))
+		if rules_page and int(p.get("card_type")) != int(Deck.CardType.Unknown):
+			art.append(String(p.name) + ":card_type")
+		if sprite.visible == rules_page:  # a rules page HIDES the sprite, a card page SHOWS it
+			art.append(String(p.name) + ":sprite")
+		if not rules_page and int(p.get("card_type")) == int(Deck.CardType.Unknown):
+			art.append(String(p.name) + ":no card art on a card page")
+		var lbl: Label = p.get_node("Name") as Label
+		if lbl.text.strip_edges() != String(p.get("card_name")).strip_edges():
+			texts.append(String(p.name) + ":name")
+		if String(p.get("card_name")).strip_edges() == "":
+			texts.append(String(p.name) + ":empty name")
+		if (p.get_node("Description") as Label).text.length() < 30:
+			texts.append(String(p.name) + ":short")
+	check(art.is_empty(), tag + ": the 4 variant pages carry NO card art (`show_card == false`, the "
+		+ "sprite hidden, `card_type == Unknown`) and the 8 card pages keep THEIRS - a variant page with"
+		+ " a card sprite would claim a card exists that the variant does not add (offenders " + str(art) + ")")
+	check(texts.is_empty(), tag + ": every page's Name Label reads its `card_name` and its Description"
+		+ " Label carries the text (>= 30 chars), i.e. the scene's exported text is what the player"
+		+ " reads at runtime (offenders " + str(texts) + ")")
+	check(panel.get_child_count() == 4, tag + ": the Help scene is the page list + the SAME 2 arrows +"
+		+ " the Back row the classic Help had (4 children) - step 29 added NO widget, NO panel, NO third"
+		+ " button, only pages (measured " + str(panel.get_child_count()) + " children)")
+	await _help_free(panel)
+
+
+# ---- Q2: classic mode - the ring is the 18 pre-variant pages, the variant pages are unreachable
+func _test_help_classic_ring() -> void:
+	var tag := "Q2 classic Help"
+	var panel = await _help_panel()
+	check(!bool(panel.variant_active), tag + ": a Help panel at `_ready()` is in CLASSIC mode - the flag"
+		+ " defaults false, so the pages a player sees from the START page are the classic rules by"
+		+ " default, not by a call every opener must remember")
+	var reach: Array = panel.call("reachable_pages")
+	var rn: Array = _q_names_at(panel, reach)
+	check(reach.size() == Q_CLASSIC_PAGES, tag + ": " + str(reach.size()) + " of " + str(Q_ALL_PAGES)
+		+ " pages are reachable in classic mode == the pre-variant page count")
+	check(rn == Q_CLASSIC_NAMES, tag + ": the 17 reachable pages ARE the pre-variant list, by name and"
+		+ " in order - About..Game End then Guard..Princess. Step 29 ADDS pages; a classic rule that"
+		+ " vanished, renamed or shuffled here is a Help page the classic player used to read (measured "
+		+ str(rn) + ")")
+	for v in Q_VARIANT_PAGES:
+		check(!rn.has(v), tag + ": '" + v + "' is NOT reachable in classic mode - the todo's Start-page"
+			+ " Check, measured on the list the page's own filter builds")
+	check(_q_shown(panel) == [rn[0]], tag + ": the page that is open is the FIRST classic page ('"
+		+ str(_q_shown(panel)) + "') - a Help that opens on the last page hides the rules a first-time"
+		+ " player needs")
+	check(!_q_arrow(panel, "Left").is_visible_in_tree() and !bool(panel.get("_left_button").visible),
+		tag + ": at the FIRST page the Left arrow is hidden AND unpressable (`is_visible_in_tree()` is"
+		+ " the engine's own input gate) - the ring has a front end, it is not a carousel")
+	var seen: Array = []
+	var crowded: int = await _q_walk(panel, "Right", Q_ALL_PAGES, seen)
+	check(crowded == 0, tag + ": all " + str(Q_ALL_PAGES) + " sampled frames show EXACTLY ONE page -"
+		+ " paging never stacks two pages and never shows none")
+	var tail: int = Q_ALL_PAGES - (Q_CLASSIC_PAGES - 1)  # presses that must do nothing at the last page
+	check(seen.slice(0, Q_CLASSIC_PAGES - 1) == rn.slice(1), tag + ": the right-sweep visits the "
+		+ str(Q_CLASSIC_PAGES) + " classic pages in SCENE order, starting from the page the Help opened"
+		+ " on, and skips the 4 variant ones (measured " + str(seen) + ")")
+	check(seen.slice(Q_CLASSIC_PAGES - 1).size() == tail and _q_unique(seen.slice(Q_CLASSIC_PAGES - 1))
+		== [rn[Q_CLASSIC_PAGES - 1]], tag + ": the last " + str(tail) + " presses at the LAST page moved"
+		+ " NOTHING (no wrap) - the pre-variant guard survives the filtering, so a player cannot slide"
+		+ " past the end into a hidden page")
+	check(!_q_arrow(panel, "Right").is_visible_in_tree(), tag + ": at the LAST page the Right arrow is"
+		+ " hidden and unpressable - the ring has a back end too")
+	check(_q_active(panel) == Q_ALL_PAGES - 1, tag + ": the classic ring's last reachable page is the"
+		+ " scene's LAST page (index " + str(_q_active(panel)) + "), i.e. the 4 variant pages sit"
+		+ " INSIDE the list and do not extend it")
+	await _q_press(panel, "Right")
+	check(_q_shown(panel) == [rn[Q_CLASSIC_PAGES - 1]], tag + ": a press on a hidden arrow cannot"
+		+ " happen through the UI, and a forced one cannot move the page")
+	await _help_free(panel)
+
+
+# ---- Q3: variant mode - the ring is all 21 pages, the 4 new ones between 'Game End' and Guard -
+func _test_help_variant_ring() -> void:
+	var tag := "Q3 variant Help"
+	var panel = await _help_panel()
+	panel.set("variant_active", true)
+	await await_frames(1)
+	var reach: Array = panel.call("reachable_pages")
+	var rn: Array = _q_names_at(panel, reach)
+	check(bool(panel.variant_active), tag + ": the mode is ON (the app sets it from `Main.noble_family`;"
+		+ " here the fixture does, through the same property)")
+	check(reach.size() == Q_ALL_PAGES, tag + ": " + str(reach.size()) + " of " + str(Q_ALL_PAGES)
+		+ " pages are reachable in a variant game == every page the scene has - the variant game never"
+		+ " loses a classic rule from Help")
+	var seen: Array = []
+	var crowded: int = await _q_walk(panel, "Right", Q_ALL_PAGES - 1, seen)
+	check(crowded == 0, tag + ": all " + str(Q_ALL_PAGES - 1) + " sampled frames show EXACTLY ONE page")
+	check(seen == rn.slice(1), tag + ": the sweep visits every page the scene has, in SCENE order, the 4"
+		+ " variant pages between 'Game End' and 'Guard' (measured " + str(seen) + ")")
+	var shown_names: Array = []
+	for v in Q_VARIANT_PAGES:
+		shown_names.append(seen.count(v))
+	check(shown_names == [1, 1, 1, 1], tag + ": each variant page is shown EXACTLY ONCE in the sweep "
+		+ str(shown_names) + " - a page shown twice is a page list built twice, a page never shown is a"
+		+ " rule the variant player cannot read")
+	for v in Q_VARIANT_PAGES:
+		var p = _q_page(panel, v)
+		var lbl: Label = p.get_node("Name") as Label
+		var d: Label = p.get_node("Description") as Label
+		check(lbl.text.strip_edges() == String(p.get("card_name")).strip_edges() and lbl.visible
+			and d.visible, tag + ": '" + v + "' prints its own Name and Description on screen when the"
+			+ " ring reaches it (label '" + lbl.text.strip_edges() + "')")
+	panel.set("_active_page", 13)  # 'Guard': the page RIGHT AFTER the variant block
+	await await_frames(1)
+	check(_q_shown(panel) == ["Guard"], tag + ": the fixture parked the player on 'Guard' (index 13), the"
+		+ " page a variant player reaches by stepping once past 'Game End'")
+	await _q_press(panel, "Left")
+	check(_q_shown(panel) == ["Family Ends"] and _q_active(panel) == 12, tag + ": Left from 'Guard' lands"
+		+ " on the LAST variant page ('Family Ends', index " + str(_q_active(panel)) + "), NOT on 'Game"
+		+ " End' - the arrows walk the SAME filtered list in both directions, so a page a player can"
+		+ " reach going right he can also leave going left")
+	await _help_free(panel)
+
+
+# ---- Q4: the mode switch WHILE A PAGE IS OPEN - the clamp, in both directions ----------------
+func _test_help_clamp() -> void:
+	var tag := "Q4 mode switch mid-visit"
+	var panel = await _help_panel()
+	panel.set("variant_active", true)
+	await await_frames(1)
+	var seen: Array = []
+	await _q_walk(panel, "Right", 12, seen)  # page 0 -> page 12 == the LAST variant page
+	check(_q_shown(panel) == ["Family Ends"] and _q_active(panel) == 12, tag + ": the player is parked"
+		+ " on the last variant page (index " + str(_q_active(panel)) + ", shown " + str(_q_shown(panel))
+		+ ") - the state a variant game's Help is closed in")
+	panel.set("variant_active", false)
+	await await_frames(1)
+	check(_q_active(panel) == 8, tag + ": re-opening in classic mode CLAMPED the page to 8 == 'Game"
+		+ " End', the nearest REACHABLE page below (measured " + str(_q_active(panel)) + ") - not to 0"
+		+ " (a page the player never asked for), not kept at 12 (an index with nothing on screen)")
+	check(_q_shown(panel) == ["Game End"], tag + ": and the clamped page is ON SCREEN - exactly one"
+		+ " page, a REACHABLE one (measured " + str(_q_shown(panel)) + ")")
+	check(_q_arrow(panel, "Left").is_visible_in_tree() and _q_arrow(panel, "Right").is_visible_in_tree(),
+		tag + ": both arrows are tappable on the clamped page - a clamp into a page with no way out is"
+		+ " a dead end the player escapes only by pressing Back")
+	panel.set("variant_active", true)
+	await await_frames(1)
+	check(_q_active(panel) == 8 and _q_shown(panel) == ["Game End"], tag + ": switching modes the OTHER"
+		+ " way moved NOTHING - 'Game End' is reachable in both modes, so a mode change is not a page"
+		+ " reset (the stats page's rule, step 27)")
+	await _q_press(panel, "Right")
+	check(_q_shown(panel) == ["Family Setup"], tag + ": with the variant pages ON, Right from 'Game End'"
+		+ " lands on the FIRST variant page - the filtered list, not the raw child index, decides the"
+		+ " neighbour (measured " + str(_q_shown(panel)) + ")")
+	await _q_press(panel, "Right")
+	check(_q_shown(panel) == ["Family Turn"], tag + ": the sweep keeps going through the block in order")
+	panel.set("variant_active", false)
+	await await_frames(1)
+	check(_q_active(panel) == 8 and _q_shown(panel) == ["Game End"], tag + ": clamped from the MIDDLE"
+		+ " of the variant block (index 10) to 8 as well - the clamp is 'the nearest reachable page"
+		+ " below' for EVERY variant page, not a rule that only knows the block's ends (measured "
+		+ str(_q_active(panel)) + ", shown " + str(_q_shown(panel)) + ")")
+	await _q_press(panel, "Right")
+	check(_q_shown(panel) == ["Guard"] and _q_active(panel) == 13, tag + ": in classic mode, Right from"
+		+ " 'Game End' skips the 4 hidden pages and lands on 'Guard' (index " + str(_q_active(panel))
+		+ ") - paging NEVER lands on a hidden page in EITHER direction (the todo's Check)")
+	await _q_press(panel, "Left")
+	check(_q_shown(panel) == ["Game End"] and _q_active(panel) == 8, tag + ": and Left from 'Guard'"
+		+ " skips them back - the 4 variant pages are unreachable in classic mode, at every press, not"
+		+ " only at the open")
+	panel.set("variant_active", true)
+	await await_frames(1)
+	await _q_press(panel, "Right")
+	check(_q_active(panel) == 9 and _q_shown(panel) == ["Family Setup"], tag + ": the same press with"
+		+ " the variant pages ON steps into them - the filter follows the mode in the page's OWN frame,"
+		+ " so the arrows never need to know about the variant")
+	panel.set("_active_page", 15)  # 'Baron': a card page, reachable in BOTH modes
+	await await_frames(1)
+	panel.set("variant_active", true)
+	await await_frames(1)
+	check(_q_active(panel) == 15 and _q_shown(panel) == ["Baron"], tag + ": a mode switch that needs NO"
+		+ " clamp moves NOTHING - a page both modes can show survives it, so the filter is not a page"
+		+ " reset (measured " + str(_q_active(panel)) + ", shown " + str(_q_shown(panel)) + ")")
+	panel.set("variant_active", false)
+	await await_frames(1)
+	check(_q_active(panel) == 15 and _q_shown(panel) == ["Baron"], tag + ": and the same in the other"
+		+ " direction - 2 clamp-free switches, 0 moves")
+	await _help_free(panel)
+
+
+# ---- the numbers and the text of the 4 pages -------------------------------------------------
+func _q_digits(s: String) -> Array:  # the digit runs a page prints, as ints
+	var out: Array = []
+	var cur := ""
+	for i in s.length():
+		var ch: String = s[i]
+		if ch >= "0" and ch <= "9":
+			cur += ch
+		elif cur != "":
+			out.append(int(cur))
+			cur = ""
+	if cur != "":
+		out.append(int(cur))
+	return out
+
+
+func _q_triple_after(s: String, keyword: String) -> Array:
+	# The first `a / b / c` row that FOLLOWS `keyword` in `s`, as 3 ints; [] if the clause is absent.
+	var at: int = s.to_lower().find(keyword)
+	if at < 0:
+		return []
+	var nums: Array = _q_digits(s.substr(at))
+	if nums.size() < 3:
+		return []
+	return [int(nums[0]), int(nums[1]), int(nums[2])]
+
+
+func _q_per_seat(tbl: Array) -> Array:  # the table read for 2 / 3 / 4 players
+	var out: Array = []
+	for c: int in [2, 3, 4]:
+		out.append(int(tbl[c]))
+	return out
+
+
+func _q_leftovers() -> Array:
+	# The main pile's deal-time leftovers, computed from the SAME constants the deal uses:
+	# 16 = burn + one first-hand card per seat + family per seat + main pile.
+	var out: Array = []
+	for c: int in [2, 3, 4]:
+		out.append(TOTAL_CARDS - int(Deck.NOBLE_BURN[c]) - c - int(Deck.NOBLE_FAMILY_SIZE[c]) * c)
+	return out
+
+
+func _q_name_cap(panel) -> int:
+	# The widest Name Label that clears BOTH arrows: the name is centered on the page (the Label rect is
+	# x 26..73, centered), the arrows own the x 15..24 and x 75..84 columns at y 0..9, and the name row
+	# is y 2..8, so the rows overlap and the ONLY clearance is horizontal. Derived from the buttons'
+	# own rects, so moving an arrow moves the cap.
+	var left: Rect2 = _q_arrow(panel, "Left").get_global_rect()
+	var right: Rect2 = _q_arrow(panel, "Right").get_global_rect()
+	var name: Label = _q_page(panel, "Family Setup").get_node("Name") as Label
+	var nr: Rect2 = name.get_global_rect()
+	var mid: float = (nr.position.x + nr.end.x) / 2.0
+	var room: float = min(right.position.x - mid, mid - left.end.x)
+	return int(floor(room * 2.0)) + Q_NAME_CAP_EXTRA
+
+
+func _q_text_of(panel, name: String) -> String:
+	return String((_q_page(panel, name).get_node("Description") as Label).text)
+
+
+func _q_name_of(panel, name: String) -> String:
+	return String((_q_page(panel, name).get_node("Name") as Label).text)
+
+
+func _test_help_text() -> void:
+	var tag := "Q5 the text IS the deal table"
+	var panel = await _help_panel()
+	panel.set("variant_active", true)
+	await await_frames(1)
+	var burn: Array = _q_per_seat(Deck.NOBLE_BURN)
+	var fam: Array = _q_per_seat(Deck.NOBLE_FAMILY_SIZE)
+	var pile: Array = _q_leftovers()
+	var setup: String = _q_text_of(panel, "Family Setup")
+	# CLAUSE-scoped, not a run anywhere in the page: the 3 triples the page prints are read off the
+	# clause that states them ("Set aside …", "family …", "main pile …"). A page whose burn row is
+	# WRONG can still contain the right digits by accident - "family 5 / 4 / 3, main pile 1 / 0 / 0"
+	# contains a 3 / 1 / 0 across the two clauses - and a check that accepts that is a check on the
+	# digits, not on the rule. (Measured: sabotage S5, a burn row typed 4 / 1 / 0, printed 0 FAILs for
+	# a run-anywhere check and 3 for this one.)
+	check(_q_triple_after(setup, "set aside") == burn, tag + ": the Setup page's burn/widow row IS the"
+		+ " triple the deal reads - " + str(burn) + " for 2 / 3 / 4 players, derived from"
+		+ " `Deck.NOBLE_BURN` (page prints " + str(_q_triple_after(setup, "set aside")) + ", full digit"
+		+ " list " + str(_q_digits(setup)) + ")")
+	check(_q_triple_after(setup, "family") == fam, tag + ": the Setup page's family row IS " + str(fam)
+		+ " == `Deck.NOBLE_FAMILY_SIZE` for 2 / 3 / 4 players (page prints"
+		+ " " + str(_q_triple_after(setup, "family")) + ")")
+	check(_q_triple_after(setup, "main pile") == pile, tag + ": the Setup page's main-pile row IS"
+		+ " " + str(pile) + " == 16 - burn - first-hand - family, the 16-card arithmetic of the deal"
+		+ " table (page prints " + str(_q_triple_after(setup, "main pile")) + ")")
+	check(int(burn[2]) == 0, tag + ": the burn triple ENDS in 0, i.e. the 4-player column burns nothing"
+		+ " - the page prints the same 0 the deal uses, so the page cannot claim a 4p widow the game"
+		+ " never deals")
+	check(setup.contains("Hand 1"), tag + ": the Setup page states the ONE first-hand card ('Hand 1') -"
+		+ " the card a seat starts with, which is NOT part of his family (page: '" + setup + "')")
+	var words: Dictionary = {
+		"Family Setup": ["hand", "family", "set aside"],
+		"Family Turn": ["private", "draw from it", "1 of 2", "prince", "widow"],
+		"Family Out": ["reveals", "hand and family", "leaves play", "no one"],
+		"Family Ends": ["round ends", "no family card left"],
+	}
+	for page_name: String in words:
+		var low: String = _q_text_of(panel, page_name).to_lower()
+		var missing: Array = []
+		for w: String in words[page_name]:
+			if !low.contains(w):
+				missing.append(w)
+		check(missing.is_empty(), tag + ": '" + page_name + "' says " + str(words[page_name])
+			+ " - the todo's 4 rule statements, in the page that states them (missing " + str(missing)
+			+ ")")
+	check(_q_text_of(panel, "Family Turn").to_lower().contains("family")
+		and _q_text_of(panel, "Family Ends").to_lower().contains("family")
+		and _q_text_of(panel, "Family Out").to_lower().contains("family"),
+		tag + ": the 3 pages that are ABOUT the family name it - a player who reads only one page gets"
+		+ " the whole rule, not a rule that needs another page to make sense")
+	# The 84 x 48 board: 5 lines of the game's 7 px font (6 px line height) is the most a Description
+	# label (y 12..46) can print, and a Name wider than the gap between the arrows is a name the arrows
+	# cover. Measured on the page's own Labels, so a longer string in the scene is a FAIL.
+	var font: Font = load("res://Gamebuino.ttf")
+	var cap: int = _q_name_cap(panel)
+	var tight: Array = []  # a page whose text ends BELOW the 48 px board
+	var spill: Array = []  # a page whose text ends below its own label rect
+	var wide: Array = []
+	var lh: int = (_q_page(panel, "Family Setup").get_node("Description") as Label).get_line_height()
+	var variant_bottom: Array = []
+	for p in _q_pages(panel):
+		var d: Label = p.get_node("Description") as Label
+		var lines: int = d.get_line_count()
+		var bottom: int = 12 + lines * lh  # the Description label starts at y 12 and prints 6 px lines
+		if bottom > 48:
+			tight.append(String(p.name) + ":" + str(lines) + " lines")
+		if bottom > int(d.get_rect().end.y):
+			spill.append(String(p.name))
+		if Q_VARIANT_PAGES.has(String(p.name)):
+			variant_bottom.append(bottom)
+		var w: int = int(ceil(font.get_string_size(String(p.get("card_name")),
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 7).x))
+		if w > cap:
+			wide.append(String(p.name) + ":" + str(w))
+	check(tight.is_empty(), tag + ": every page's text ENDS on the 48 px board (the Description label"
+		+ " starts at y 12 and the game's 7 px font prints 6 px lines, so 6 lines is the most a page can"
+		+ " print at all) - a 7th line is text the player cannot read (offenders " + str(tight) + ")")
+	check(variant_bottom == [36, 42, 42, 36], tag + ": the 4 variant pages print 4 / 5 / 5 / 4 lines and"
+		+ " their text ends at y " + str(variant_bottom) + ", every one INSIDE the page's own Description"
+		+ " rect (which ends at y 44) - the new pages fit with room to spare, measured on the Labels the"
+		+ " scene ships, so a LONGER string in the scene is a FAIL, not a layout choice")
+	check(spill == ["Guard", "Baron", "Handmaid", "Prince", "Princess"], tag + ": MEASURED and LEFT"
+		+ " ALONE - 5 pre-existing classic card pages print a 6th line BELOW their own 32 px Description"
+		+ " rect (12 + 6 * 6 == 48 > 44), in the 4 px the page has under its label, ON the board. Step 29"
+		+ " touches no classic page, and re-flowing 5 classic descriptions to fit the rect is not this"
+		+ " step's edit; the fact is pinned here so a later step cannot lose it silently (measured "
+		+ str(spill) + ")")
+	check(wide.is_empty(), tag + ": every page name fits the " + str(cap) + " px the arrows leave them"
+		+ " (the arrows own x 15..24 and 75..84, the name row is y 2..8) - 'Family Round End' is 64 px"
+		+ " and is the name the todo names, MEASURED against the arrows: it does not fit, so the page"
+		+ " is named 'Family Ends' (offenders " + str(wide) + ")")
+	check(_q_name_of(panel, "Family Ends") == "Family Ends", tag + ": the 4 page names are the scene's"
+		+ " and the labels print them (measured '" + _q_name_of(panel, "Family Ends") + "')")
+	await _help_free(panel)
+
+
+# ---- Q6: the app pins the pages to the GAME, at every open, on the real scene ----------------
+func _test_help_app() -> void:
+	var tag := "Q6 the app pins Help to the game"
+	var app = _make_menu_app()
+	_menu_levels = [Player.AI_Level.Level_4, Player.AI_Level.Level_4,
+		Player.AI_Level.Level_3, Player.AI_Level.Level_2]
+	await _menu_ready(app)
+	var help: Node = app.get_node("Help")
+	var main: Node = app._main
+	check(!bool(help.variant_active), tag + ": at boot, with no game, Help is in classic mode")
+	check(help.has_method("reachable_pages") and help.get("_pages") != null, tag
+		+ ": the app's Help node IS the Help scene (its own page list and filter), not a copy")
+	check(int(help.call("reachable_pages").size()) == Q_CLASSIC_PAGES, tag + ": and " + str(Q_CLASSIC_PAGES)
+		+ " pages are reachable before any game exists")
+
+	await _tap_start_play(app)
+	await _tap_row(app, "NOBLE")
+	await _settle_menu_deal(app, NOBLE_FAMILY_4P, 0)
+	check(main.noble_family and _fam_sizes(main) == [3, 3, 3, 3], tag + ": a NOBLE FAMILY game is"
+		+ " running (family " + str(_fam_sizes(main)) + "), so the pages below can follow the mode")
+
+	main.emit_signal("menu_pressed")  # the in-game menu button's own signal
+	await await_frames(1)
+	(app._pause.get_node(Q_HELP_ROW) as BaseButton).emit_signal("pressed")
+	await await_frames(1)
+	check(bool(help.visible) and bool(help.variant_active), tag + ": PAUSE HELP inside a variant game is"
+		+ " in VARIANT mode - the app set the flag from `Main.noble_family` at the open, not a constant"
+		+ " and not a stored mode (the mode is per game and never persisted)")
+	check(int(help.call("reachable_pages").size()) == Q_ALL_PAGES, tag + ": and all " + str(Q_ALL_PAGES)
+		+ " pages are reachable - the variant's own rules live in the variant game's Help")
+	var rn: Array = _q_names_at(help, help.call("reachable_pages"))
+	var variant_ok: bool = true
+	for v in Q_VARIANT_PAGES:
+		variant_ok = variant_ok and rn.has(v)
+	check(variant_ok, tag + ": the 4 variant pages are in the list the open Help can reach, in the"
+		+ " variant game (measured " + str(rn.slice(8)) + ")")
+	check(_q_shown(help).size() == 1, tag + ": the opened page shows ONE page ("
+		+ str(_q_shown(help)) + ") - opening Help does not stack pages")
+	var seen: Array = []
+	await _q_walk(help, "Right", 12, seen)
+	check(_q_shown(help) == ["Family Ends"] and _q_active(help) == 12, tag + ": the player read the"
+		+ " variant rules, ending on the last variant page (index " + str(_q_active(help)) + ")")
+	(help.get_node("BackButton") as BaseButton).emit_signal("pressed")
+	await await_frames(1)
+	check(!bool(help.visible) and bool(app._pause.visible), tag + ": Help's Back closed the page and"
+		+ " brought the PAUSE page back (the invoker rule the classic Help already has)")
+	var held: int = _q_active(help)
+	check(held == 12, tag + ": a CLOSED page KEEPS its view (" + str(held) + ") - the clamp belongs to"
+		+ " the open, where the mode is known, not to a hidden page")
+
+	await _tap_pause_exit(app)
+	check(!main.noble_family and app._start.visible, tag + ": Exit-to-menu cleared the mode and brought"
+		+ " the start page back, so the next Help open has a classic mode to re-pin")
+	# The player goes STRAIGHT into a classic game - NO Start-page Help in between, so nothing else can
+	# reset the flag. This is the path that turns "the open sets the flag only when a variant game runs"
+	# into a player reading variant rules inside a classic game.
+	await _tap_start_play(app)
+	await _tap_row(app, "CLASSIC")
+	await _settle_menu_deal(app, 0, CLASSIC_4P_MAIN)
+	main.reset_audit()  # the abandoned variant round's audit baseline (the M4 lesson)
+	main.emit_signal("menu_pressed")
+	await await_frames(1)
+	(app._pause.get_node(Q_HELP_ROW) as BaseButton).emit_signal("pressed")
+	await await_frames(1)
+	check(bool(help.visible) and !bool(help.variant_active), tag + ": a CLASSIC game's Pause Help is in"
+		+ " classic mode OPENED RIGHT AFTER a variant game's Help was opened in the same app - the flag is"
+		+ " re-pinned from `Main.noble_family` at the open, so a page the variant game set `true` cannot"
+		+ " stay `true` for a classic game (measured variant_active = " + str(bool(help.variant_active))
+		+ ") - this is the app's SECOND Help open, in the game that runs now")
+	check(int(help.call("reachable_pages").size()) == Q_CLASSIC_PAGES, tag + ": a classic game's Help has"
+		+ " " + str(Q_CLASSIC_PAGES) + " pages - the variant rules are not printed to a player who is not"
+		+ " playing them")
+	check(_q_active(help) == 8 and _q_shown(help) == ["Game End"], tag + ": and it OPENED clamped: the"
+		+ " player closed the variant page on 'Family Ends' (index 12) and this open put him on 'Game"
+		+ " End' (index " + str(_q_active(help)) + ", shown " + str(_q_shown(help)) + "), measured on the"
+		+ " app's own open path - the todo's 'paging never lands on a hidden page'")
+	check(_q_pages(help).size() == Q_ALL_PAGES, tag + ": the SCENE still holds all " + str(Q_ALL_PAGES)
+		+ " pages in a classic game - a variant page is HIDDEN, never deleted, so no mode needs a rebuild")
+	(help.get_node("BackButton") as BaseButton).emit_signal("pressed")
+	await await_frames(1)
+	check(!bool(help.visible) and bool(app._pause.visible), tag + ": Help's Back closed the page and"
+		+ " brought the PAUSE page back - the invoker is the OPENER, in a classic game too")
+	await _tap_pause_exit(app)
+	(app._start.get_node(Q_HELP_ROW) as BaseButton).emit_signal("pressed")
+	await await_frames(1)
+	check(bool(help.visible) and !bool(help.variant_active), tag + ": START HELP, opened from the START"
+		+ " page, is in CLASSIC mode - the same property, re-pinned on a DIFFERENT opener; from the Start"
+		+ " page no game runs, so classic is the mode the todo's Check asks for, by fact and not by a"
+		+ " constant")
+	check(int(help.call("reachable_pages").size()) == Q_CLASSIC_PAGES, tag + ": the 4 variant pages are"
+		+ " unreachable from the Start page (the todo's first Check, measured on the app's own page list)")
+	check(_q_shown(help).size() == 1, tag + ": the Start-page Help shows ONE page (" + str(_q_shown(help))
+		+ ") - clamped from index 8, which is reachable in both modes, so this open moved nothing")
+	(help.get_node("BackButton") as BaseButton).emit_signal("pressed")
+	await await_frames(1)
+	check(!bool(help.visible) and bool(app._start.visible), tag + ": Help's Back returned to the START"
+		+ " page (the invoker is the opener, not a fixed page)")
+	await _free_menu_app(app)

@@ -325,7 +325,7 @@ the deal), step 24 the MODE PICKER `game_mode/game_mode.tscn` (CLASSIC / NOBLE F
 signal per press, nothing persisted), step 26 the per-mode STATS tables (two 14-counter tables, the
 page's `mode`, the `_totals_and_wins` alias), step 27 the stats page's OWN mode switch (a C/F letter +
 Left/Right arrows in the page's left margin), step 28 the SAVE and the WRITE TARGET (2 save keys, a
-round's counters filed by the game that played it, the 12-counter migration), step 31 joint move
+round's counters filed by the game that played it, the 12-counter migration), step 29 the NOBLE FAMILY HELP pages (4 variant pages in the Help scene, 17 pages reachable in a classic game, the Setup page's numeric rows ARE the deal table, paging that never lands on a hidden page), step 31 joint move
 legality and L1 determinism). TEST A
 needs no
 `Main` scene - it drives the real `Deck` scene directly, 200 seeded deals per player count.
@@ -1393,6 +1393,155 @@ step 27's O4 (Reset clears the VISIBLE table, which is now also the game's table
 the stats page cannot be opened on the mode a game will be played in from the MODE PICKER — `start_game()`
 pins it, which TEST N7 covers. Steps 29 (Noble Family help lines) and 30 (Noble Family smoke suite) are
 the next sections.
+
+### TEST Q — the NOBLE FAMILY Help pages: 21 in the scene, 17 in a classic game, the Setup page prints the deal table (step 29)
+
+Step 29 (todo §C.29) puts the variant's rules where a player can read them. In the product code it is
+4 scene pages + 2 app lines + a filter in the page: `help/card_help_page.gd` gains **`@export var
+variant_only: bool = false`** (an editor-set tag on the page widget, carrying no behaviour of its own),
+`help/help.tscn` gains **4 pages** — `Family Setup`, `Family Turn`, `Family Out`, `Family Ends` — as
+instances of the game's own page widget with `show_card = false`, in ONE block after `Game End`
+(index 8) and before `Guard` (index 13), and `help/help.gd` gains **`variant_active`** (a property
+SETTER that repaints), **`reachable_pages()`** and **`is_reachable(i)`**; `update_pages()` hides a
+`variant_only` page when the flag is false, puts the arrows at the ends of the FILTERED list, and
+clamps a page index that fell out of that list to the NEAREST reachable page (never to 0, never to a
+hidden index). `application/application.gd` pins the flag on **every open** from `Main.noble_family` —
+`_on_start_help_pressed` and `_on_pause_help_pressed` each set it, so no opener can forget it. TEST Q is
+**85 checks** in 6 fixtures (Q1 10, Q2 15, Q3 11, Q4 13, Q5 15, Q6 21); a clean tree prints **1412
+PASS, 0 FAIL, 0 script error, exit 0** in 66 s (1327 at step 28 — Q's 85 are the whole delta). Q runs
+**between TEST P and TEST N**: P has already restored `user://options.cfg` by then, and Q opens the real
+app (2 real games), which is the same reason TEST N and TEST O run before TEST M (the tail-of-stdout
+rule).
+
+- **Q1 — the scene, 10 checks.** The Help scene holds **21 pages == 17 + 4**, the 4 in one block at
+  indices **[9, 10, 11, 12]** in the todo's order, every page name UNIQUE, all 4 variant pages carry
+  `variant_only == true` and **no** classic page carries it (0 of 17). Every page is the game's ONE page
+  widget (Card sprite + Name + Description, 3 children); the 4 variant pages carry **no card art**
+  (`show_card == false`, the sprite hidden, `card_type == Unknown`) while the 8 card pages keep theirs;
+  every page's Name Label reads its `card_name` and every Description Label carries >= 30 chars. The
+  Help root is 4 children (2 arrows + Back row + the page list) — step 29 added NO widget, NO panel and
+  NO third button, only pages.
+- **Q2 — classic mode, 15 checks.** A panel at `_ready()` is in CLASSIC mode (the flag defaults false,
+  so the Start page's Help shows classic rules **by default, not by a call every opener must
+  remember**). **17 of 21** pages are reachable, and they are the pre-variant list **by name and in
+  order** — `About … Game End`, `Guard … Princess` — so step 29 ADDS pages, it removes, renames and
+  reorders nothing. Each of the 4 variant pages is checked UNREACHABLE by name. The page that opens is
+  the FIRST classic page; the Left arrow is hidden there and `is_visible_in_tree()`-false (the ring has
+  a front end, it is not a carousel). A 21-press right-sweep, sampled AFTER each press, visits the 17
+  classic pages in scene order and **skips the 4 variant ones**; every sampled frame shows EXACTLY ONE
+  page; and the last 5 presses at the last page moved NOTHING (no wrap — the pre-variant guard survives
+  the filtering). The classic ring's last reachable page is the scene's LAST index (20): the variant
+  block sits INSIDE the list, it does not extend it.
+- **Q3 — variant mode, 11 checks.** With the flag on, **21 of 21** pages are reachable; a 20-press sweep
+  visits every page in scene order, the 4 variant pages between `Game End` and `Guard`, each shown
+  EXACTLY ONCE (`[1, 1, 1, 1]` — a page shown twice is a page list built twice, a page never shown is a
+  rule the variant player cannot read), and each variant page's own Name and Description Labels are ON
+  SCREEN when the ring reaches it. Parked on `Guard` (13) and pressing Left lands on `Family Ends` (12),
+  NOT on `Game End`: the arrows walk the SAME filtered list in both directions.
+- **Q4 — the mode switch WHILE A PAGE IS OPEN, 13 checks** (the todo's "paging never lands on a hidden
+  page", which is the failure mode a filter creates). Parked on the last variant page (12), switching to
+  classic CLAMPS the cursor to **8 == `Game End`**, the nearest reachable page below — not to 0 (a page
+  the player never asked for), not left at 12 (an index with nothing on screen) — and the clamped page is
+  ON SCREEN, exactly one, with BOTH arrows tappable (a clamp into a page with no way out is a dead end
+  the player escapes only by Back). Clamped from the MIDDLE of the block (index 10) lands on 8 too, so
+  the rule is "the nearest reachable page below", not a rule that knows the block's ends. Switching
+  modes when the page is reachable in both modes moves NOTHING (2 clamp-free switches, 0 moves): the
+  filter is not a page reset (step 27's stats rule). In classic mode Right from `Game End` skips the 4
+  hidden pages to `Guard` (13) and Left from `Guard` skips them back to 8 — at EVERY press, not only at
+  the open; the same press with the flag on steps into `Family Setup` (9).
+- **Q5 — the text IS the deal table, 15 checks.** The Setup page's 3 numeric rows are read **per clause**
+  and compared with values **derived from the code that deals**: "Set aside …" must print
+  `Deck.NOBLE_BURN` per seat `[3, 1, 0]`, "family …" must print `Deck.NOBLE_FAMILY_SIZE` per seat
+  `[5, 4, 3]`, and "main pile …" must print `16 - burn - one first-hand card per seat - family * seats
+  == [1, 0, 0]`. The triple ENDS in 0 — 4p burns nothing, which is why 4p has no widow pile at all — and
+  the page states the ONE first-hand card ("Hand 1"). The 4 pages' word gates are the todo's 4 rule
+  statements: Setup says *hand / family / set aside*, Turn says *private / draw from it / 1 of 2 /
+  prince / widow*, Out says *reveals / hand and family / leaves play / no one*, Ends says *round ends /
+  no family card left*. Geometry is measured on the Labels the scene ships, derived from the arrows' own
+  rects: the 4 variant pages print 4 / 5 / 5 / 4 lines ending at y **36 / 42 / 42 / 36**, inside the
+  Description rect that ends at y 44; every page's text ENDS on the 48 px board (6 lines of the game's
+  6 px line height below y 12 is the most a page can print at all); and every page name fits the **52
+  px** the arrows leave it — the arrows own x 15..24 and 75..84 and the name row is y 2..8, so
+  **`Family Round End` (64 px) does not fit** and the page is named `Family Ends`. MEASURED and LEFT
+  ALONE: 5 pre-existing classic card pages (`Guard, Baron, Handmaid, Prince, Princess`) print a 6th line
+  below their own 32 px Description rect (12 + 6 * 6 == 48 > 44), on the board, in the 4 px the page has
+  under its label — step 29 touches no classic page, and the list of 5 is pinned so a later step cannot
+  lose the fact silently.
+- **Q6 — the app pins the pages to the GAME, 21 checks**, on the real app, in the order a player does it.
+  At boot Help is in classic mode with 17 pages reachable, and the app's Help node IS the Help scene (its
+  own page list and filter, not a copy). A NOBLE FAMILY game runs (family `[3, 3, 3, 3]`); its **Pause
+  Help opens in VARIANT mode with all 21 pages**, the 4 variant pages in the list, the opened page
+  showing ONE page. The player reads through to the last variant page (12) and presses Help's Back: the
+  page closes and the PAUSE page is back (the invoker rule the classic Help already has), and a CLOSED
+  page KEEPS its view (12) — the clamp belongs to the OPEN, where the mode is known, not to a hidden
+  page. Exit-to-menu clears the mode, and the player goes STRAIGHT into a classic game — **no Start-page
+  Help in between, so nothing else can reset the flag**: this second Help open is in classic mode with 17
+  pages, and it OPENED clamped (the player closed the variant page on `Family Ends`, 12, and the open put
+  him on `Game End`, 8). The SCENE still holds all 21 pages in a classic game — a variant page is HIDDEN,
+  never deleted, so no mode needs a rebuild — and Back returns to the PAUSE page of the classic game.
+  Exit again: the START page's Help is in classic mode with 17 pages (the todo's first Check, measured on
+  the app's own page list), showing ONE page, clamped from index 8, which is reachable in both modes, so
+  this open moved nothing; Back returns to START.
+
+**Harness facts this step paid for (measured, not guessed):**
+
+1. **`Array.reverse()` mutates in place and returns `null`.** The left-arrow neighbour search first read
+   `for i in reach.reverse()`; the loop iterated over `null` and the arrow silently stopped working (Q3's
+   "Left from 'Guard' lands on 'Family Ends'" caught it). The current code copies the list, then reverses.
+2. **`Control.get_rect()` is positioned at the control's OFFSETS, not at its origin.** A first version of
+   Q5 asked the Description label's rect whether it `has_point((0, y))`; the rect starts at (1, 12), so
+   the point is outside for **all 21 pages** — a gate that fails the whole tree is a gate about the gate.
+   The check compares the rect's END (`end.y == 44`) with the text's bottom (`12 + lines * 6`).
+3. **A paging sample must be taken AFTER the press.** Sampling before each press and then prepending the
+   page the Help opened on produced `["About", "About", "Deck", …]` — the first page twice, every
+   expected list shifted by one. Q2/Q3 press first, so the samples are the pages the presses LANDED on.
+4. **Digit matching has to be CLAUSE-scoped, not a run anywhere in the page.** A first version asked
+   "does the page's digit list contain the run 3 / 1 / 0?"; sabotage S5 (the burn row typed `4 / 1 / 0`)
+   printed **0 FAILs**, because the page still contains a `3, 1, 0` run across the family row and the
+   main-pile row. The check now reads the triple that FOLLOWS each clause keyword, so the burn row is
+   compared with the burn row (S5 → 1 FAIL).
+5. **`is_visible_in_tree()` is the engine's own gate, and the paging evidence is "exactly one page
+   visible in this frame".** The Help root is `visible = false` in `application.tscn`, so a fixture that
+   measures the app's Help has to press the app's own Help row first; a page whose parent is hidden shows
+   NOTHING, which is the state the crowded-frame counter measures (0 visible pages counts as crowded,
+   exactly like 2).
+6. **`get_node()` is CASE-SENSITIVE** — `"leftButton"` is no node at all, and the crash is on the
+   fixture's own line. The arrow helpers take `"Left"` / `"Right"`.
+7. **A fixture that indexes a measured list crashes when a sabotage empties it.** S7 (the filter
+   inverted) leaves 0 pages reachable in classic mode, so Q2's `rn[0]` line threw a script error
+   alongside its 24 FAILs. The suite still fails loudly; a fixture line that indexes a measurement is a
+   fixture that reports a crash instead of a message.
+8. **A page whose label rect is too small is a MEASUREMENT, not a bug to fix in this step.** 5 classic
+   card pages need 6 lines; their rect holds 5. Q5 pins the list of 5 names so a later step that re-flows
+   them (or quietly accepts a 7th line) shows up as a change in the pinned list.
+
+**The sabotages (each applied ALONE to the pristine tree, suite run, then the exact bytes restored —
+md5-checked, no `RESTORE MISMATCH`; clean tree 1412 PASS, 0 FAIL, exit 0):**
+
+| # | Sabotage | suite | FAILs | Caught by |
+|---|---|---|---|---|
+| S1 | every open passes a CONSTANT (`_help.variant_active = true` at both opens) — a classic game shows the variant rules | 1407 | **5** | Q6 ×5 (the classic Pause Help's mode and page count, the Start Help's mode, both clamped opens) |
+| S2 | the PAUSE open forgets the flag (only the START open sets it) — a variant game's Pause Help shows 17 pages | 1406 | **6** | Q6 ×6 (the variant Pause Help's mode, all 21 pages, the variant page list, the page it ends on, the closed view, the clamped open) |
+| S3 | the Right arrow steps the RAW child index (`_active_page + 1 < child_count`) | 1404 | **8** | Q2 ×5 (the classic sweep's order, the no-wrap tail, the hidden-arrow press), Q4 ×3 (Right from `Game End` lands on a hidden page, the block sweep) |
+| S4 | `update_pages()` never clamps (`if not reach.has(_active_page)` → `if false`) | 1402 | **10** | Q4 ×9 (the clamp from 12, from the middle of the block, both arrows on the clamped page, the skip in both directions), Q6 ×1 (the app's clamped open) |
+| S5 | the burn row typed `4 / 1 / 0` | 1411 | **1** | Q5 ×1 (the burn clause's triple == `Deck.NOBLE_BURN`) |
+| S6 | the Setup page drops its family row | 1410 | **2** | Q5 ×2 (the family clause's triple, the page's digit list) |
+| S7 | the filter is INVERTED (`variant_active and !variant_only`) — a variant game hides its own pages, a classic game shows all 21 | 1380 | **24** | Q2 ×2, Q3 ×4, Q4 ×10, Q6 ×8 (+1 fixture script error, harness fact 7) |
+| S8 | one page untagged (`Family Out`, `variant_only = false`) | 1392 | **20** | Q1 ×1 (the tag count), Q2 ×6 (its own unreachability, the sweep, the tail), Q4 ×9, Q6 ×4 |
+| S9 | the round-end line tests the WHOLE table ("when no player has a family card") | 1410 | **2** | Q5 ×2 (the word gate, the 4 pages' line geometry) |
+| S10 | the page is named `Family Round End` (the todo's name, 64 px) | 1410 | **2** | Q5 ×2 (the 52 px the arrows leave a name, the printed Name Label) |
+| S12 | card art on a variant page (`show_card = true` on `Family Setup`) | 1411 | **1** | Q1 ×1 (a rules page must hide its sprite) |
+| S14 | the Pause open sets the flag only when a variant game runs (`if _main.noble_family: true`) — the flag goes STALE across a mode change | 1409 | **3** | Q6 ×3 (the classic Pause Help opened right after a variant game's Help, its page count, its clamped open) |
+| S13 / S11 / S15 | the START open sets the flag only when true; the START open forgets it; the LEFT arrow steps the raw child index | **1412** | **0** | **NOT CAUGHT, AND THAT IS THE MEASUREMENT.** At the Start page `Main.noble_family` is ALWAYS false (boot is false and step 25's Exit-to-menu clears it), so "set it to the mode", "set it only when true" and "do not set it at all" are three implementations of the same observable behaviour, and the suite's 17-pages-in-classic checks pass on all three. For the left arrow, `update_pages()` clamps every move, so a raw index and a filtered scan land on the same page in every reachable configuration. Two of Q6's 21 checks exist precisely to make the Start open's behaviour observable; a Start-page open that runs while a variant game is active is not reachable in the product, so no check can distinguish it. |
+
+**Not covered by this step (deliberately):** the Help text is measured, not proofread (Q5 gates the
+numbers, the todo's rule words and the geometry, not style); the app fixtures run the 4-player
+configuration (the Setup page's numbers are checked from the per-seat deal constants, which cover
+2 / 3 / 4 players); the family-stack display strip gets NO Help page (it is display-only, step 18, and
+the todo asks for 4 pages, not 5); and `variant_only` is a page tag, so a hypothetical FUTURE variant
+would need its own tag semantics — the todo names one variant, and Q1 pins the tag count on both sides
+(4 tagged, 17 untagged) so that change cannot happen quietly. Step 30 (the Noble Family smoke suite) is
+the next section.
 
 ## tests/noble_family_smoke.tscn — Noble Family variant, whole games on the AI (steps 7, 11, 14)
 

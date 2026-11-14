@@ -85,6 +85,34 @@ show_card = false
 card_name = "Game End"
 card_description = "First to win 6 (2 players), 5 (3), or 4 (4) rounds wins the game."
 
+[node name="Family Setup" parent="Pages" instance=ExtResource("1_kcg8g")]
+visible = false
+show_card = false
+variant_only = true
+card_name = "Family Setup"
+card_description = "Set aside 3 / 1 / 0 (2 / 3 / 4p). Hand 1, family 5 / 4 / 3, main pile 1 / 0 / 0."
+
+[node name="Family Turn" parent="Pages" instance=ExtResource("1_kcg8g")]
+visible = false
+show_card = false
+variant_only = true
+card_name = "Family Turn"
+card_description = "Family is private. Draw from it, then play 1 of 2. Only Prince draws the widow pile."
+
+[node name="Family Out" parent="Pages" instance=ExtResource("1_kcg8g")]
+visible = false
+show_card = false
+variant_only = true
+card_name = "Family Out"
+card_description = "An out player reveals hand and family, then leaves play. No one else saw them."
+
+[node name="Family Ends" parent="Pages" instance=ExtResource("1_kcg8g")]
+visible = false
+show_card = false
+variant_only = true
+card_name = "Family Ends"
+card_description = "The round ends when the player to act has no family card left."
+
 [node name="Guard" parent="Pages" unique_id=287543303 instance=ExtResource("1_kcg8g")]
 visible = false
 card_type = 0

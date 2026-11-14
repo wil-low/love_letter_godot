@@ -11,6 +11,12 @@ extends Node2D
 		if Engine.is_editor_hint() and _card != null:
 			_card.frame = card_type
 
+# Noble Family, todo §C.29: a page tag, set in the editor. `help.gd` hides every `variant_only`
+# page while a variant game is not active, so the 4 Noble Family pages are the ONLY pages a
+# classic game never shows, and a classic page can never be hidden by a variant game (the tag is
+# false on all 17 of them). It carries no behaviour of its own - it is data the page list reads.
+@export var variant_only: bool = false
+
 @export var show_card: bool = true:
 	set(value):
 		show_card = value
