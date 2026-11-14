@@ -64,7 +64,43 @@ extends Node2D
 # Array) to `Array[int]` and PRESERVES its length, because the application drops a stale save by its
 # size. Reset clears ONLY the visible table; a classic game writes ONLY the classic table; and the
 # APP is the only file that names a mode (`start_game()` and the two stats-page openers), so a variant
-# game's counters can only land in the noble table.
+# game's counters can only land in the noble table. TEST N runs BEFORE TEST M for a reason the suite
+# records: Godot's stdout is BLOCK-buffered when redirected and a scene exits via `quit()`, so the tail
+# of a redirected stdout is LOST (the suite's own exit summary and the last lines, measured at the time
+# of writing). The sections a run must READ are therefore never the last ones.
+#
+# TEST O (todo step 27) pins the switch ON THE PAGE: the stats page's own mode switch - 1 Label (the
+# C/F letter) + 2 `DigitButton` arrows in the page's LEFT MARGIN (x 0..15, the only column of the
+# 84 x 48 board no counter row uses), stacked Reset / letter / Left / Right / Back. O1 geometry: all 4
+# controls are the game's own digit-button widget with the Left/Right glyphs (not the Back glyph),
+# every target >= 9 x 9 board px (>= 72 x 72 real px at the 8 x scale), the whole column inside the
+# board with no vertical overlap, every `pressed` connected IN THE SCENE to the page's own handler,
+# every target `is_visible_in_tree()` (the engine's input gate) in BOTH modes, and NO counter row rect
+# and the letter rect intersecting ANY button - the todo's "no label is covered by a button". O2 the
+# flip is a BROWSE: it wraps at both ends, the selected table's rows print in the press's OWN frame
+# (Button signals run synchronously), the page stays open, the `invoker` is untouched, ZERO counters
+# move, and the suite MEASURES that `wrapi`'s upper bound is EXCLUSIVE - written over `MODE_COUNT - 1`
+# every press clamped to mode 0 and the NOBLE table was UNREACHABLE (the suite ran that version). O2
+# also MEASURES the 2-mode RING: from every mode `show_mode(m + 1)` and `show_mode(m - 1)` land on the
+# SAME mode, so a Left/Right SWAP in the handlers is BEHAVIOURALLY INVISIBLE at 2 modes - the suite ran
+# that sabotage and printed 0 FAILs. What makes the pair honest at 2 modes is the GLYPHS O1 pins
+# (Frame_Left / Frame_Right) plus the DELTA CONTRACT O2 pins (Right = `wrapi(m + 1)`, then a Left
+# returns to the mode the pair started from): the contract is pinned NOW because it is the only thing
+# the swap can break, and it breaks it the day MODE_COUNT grows past 2.
+# O3 the letter is 1 character per mode, on screen in both modes, DERIVED from the mode (never stored
+# beside it), fits its 9 px column at the game's 7 px font, names the rows that are on screen, and is
+# never a letter the counter rows already print. O4 reset follows the VISIBLE table in BOTH modes,
+# reached through the page's own arrows. O5 the app re-pins the mode on EVERY page open, so the page's
+# own choice is per VISIT, a closed page keeps a view, and a flip never changes the running game's
+# mode. O6 MEASURES the write target TODAY: step 26 aliased `_totals_and_wins` to `tables[mode]` (the
+# PAGE's mode) and `application.gd`'s two write paths name no mode, so a variant round whose page was
+# flipped to classic ends with classic counters +N and a variant history of zeros - the Check that
+# FLIPS WHEN STEP 28 LANDS. O2's `invoker` sentinel is the SUITE (`panel.invoker = self`) and never
+# the panel: `panel.invoker = panel` is a self-reference cycle, and a Node a cycle holds is never
+# freed, so it survives `queue_free`. Naming that is worth the line because the suite's exit LEAK
+# COUNT IS NOISY - the SAME tree printed 4, 6 and 8 leaked ObjectDB instances across the runs recorded
+# in tests/README.md - so a 2-instance swing from one fixture is NOT something this suite can measure;
+# the cycle is avoided for the reason the harness states, not because a leak counter proved it.
 #
 # TEST A deliberately needs no Main scene at all, so the deal table is pinned
 # independently of the game loop.
@@ -295,6 +331,10 @@ func _ready() -> void:
 	await _test_modal_rails()
 	await _test_deal_presentation()
 	await _test_game_mode()
+	# TEST O (step 27) sits with TEST N, NOT after it: the suite's last kilobytes of prints are lost to
+	# block-buffered stdout (the M5 lesson, step 26), so the sections that must be READ live before the
+	# TEST M tail. O is the new part of the page, N is the data it shows, so O runs first.
+	await _test_stats_switch()
 	# TEST N is placed BEFORE TEST M, not appended at the end of the list: Godot's stdout is block-buffered
 	# when it is redirected, and the suite's LAST few kilobytes of prints are gone from the log (measured:
 	# the committed suite's log ends at M4's last check and its M5 checks and its summary line are missing,
@@ -5722,9 +5762,11 @@ func _test_st_shape() -> void:
 			labels += 1
 		if ch is BaseButton:
 			buttons += 1
-	check(labels == 6 and buttons == 2, tag + ": the page is 6 Labels + Back + Reset = "
-		+ str(panel.get_child_count()) + " children - the step-27 mode switch ADDS nodes to this page,"
-		+ " so the baseline is written down before it does")
+	check(labels == 7 and buttons == 4, tag + ": the page is 6 counter Labels + 1 mode Label + Back +"
+		+ " Reset + Left + Right = " + str(panel.get_child_count()) + " children - the step-27 mode"
+		+ " switch added EXACTLY 1 Label (the C/F letter) and 2 `DigitButton` arrows to the pre-variant"
+		+ " page (6 Labels + Back + Reset = 8 children), and TEST O1 measures where they sit and that"
+		+ " nothing on the page was moved to make room")
 	await _st_free(panel)
 
 
@@ -6002,4 +6044,526 @@ func _test_st_app_mode() -> void:
 	check(_st_labels(stats) == _st_expect(stats.table()), tag + ": the page that opens renders the 6 rows"
 		+ " OF THE TABLE IT SHOWS (" + str(_st_labels(stats)) + ") - the labels are the table's view, in"
 		+ " both modes, in the pre-variant format")
+	await _free_menu_app(app)
+
+
+# ----------------------------------------------------------------------------------------
+# TEST O (todo step 27): the STATS PAGE'S OWN mode switch, in the page's left margin.
+#
+# Step 26 made the DATA two tables; a player can only use that if the page lets him LOOK at the
+# table he wants. Step 27 adds 1 Label (the mode letter) + 2 `DigitButton` arrows to the page, in the
+# left margin - x 0..15, the one column of the 84 x 48 board that NO counter row uses (the counter
+# rows start at x 16) - stacked in the free strip between the Reset button (y 0..9) and Back (y 40..49).
+#
+# O1 the geometry: the column reads Reset / mode letter / Left / Right / Back top to bottom, inside the
+#    board, non-overlapping, every target >= 9 x 9 board px (the game's own digit-button size), every
+#    `pressed` connected to the page's OWN handler, and NOTHING IS COVERED: no counter row rect and the
+#    mode-letter rect intersects any button - the todo's Check "no label is covered by a button".
+# O2 the flip is a BROWSE: it wraps at both ends (a control with a dead end is a mode a player cannot
+#    arrow back out of), the selected table's rows are on screen in the SAME frame the press lands in
+#    (the press is synchronous: a page that refreshes a frame late shows the rows of the mode left),
+#    the page stays open, the invoker is unchanged, and ZERO counters change. O2 ALSO measures the
+#    2-mode RING - `show_mode(m + 1)` and `show_mode(m - 1)` land on the SAME mode from every mode, so
+#    a Left/Right swap in the handlers cannot be seen at 2 modes (the suite ran it: 0 FAILs) - and pins
+#    the DELTA CONTRACT (Right = `wrapi(m + 1)`, a Left then returns to the mode the pair started
+#    from), which is the only thing the swap can break and the only one a 3rd table will make visible.
+# O3 the letter: 1 character per mode ("C" / "F"), it names the rows that are on screen, it flips with
+#    them, it FITS its 9 px column at the game's 7 px font, and it never collides with the H12345
+#    letters the counter rows print.
+# O4 reset follows the VISIBLE table in BOTH modes, reached through the page's own arrows - the rule
+#    step 26 pinned is only usable once the player can stand in front of the table he means to clear.
+# O5 the APP re-pins the mode on EVERY page open, so the page's own choice is per VISIT and adds no
+#    mode of its own; a closed page keeps a VIEW; and a flip never touches the running game's mode.
+# O6 MEASURED, TODAY: flipping mid-game MOVES THE WRITE TARGET, because step 26 aliased
+#    `_totals_and_wins` to `tables[mode]` - the PAGE's mode - and `application.gd`'s two write paths
+#    (`_on_round_won`, `_on_round_finished`) name no mode. O6 writes down where a running variant
+#    game's counters land while the page shows the OTHER table. This is the Check that FLIPS WHEN
+#    STEP 28 LANDS (step 28 indexes the write paths by the RUNNING game's mode); it is a measurement
+#    of today's behaviour, not an approval of it.
+# ----------------------------------------------------------------------------------------
+const SW_BUTTONS: Array = ["BackButton", "ResetButton", "LeftButton", "RightButton"]
+const SW_HANDLERS: Array = ["_on_back_button_pressed", "_on_reset_button_pressed",
+	"_on_left_button_pressed", "_on_right_button_pressed"]
+
+
+func _test_stats_switch() -> void:
+	print("\n########## TEST O: the stats page's own mode switch (step 27) - the left margin: C/F ##########")
+	print("########## letter + Left/Right arrows; a flip BROWSES the two tables, changes no counter, ##########")
+	print("########## the letter names the rows, reset clears only the visible table, nothing covered ##########")
+	await _test_sw_geometry()
+	await _test_sw_flip()
+	await _test_sw_letter()
+	await _test_sw_reset()
+	await _test_sw_app()
+	await _test_sw_game_write()
+
+
+# ---- helpers --------------------------------------------------------------------------------
+func _st_btn(panel, node_name: String) -> BaseButton:
+	return panel.get_node(node_name) as BaseButton
+
+
+# `emit_signal("pressed")` is the SAME connection the engine's GUI input drives; a real tap is
+# never delivered headless (a headless window is 64 x 64, TEST L's measured lesson).
+func _st_press(panel, node_name: String) -> void:
+	_st_btn(panel, node_name).emit_signal("pressed")
+	await await_frames(1)
+
+
+# The same press WITHOUT awaiting a frame: a Button's `pressed` signal runs its handler
+# synchronously, so this is what proves "the rows flip in the frame of the press".
+func _st_press_now(panel, node_name: String) -> void:
+	_st_btn(panel, node_name).emit_signal("pressed")
+
+
+func _st_rect(node) -> Rect2:
+	return (node as Control).get_global_rect()
+
+
+func _st_letter(panel) -> String:
+	return str((panel.get_node("ModeLabel") as Label).text)
+
+
+func _st_arrow(panel, node_name: String) -> int:
+	return int((panel.get_node(node_name) as Control).get_global_rect().position.y)
+
+
+# ---- O1: the switch column, and nothing covered --------------------------------------------
+func _test_sw_geometry() -> void:
+	var tag := "O1 the left margin"
+	var panel = await _st_panel()
+	var btns: Array = []
+	var widget_ok: bool = true
+	for n in SW_BUTTONS:
+		var b: BaseButton = _st_btn(panel, n)
+		btns.append(b)
+		widget_ok = widget_ok and (b is DigitButton)
+	check(widget_ok, tag + ": Back / Reset / Left / Right are ALL `DigitButton` instances"
+		+ " (`level_selector/digit_button.tscn`, the game's own button widget) - the mode switch adds"
+		+ " no new widget type, no Control and no Label-shaped fake button to the page")
+	var frames: Array = []
+	var glyphs: Array = []
+	for b in btns:
+		frames.append(int((b as DigitButton).frame))
+		glyphs.append(int((b.get_node("Sprite") as Sprite2D).frame))
+	check(frames == [int(DigitButton.FrameType.Frame_Back), int(DigitButton.FrameType.Frame_Reset),
+		int(DigitButton.FrameType.Frame_Left), int(DigitButton.FrameType.Frame_Right)], tag
+		+ ": the Left arrow is `Frame_Left` and the Right arrow is `Frame_Right` (measured "
+		+ str(frames) + ") - the two arrows are the game's OWN arrow glyphs, they are distinguishable"
+		+ " from each other, and neither one is the Back glyph a player would read as 'leave'")
+	check(glyphs == frames, tag + ": every button's sprite SHOWS the frame its export asks for"
+		+ " (" + str(glyphs) + ") - `DigitButton._ready` copies `frame` onto the sprite, so the glyph"
+		+ " a player sees is the glyph the export names")
+	var rects: Array = []
+	for b in btns:
+		rects.append(_st_rect(b))
+	var ml: Rect2 = _st_rect(panel.get_node("ModeLabel"))
+	var reset_r: Rect2 = rects[1]
+	var back_r: Rect2 = rects[0]
+	var left_r: Rect2 = rects[2]
+	var right_r: Rect2 = rects[3]
+	var in48: bool = true
+	for r in [reset_r, ml, left_r, right_r]:
+		var rr: Rect2 = r
+		in48 = in48 and (rr.position.x >= 0.0 and rr.position.y >= 0.0 and rr.end.x <= 84.0 and rr.end.y <= 48.0)
+	check(in48, tag + ": the Reset button, the mode letter and BOTH arrows sit fully inside the"
+		+ " 84 x 48 board (measured " + str([reset_r, ml, left_r, right_r]) + ") - the whole switch is"
+		+ " on screen at the game's native resolution, not at the scaled one")
+	var in49: bool = back_r.position.x >= 0.0 and back_r.end.x <= 84.0 and back_r.end.y <= 49.0
+	check(in49, tag + ": the Back button ends at y " + str(back_r.end.y) + " - PRE-EXISTING 1 px over"
+		+ " the 48 px guide (its 9 px target starts at 40), which step 27 did NOT create and does not"
+		+ " widen: the 2 new arrows end at y " + str(right_r.end.y) + ", 10 px clear of the edge")
+	var target_ok: bool = true
+	for r in rects:
+		var rr: Rect2 = r
+		target_ok = target_ok and rr.size.x >= 9.0 and rr.size.y >= 9.0
+	check(target_ok, tag + ": every tap target is >= 9 x 9 board px = >= 72 x 72 real px at the game's"
+		+ " 8 x scale (the 672 x 384 viewport) - a finger-sized target, the same size the level"
+		+ " selector's arrows use; a 6 px label-sized target would be a switch a player cannot press")
+	var margin_ok: bool = true
+	for r in [reset_r, ml, left_r, right_r, back_r]:
+		var rr: Rect2 = r
+		margin_ok = margin_ok and rr.end.x <= 16.0
+	check(margin_ok, tag + ": the whole switch column stays in x 0..15 - the counter rows start at"
+		+ " x 16, so the switch lives in the ONLY column of the board no counter uses (measured"
+		+ " " + str([reset_r, ml, left_r, right_r, back_r]) + ")")
+	var tops: Array = [reset_r.position.y, ml.position.y, left_r.position.y, right_r.position.y,
+		back_r.position.y]
+	var ends: Array = [reset_r.end.y, ml.end.y, left_r.end.y, right_r.end.y, back_r.end.y]
+	var stack_ok: bool = true
+	for i in 4:
+		stack_ok = stack_ok and (float(ends[i]) <= float(tops[i + 1]))
+	check(stack_ok, tag + ": the column reads top-to-bottom Reset / mode letter / Left / Right / Back"
+		+ " with NO vertical overlap (tops " + str(tops) + ", ends " + str(ends) + ") - a player"
+		+ " scans the letter, then the arrows that change it, then leaves")
+	var covered: Array = []
+	var row_rects: Array = []
+	for lbl in panel._levels:
+		var lr: Rect2 = _st_rect(lbl)
+		row_rects.append(lr)
+		for i in btns.size():
+			if lr.intersects(rects[i] as Rect2):
+				covered.append("row" + str(i))
+	for i in btns.size():
+		if ml.intersects(rects[i] as Rect2):
+			covered.append("mode-letter" + str(i))
+	check(covered.is_empty(), tag + ": NO counter row rect and the mode-letter rect intersects ANY of"
+		+ " the 4 buttons (" + str(covered) + ") - the todo's Check 'no label is covered by a button'."
+		+ " A covered counter is a number the player cannot read; a covered button is a press that"
+		+ " lands on the wrong control on a 672 x 384 screen")
+	var rows_in: bool = true
+	for r in row_rects:
+		var rr: Rect2 = r
+		rows_in = rows_in and rr.position.x >= 16.0 and rr.end.x <= 84.0 and rr.end.y <= 48.0
+	check(rows_in, tag + ": the 6 counter rows are unchanged and stay in x 16..83, y ..48 - the"
+		+ " switch reached the page by USING the empty margin, not by moving a counter row")
+	var wired: Array = []
+	for b in btns:
+		var method := ""
+		for c in (b as BaseButton).pressed.get_connections():
+			# Godot 4's connection Dictionary keys are ["signal", "callable", "flags"] (measured) -
+			# there is no "method" key, the method name lives IN the Callable
+			var cb: Callable = (c as Dictionary)["callable"]
+			method = str(cb.get_method())
+		wired.append(method)
+	check(wired == SW_HANDLERS, tag + ": every button's `pressed` is connected IN THE SCENE to the"
+		+ " page's own handler (measured " + str(wired) + ") - the switch runs on the scene's"
+		+ " connections, the same path the engine's GUI input drives, so a finger tap and a headless"
+		+ " press execute the same code")
+	var tappable: int = 0
+	for b in btns:
+		if (b as Control).is_visible_in_tree():
+			tappable += 1
+	check(tappable == 4, tag + ": with the page open, all 4 targets are `is_visible_in_tree()` - the"
+		+ " engine's own input gate (a hidden ancestor eats mouse input), so the switch is REACHABLE"
+		+ " in 84 x 48, which is the step-27 gate")
+	var arrow_vis: Array = []
+	for m in Stats.MODE_COUNT:
+		panel.show_mode(m)
+		arrow_vis.append([(panel.get_node("LeftButton") as Control).visible,
+			(panel.get_node("RightButton") as Control).visible])
+	check(arrow_vis == [[true, true], [true, true]], tag + ": BOTH arrows are visible in BOTH modes"
+		+ " (" + str(arrow_vis) + ") - a control that hides itself at an extreme is a mode a player"
+		+ " cannot get back from; on a 2-mode page every arrow is always useful")
+	var fits: bool = _gm_text_w(panel.get_node("ModeLabel")) <= int(ml.size.x)
+	check(fits, tag + ": the mode letter FITS its column at the game's 7 px font (measured"
+		+ " " + str(_gm_text_w(panel.get_node("ModeLabel"))) + " px in " + str(int(ml.size.x))
+		+ " px) - a 1-character mode name is what a 9 px margin can print, which is why the page shows"
+		+ " a letter and not the word NOBLE FAMILY")
+	await _st_free(panel)
+
+# ---- O2: a flip is a BROWSE - it wraps, the rows follow in the press's own frame, no counter moves -
+func _test_sw_flip() -> void:
+	var tag := "O2 a flip browses"
+	var panel = await _st_panel()
+	_st_fill(panel, Stats.MODE_CLASSIC, 100)
+	_st_fill(panel, Stats.MODE_NOBLE, 200)
+	panel.update_labels()
+	var c0: Array = _st_row(panel.tables[Stats.MODE_CLASSIC])
+	var n0: Array = _st_row(panel.tables[Stats.MODE_NOBLE])
+	var presses: Array = ["RightButton", "RightButton", "LeftButton", "LeftButton"]
+	var want_modes: Array = [Stats.MODE_NOBLE, Stats.MODE_CLASSIC, Stats.MODE_NOBLE,
+		Stats.MODE_CLASSIC]
+	var got_modes: Array = []
+	var right_table: bool = true
+	for i in presses.size():
+		_st_press_now(panel, presses[i])
+		var m: int = panel.mode
+		got_modes.append(m)
+		var want_rows: Array = c0
+		if m == Stats.MODE_NOBLE:
+			want_rows = n0
+		right_table = right_table and (_st_labels(panel) == _st_expect(want_rows))
+	check(got_modes == want_modes, tag + ": Right, Right, Left, Left from classic walk the modes"
+		+ " " + str(got_modes) + " - the arrows WRAP at both ends of a 2-mode list (`wrapi`), so no"
+		+ " table is a dead end a player cannot arrow off")
+	check(right_table, tag + ": in the press's OWN frame - before any process_frame - the 6 rows are"
+		+ " the counters of the mode the press selected, so a flip never shows the rows of the table"
+		+ " the player just left (the rows and the letter refresh on the SAME call, `update_labels()`)")
+	check(_st_row(panel.tables[Stats.MODE_CLASSIC]) == c0
+		and _st_row(panel.tables[Stats.MODE_NOBLE]) == n0, tag + ": 4 flips changed ZERO counters -"
+		+ " the switch is a VIEW, it never clears, copies, merges, pads or re-sorts a table. A counter"
+		+ " edit hidden inside a navigation button would stay invisible until the next round end")
+	check((panel as CanvasItem).visible, tag + ": the page stayed OPEN through 4 flips - a switch that"
+		+ " closed the page would force the player through the Start/Pause menu to compare two tables")
+	panel.invoker = self  # a SENTINEL OWNED FROM OUTSIDE: `Back` uses it (`_on_stats_back_pressed`
+	# shows it), so a flip must not move it - the switch is navigation, not page ownership. It is the
+	# SUITE that holds it, never the panel: `panel.invoker = panel` is a self-reference cycle, and a
+	# Node held by a cycle outlives `queue_free` and shows up in the suite's exit leak count, which
+	# the todo's checks treat as a gate ("the suite's fixture leak count is UNCHANGED").
+	_st_press(panel, "RightButton")
+	check(panel.invoker == self, tag + ": a flip does not touch the page's `invoker`, so Back still"
+		+ " returns to the page the player came from (Start / Pause)")
+	var reach_ok: bool = true
+	for m in Stats.MODE_COUNT:
+		for d in [-1, 1]:
+			panel.show_mode(int(m) + int(d))
+			reach_ok = reach_ok and (int(panel.mode) == wrapi(int(m) + int(d), 0, Stats.MODE_COUNT))
+	check(reach_ok, tag + ": from EVERY mode, BOTH arrows land on `wrapi(mode +/- 1)` - the two buttons"
+		+ " and the `show_mode()` seam follow ONE rule, not two")
+	panel.show_mode(Stats.MODE_CLASSIC)
+	_st_press_now(panel, "RightButton")
+	var by_button: int = panel.mode
+	panel.show_mode(Stats.MODE_CLASSIC)
+	panel.show_mode(Stats.MODE_NOBLE)
+	check(by_button == panel.mode, tag + ": a Right press and `show_mode(MODE_NOBLE)` end on the same"
+		+ " mode - the scene's handler adds no step of its own (the arrow is the seam, not a parallel"
+		+ " implementation)")
+	var flips: int = 0
+	panel.show_mode(Stats.MODE_CLASSIC)
+	for i in 10:
+		_st_press_now(panel, "RightButton")
+		flips += 1
+	check(int(panel.mode) == wrapi(flips, 0, Stats.MODE_COUNT), tag + ": 10 Right presses in a row"
+		+ " walk the mode 10 times (measured mode " + str(panel.mode) + ") - the switch is a counter of"
+		+ " presses, not a one-shot toggle that jams, and it never parks on an index the page does not"
+		+ " have")
+	check(wrapi(1, 0, Stats.MODE_COUNT - 1) == 0 and wrapi(1, 0, Stats.MODE_COUNT) == 1, tag
+		+ ": MEASURED, `wrapi`'s UPPER bound is EXCLUSIVE - `wrapi(1, 0, 1)` is 0 and `wrapi(1, 0, 2)`"
+		+ " is 1. The switch wraps over MODE_COUNT for that reason: written over `MODE_COUNT - 1`,"
+		+ " EVERY press clamped to mode 0 and the NOBLE table was UNREACHABLE (the suite ran that"
+		+ " version and printed modes [0, 0, 0, 0] and letters [C, C] - this line is the trap, left in"
+		+ " so the next `wrapi` in this project is written with an exclusive bound too)")
+	var ring: Array = []
+	for m in Stats.MODE_COUNT:
+		panel.show_mode(int(m))
+		var up: int = panel.mode
+		panel.show_mode(int(m) + 1)
+		var plus: int = panel.mode
+		panel.show_mode(int(m) - 1)
+		ring.append([up, plus, panel.mode])
+	check(ring == [[0, 1, 1], [1, 0, 0]], tag + ": MEASURED, a 2-mode page has NO direction - from"
+		+ " EVERY mode `show_mode(m + 1)` and `show_mode(m - 1)` land on THE SAME mode (the ring"
+		+ " " + str(ring) + "). So a Left/Right SWAP in the handlers is BEHAVIOURALLY INVISIBLE at 2"
+		+ " modes: the suite ran that sabotage (`_on_left_button_pressed` advances, `_on_right_..."
+		+ " goes back`) and printed 1258 PASS, 0 FAIL, exit 0. What makes the arrows honest at 2 modes"
+		+ " is their GLYPHS (O1 pins frame 12 = Frame_Left, 13 = Frame_Right) and the DELTA CONTRACT"
+		+ " below - which is also the only thing the swap can break, and it breaks it the day MODE_COUNT"
+		+ " grows past 2, which is why the contract is pinned NOW and not then")
+	var contract: bool = true
+	var contract_rows: Array = []
+	for m in Stats.MODE_COUNT:
+		panel.show_mode(int(m))
+		var from: int = panel.mode
+		_st_press_now(panel, "RightButton")
+		var right: int = panel.mode
+		_st_press_now(panel, "LeftButton")
+		var back: int = panel.mode
+		contract_rows.append([from, right, back])
+		contract = contract and (right == wrapi(from + 1, 0, Stats.MODE_COUNT)) and (back == from)
+	check(contract, tag + ": the DELTA CONTRACT - from every mode, Right lands on `wrapi(m + 1)` and a"
+		+ " Left then returns to the mode the pair started from (measured " + str(contract_rows) + ")."
+		+ " At 2 modes this is the same place as -1; at 3 modes it is not. Pinning the arithmetic (not"
+		+ " the landing) is what makes a future 3rd table's swapped arrows fail a check instead of"
+		+ " silently reversing the page")
+	await _st_free(panel)
+
+
+# ---- O3: the letter names the rows that are on screen ---------------------------------------
+func _test_sw_letter() -> void:
+	var tag := "O3 the mode letter"
+	var panel = await _st_panel()
+	_st_fill(panel, Stats.MODE_CLASSIC, 100)
+	_st_fill(panel, Stats.MODE_NOBLE, 500)
+	var letters: Array = []
+	var rows: Array = []
+	var in_tree: Array = []
+	for m in Stats.MODE_COUNT:
+		panel.show_mode(int(m))
+		letters.append(_st_letter(panel))
+		rows.append(_st_labels(panel))
+		in_tree.append((panel.get_node("ModeLabel") as Control).is_visible_in_tree())
+	check(letters == ["C", "F"], tag + ": mode 0 prints C and mode 1 prints F (measured "
+		+ str(letters) + ") - ONE letter per table, indexed by the SAME index the tables are stored"
+		+ " under, so the letter a player reads names the table he is looking at")
+	var lens: Array = []
+	for txt in letters:
+		lens.append(str(txt).length())
+	check(lens == [1, 1], tag + ": each mode name is ONE character (" + str(lens) + ") - the left"
+		+ " margin is a 9 px column, so a mode is named by a letter; a word would be clipped text")
+	var upper: bool = true
+	for txt in letters:
+		upper = upper and str(txt) == str(txt).to_upper()
+	check(upper, tag + ": both letters are uppercase (" + str(letters) + ") - the page's counters are"
+		+ " uppercase text, and a lowercase letter among them reads as a different kind of label")
+	check(in_tree == [true, true], tag + ": the letter is on screen in BOTH modes"
+		+ " (" + str(in_tree) + ") - a mode name a player cannot see is not a mode name")
+	var rows_ok: bool = true
+	for m in Stats.MODE_COUNT:
+		rows_ok = rows_ok and (rows[m] == _st_expect(_st_row(panel.tables[m])))
+	check(rows_ok, tag + ": in every mode, the 6 rows ARE that mode's table - the letter and the rows"
+		+ " are read from one state, so a page can never show an F over classic counters")
+	check(rows[0] != rows[1], tag + ": the two modes print measurably DIFFERENT pages - a switch that"
+		+ " re-printed one table would look identical to a working one")
+	var row_letters: Array = []
+	for txt in rows[0]:
+		row_letters.append(str(txt).substr(7, 1))
+	var collide: bool = false
+	for l in row_letters:
+		if str(l) == "C" or str(l) == "F":
+			collide = true
+	check(not collide, tag + ": the mode letters C/F are NEVER letters the counter rows already print"
+		+ " (rows use " + str(row_letters) + ") - a player cannot read the margin as a 7th level row,"
+		+ " which matters on a page whose rows are already single-letter labels")
+	check(letters[0] == Stats.MODE_LETTERS[0] and letters[1] == Stats.MODE_LETTERS[1], tag
+		+ ": the two letters are exactly `MODE_LETTERS` read in mode order (" + str(letters)
+		+ ") - one letter per mode, no third letter for a mode the game does not have")
+	var same_letter: bool = true
+	for m in Stats.MODE_COUNT:
+		panel.show_mode(int(m))
+		same_letter = same_letter and (_st_letter(panel) == panel.mode_letter())
+	check(same_letter, tag + ": what the Label prints IS `mode_letter()` = `MODE_LETTERS[mode]` - the"
+		+ " letter is derived from the mode, never stored beside it, so it cannot drift out of sync")
+	await _st_free(panel)
+
+
+# ---- O4: Reset follows the table the player is standing in front of -------------------------
+func _test_sw_reset() -> void:
+	var tag := "O4 reset follows the visible table"
+	var panel = await _st_panel()
+	_st_fill(panel, Stats.MODE_CLASSIC, 100)
+	_st_fill(panel, Stats.MODE_NOBLE, 200)
+	var c0: Array = _st_row(panel.tables[Stats.MODE_CLASSIC])
+	_st_press(panel, "RightButton")  # the page's OWN arrow walks the player to NOBLE ...
+	check(int(panel.mode) == Stats.MODE_NOBLE and _st_letter(panel) == "F", tag + ": the arrows got"
+		+ " the player to the NOBLE table (letter F), which is the only way he can target a variant"
+		+ " reset on an 84 x 48 page")
+	_st_press(panel, "ResetButton")  # ... and the page's Reset then clears THAT table
+	check(_st_row(panel.tables[Stats.MODE_NOBLE]) == _st_zeros(STATS_COUNT), tag + ": Reset zeroed the"
+		+ " VISIBLE (noble) table")
+	check(_st_row(panel.tables[Stats.MODE_CLASSIC]) == c0, tag + ": and the CLASSIC history survived it"
+		+ " elementwise (" + str(c0) + ") - a variant reset must not delete a year of classic games")
+	check(int(panel.mode) == Stats.MODE_NOBLE and _st_letter(panel) == "F", tag + ": Reset did not move"
+		+ " the player out of the mode he reset - he sees the empty table he asked for, letter and all")
+	check(_st_labels(panel) == _st_expect(_st_zeros(STATS_COUNT)), tag + ": the rows refreshed to the"
+		+ " zeros he just created")
+	_st_press(panel, "LeftButton")
+	check(_st_labels(panel) == _st_expect(c0), tag + ": arrowing back to classic shows the classic"
+		+ " counters the variant reset did not touch - the two histories are both intact on one page")
+	_st_press(panel, "ResetButton")
+	check(_st_row(panel.tables[Stats.MODE_CLASSIC]) == _st_zeros(STATS_COUNT), tag + ": Reset works the"
+		+ " same way from the CLASSIC side - the rule is per mode, not a special case for one page")
+	check(_st_row(panel.tables[Stats.MODE_NOBLE]) == _st_zeros(STATS_COUNT), tag + ": and the noble"
+		+ " table is still the zeros its own reset made (" + str(_st_row(panel.tables[Stats.MODE_NOBLE]))
+		+ ") - a reset in one mode never rewrites the other mode's zeros")
+	await _st_free(panel)
+
+# ---- O5: the APP re-pins the mode on every page open, so the page's choice is per VISIT ------
+# Step 26 made `application.gd` the only file that NAMES a mode (`start_game()` and the two page
+# openers). Step 27 adds a switch ON THE PAGE; these checks pin the two rules that keep the two
+# from fighting: the page's own choice is a VIEW that never survives an app opener, and the arrows
+# never touch the running game's mode.
+func _test_sw_app() -> void:
+	var tag := "O5 the app re-pins the page"
+	_menu_levels = [Player.AI_Level.Level_2, Player.AI_Level.Level_3,
+		Player.AI_Level.Level_2, Player.AI_Level.Level_3]
+	var app = _make_menu_app()
+	await _menu_ready(app)
+	var stats = app._stats
+	var main: Node = app._main
+	app._on_start_stats_pressed()
+	check((stats as CanvasItem).visible, tag + ": the START page's Stats button opened the page")
+	check(int(stats.mode) == Stats.MODE_CLASSIC and _st_letter(stats) == "C", tag + ": opened from the"
+		+ " START page it shows CLASSIC - `application.gd` pins the mode at every open, and a game that"
+		+ " never started has no mode of its own")
+	await _st_press(stats, "RightButton")
+	check(int(stats.mode) == Stats.MODE_NOBLE and _st_letter(stats) == "F", tag + ": the page's OWN"
+		+ " arrow flipped it to the NOBLE table with NO game running - the variant history is reachable"
+		+ " from the start page in one press, which is the step-27 gate")
+	check(_st_labels(stats) == _st_expect(_st_row(stats.tables[Stats.MODE_NOBLE])), tag
+		+ ": and the rows it flipped to ARE the noble table - a reachable mode that prints the classic"
+		+ " counters would be a lie, not a view")
+	_st_press_now(stats, "BackButton")
+	await await_frames(1)
+	check(not (stats as CanvasItem).visible, tag + ": the page's own Back closed it and brought the"
+		+ " START page back (`invoker`)")
+	check(int(stats.mode) == Stats.MODE_NOBLE, tag + ": a CLOSED page keeps the mode the player last"
+		+ " browsed - the page stores a view, never a game state; the app's openers are what own the"
+		+ " mode (next checks)")
+	app._on_start_stats_pressed()
+	check(int(stats.mode) == Stats.MODE_CLASSIC and _st_letter(stats) == "C", tag + ": re-opened from"
+		+ " the START page the app RE-PINS the mode, so the page's own choice is per VISIT and adds no"
+		+ " mode of its own (step 26's 3 mode lines win over the switch, by design)")
+	app._on_stats_back_pressed()
+	await _tap_start_play(app)
+	await _tap_row(app, "NOBLE")
+	await _settle_menu_deal(app, NOBLE_FAMILY_4P, 0)
+	check(int(stats.mode) == Stats.MODE_NOBLE, tag + ": `start_game()` pinned the mode of the game that"
+		+ " is running (step 26), so a variant game opens on the NOBLE table")
+	app._on_pause_stats_pressed()
+	check(_st_letter(stats) == "F", tag + ": opened from the PAUSE menu mid-game, the letter says F -"
+		+ " the counters a player checks mid-game are the running game's own")
+	await _st_press(stats, "LeftButton")
+	check(int(stats.mode) == Stats.MODE_CLASSIC and _st_letter(stats) == "C", tag + ": mid-game the"
+		+ " player CAN reach the other history from the same page - the two tables are reachable inside"
+		+ " one visit (the todo's gate), and the rows he reads are the classic counters")
+	_st_press_now(stats, "BackButton")
+	await await_frames(1)
+	app._on_pause_stats_pressed()
+	check(int(stats.mode) == Stats.MODE_NOBLE, tag + ": the PAUSE opener re-pins the mode to the"
+		+ " RUNNING game's - the flip is undone by the next page open, so the only way to write to the"
+		+ " wrong table is to flip AND resume without reopening the page. That path is MEASURED in O6,"
+		+ " and step 28 removes it by indexing the write paths by the running game's mode")
+	check(bool(main.noble_family), tag + ": and a flip NEVER changes the running game's own mode"
+		+ " (`main.noble_family` is the deal table the game was dealt by) - a stats page is a view of"
+		+ " counters, it cannot re-deal anybody's game")
+	check((stats.get_node("LeftButton") as Control).is_visible_in_tree()
+		and (stats.get_node("RightButton") as Control).is_visible_in_tree(), tag + ": the switch is"
+		+ " tappable INSIDE a running game's pause page, in 84 x 48, with the game hidden behind it")
+	await _free_menu_app(app)
+
+
+# ---- O6: where a running game's counters land when the page shows the OTHER table -----------
+# A MEASUREMENT of today's behaviour, not an approval. Step 26 aliased `_totals_and_wins` to
+# `tables[mode]`, and `mode` is now something the PLAYER can change, so the write target is the
+# page's view. Step 28 changes the two write paths to `tables[_main.noble_family_index()]`; every
+# check below is the Check that FLIPS when that lands.
+func _test_sw_game_write() -> void:
+	var tag := "O6 the write target today"
+	_menu_levels = [Player.AI_Level.Level_2, Player.AI_Level.Level_3,
+		Player.AI_Level.Level_2, Player.AI_Level.Level_3]
+	var app = _make_menu_app()
+	await _menu_ready(app)
+	var stats = app._stats
+	var main: Node = app._main
+	_st_won = []
+	_st_fin = []
+	main.round_won.connect(_st_note_won)  # the counters are COUNTED ON SIGNALS, the harness rule
+	main.round_finished.connect(_st_note_finished)
+	await _tap_start_play(app)
+	await _tap_row(app, "NOBLE")
+	await _settle_menu_deal(app, NOBLE_FAMILY_4P, 0)
+	# Both tables ZEROED for clean deltas: a save loaded from `user://options.cfg` is live in the page,
+	# and a delta over a nonzero base cannot tell "the page's mode" from "the game's mode".
+	stats.tables[Stats.MODE_CLASSIC] = stats.empty_table()
+	stats.tables[Stats.MODE_NOBLE] = stats.empty_table()
+	app._on_pause_stats_pressed()
+	await _st_press(stats, "LeftButton")  # the player peeks at CLASSIC and RESUMES without reopening
+	_st_press_now(stats, "BackButton")
+	await await_frames(1)
+	app._on_pause_resume_pressed()
+	await _run_menu_rounds(app, 1)
+	var csum: int = _sum_ints(_st_row(stats.tables[Stats.MODE_CLASSIC]))
+	var nsum: int = _sum_ints(_st_row(stats.tables[Stats.MODE_NOBLE]))
+	var events: int = _st_won.size() + _st_fin.size()
+	check(_st_won.size() >= 1, tag + ": the variant game ended " + str(_st_won.size())
+		+ " round(s) after the resume, so the counters are measurable (" + str(_st_fin.size())
+		+ " `round_finished` emissions)")
+	check(int(stats.mode) == Stats.MODE_CLASSIC, tag + ": the page was STILL showing CLASSIC at the"
+		+ " round end - nothing re-pinned the mode between the flip and the write")
+	check(csum == events, tag + ": MEASURED, " + str(csum) + " counters landed in the table the PAGE"
+		+ " was showing (classic) for " + str(_st_won.size()) + " `round_won` + " + str(_st_fin.size())
+		+ " `round_finished` emissions: the alias `_totals_and_wins` IS `tables[mode]`, the mode the"
+		+ " page chose, and `_on_round_won` / `_on_round_finished` name no mode")
+	check(nsum == 0, tag + ": and the NOBLE table - the table the RUNNING variant game belongs to -"
+		+ " took NOTHING. THIS IS THE CHECK THAT FLIPS WHEN STEP 28 LANDS: index the two write paths"
+		+ " by the running game's mode and this sum must be " + str(events) + " while the classic sum"
+		+ " above must be 0. Until step 28 lands, the mitigation O5 pins is that every page open"
+		+ " re-pins the mode, so only a flip-and-resume (no page reopen) can misfile a counter")
+	check(_st_zero(_st_row(stats.tables[Stats.MODE_NOBLE])) and csum > 0, tag + ": the shape of the"
+		+ " hazard in one line - a player who browsed the classic table mid-variant-game ends the round"
+		+ " with classic counters + " + str(events) + " and a variant history of zeros (" + str(csum)
+		+ " / " + str(nsum) + ")")
+	main.round_won.disconnect(_st_note_won)
+	main.round_finished.disconnect(_st_note_finished)
 	await _free_menu_app(app)

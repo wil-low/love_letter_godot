@@ -322,7 +322,10 @@ seat's own family stack node, step 19 the family draw modal, step 20 the human's
 through that modal, step 21 the human's Prince redraw through that modal, step 23 the family DEAL
 presentation (one slide sound for the whole family batch, zero flights for it, the stack rendered at
 the deal), step 24 the MODE PICKER `game_mode/game_mode.tscn` (CLASSIC / NOBLE FAMILY / BACK, one
-signal per press, nothing persisted), step 31 joint move legality and L1 determinism). TEST A needs no
+signal per press, nothing persisted), step 26 the per-mode STATS tables (two 14-counter tables, the
+page's `mode`, the `_totals_and_wins` alias), step 27 the stats page's OWN mode switch (a C/F letter +
+Left/Right arrows in the page's left margin), step 31 joint move legality and L1 determinism). TEST A
+needs no
 `Main` scene - it drives the real `Deck` scene directly, 200 seeded deals per player count.
 
 | player count | burn / widow | first-hand | family per seat | main pile leftovers |
@@ -1143,6 +1146,133 @@ holds the CURRENT table, so a variant game's numbers land under the legacy key a
 lost on the next launch. That is step 28 (per-mode keys + the 12-counter migration), and its rule is
 already implied here: the legacy key is the CLASSIC table. The page's own mode picker (a segmented
 Classic / Noble Family control on the stats page) is step 27.
+
+### TEST O — the stats page's own mode switch: 1 letter + 2 arrows in the left margin; a flip browses and writes nothing (step 27)
+
+Step 27 (todo §C.27) gives the page the **picker** for the two tables step 26 built. `stats/stats.tscn`
+gains **1 Label + 2 Buttons** in the page's **left margin** - `x 0..15`, the only column of the 84 x 48
+board that **no counter row uses** (measured: the counter rows start at `x 16` and the widest of
+them, `L_5`, ends at `x 83`). The arrows are
+`level_selector/digit_button.tscn` instances - the game's own widget - `LeftButton` with `frame = 12`
+(`Frame_Left`) and `RightButton` with `frame = 13` (`Frame_Right`), NOT the Back glyph; the label is
+`ModeLabel`, the **C / F** letter. The column reads **Reset / letter / Left / Right / Back** at
+`y 0 / 10 / 19 / 29 / 40`. `stats.gd` gains `MODE_LETTERS = "CF"`, `mode_letter()`, the public seam
+`show_mode(next)` = `wrapi(next, 0, MODE_COUNT)` + `update_labels()`, and the two `pressed` handlers,
+connected **in the scene**. The page is now **11 children** (6 counter Labels + 1 mode Label + 4
+Buttons). The switch **names no mode**: step 26's 3 mode lines stay the only place in the project that
+names one, so what the arrows change is a VIEW. TEST O is **60 checks**; the suite prints **1260 PASS**
+on the recorded seed (1200 before step 27), 0 FAIL, 0 script error, exit 0. The suite's **exit leak
+count is not a gate**: the SAME tree printed no leak warning at all, 4, 6 and 8 leaked ObjectDB
+instances across the runs recorded below (one run builds and frees fixture apps, pages and panels, many of them
+several times), so a
+2-instance swing from one fixture is not something this suite can measure - see harness fact 4.
+
+- **O1 — the margin, 14 checks.** All 4 controls are `DigitButton`s (no new widget type, no Label-shaped
+fake button); the arrows are `Frame_Left` / `Frame_Right` and each sprite shows the frame its export
+asks for; Reset, the letter and both arrows sit fully inside 84 x 48; Back ends at `y 49` -
+**pre-existing 1 px over the 48 px guide**, recorded so a later step cannot read it as step 27's; every
+target is >= 9 x 9 board px = **>= 72 x 72 real px** at the 8 x scale (the 672 x 384 viewport); the
+whole column stays in `x 0..15`; there is no vertical overlap (measured tops `[0, 10, 19, 29, 40]`,
+ends `[9, 16, 28, 38, 49]`); **no counter row rect and the letter rect intersect any button** (the
+todo's "no label is covered by a button", measured `[]`); the 6 counter rows did not move; every
+`pressed` is connected **in the scene** to the page's own handler (measured handler names, in button
+order); all 4 targets are `is_visible_in_tree()` - the engine's own input gate - and both arrows are
+visible in **both** modes; the letter's rendered width fits its 9 px column at the game's 7 px font.
+- **O2 — a flip browses, 11 checks.** `Right, Right, Left, Left` from classic walk modes `[1, 0, 1, 0]`
+(it WRAPS, so no table is a dead end); in the press's OWN frame - before any `process_frame`, a Button
+signal is synchronous - the 6 rows are the selected table's counters; 4 flips change **zero** counters;
+the page stays OPEN; the `invoker` is untouched (the sentinel is the SUITE, see harness fact 4); a Right
+press and `show_mode(MODE_NOBLE)` land on the same mode (the arrow IS the seam, not a parallel
+implementation); 10 presses walk 10 steps; and `wrapi`'s upper bound is measured as EXCLUSIVE (harness
+fact 1). Then the two checks a 2-mode page can only make by arithmetic:
+**the ring** - from every mode `show_mode(m + 1)` and `show_mode(m - 1)` land on **the same** mode
+(measured `[[0, 1, 1], [1, 0, 0]]`), so a Left/Right **swap in the handlers is behaviourally
+invisible** at 2 modes, and the suite ran that sabotage: **1260 PASS, 0 FAIL, exit 0** (row S2 below);
+and **the delta contract** - Right lands on `wrapi(m + 1)`, and a Left then returns to the mode the
+pair started from (measured from every mode). The contract is pinned NOW because it is the only thing
+the swap can break, and it breaks it the day `MODE_COUNT` grows past 2: at 3 modes a swapped pair stops
+walking the page in order. Directional honesty at 2 modes therefore rests on the GLYPHS O1 pins.
+- **O3 — the letter, 9 checks.** `"C"` / `"F"`, 1 character each, uppercase, `is_visible_in_tree()` in
+both modes, equal to `MODE_LETTERS[mode]` (DERIVED, never stored beside the mode, so it cannot drift),
+in every mode the 6 rows ARE that mode's table, the two modes print measurably DIFFERENT pages, and C/F
+are never letters the counter rows already print (`[H, 1, 2, 3, 4, 5]`) - the margin cannot be read as
+a 7th level row.
+- **O4 — reset follows the visible table, 8 checks.** Reached through the page's OWN arrows: arrow to
+NOBLE -> Reset zeroes the noble table, the classic history survives elementwise (100..113), the player
+stays on F with the zeros printed; arrow back to classic -> the classic counters are intact; Reset
+there zeroes classic; the noble zeros stay zeroed. Step 26's rule is only usable once a player can stand
+in front of the table he means to clear.
+- **O5 — the app re-pins, 13 checks.** The start page opens on classic; the page's own arrow reaches the
+NOBLE table with NO game running (the step-27 gate) and its rows ARE the noble table; the page's Back
+closes it and returns to `invoker`; a closed page KEEPS the browsed mode (a view, not a game state);
+re-opening from the start page RE-PINS to classic; `start_game()` pins the running game's mode; the
+pause page opens on F; mid-game the player CAN flip to the other history and reads the classic counters;
+the pause opener re-pins to the running game's mode, so the only path that writes to the wrong table is
+**flip + resume without reopening**; a flip NEVER changes `main.noble_family`; the switch is tappable
+inside a running game's pause page.
+- **O6 — the write target TODAY, 5 checks (the Check that FLIPS when step 28 lands).** Both tables are
+zeroed for clean deltas, a variant 4p game runs on levels 2/3/2/3, the page is flipped to CLASSIC, and
+the game is resumed WITHOUT reopening the page. Measured: the round end lands **`sum(classic) ==
+round_won + round_finished` emissions** (6 for the measured round) and **`sum(noble) == 0`** - because
+`_totals_and_wins` IS `tables[mode]` (the page's view) and `_on_round_won` / `_on_round_finished` name
+no mode. After step 28 indexes those paths by `_main.noble_family_index()`, the noble sum must be the
+emission count and the classic sum 0.
+
+**Harness facts this step paid for (measured, not guessed):**
+
+1. **`wrapi`'s upper bound is EXCLUSIVE.** `wrapi(1, 0, 1)` is **0**; `wrapi(1, 0, 2)` is **1**. The
+first version of `show_mode()` wrapped over `MODE_COUNT - 1`, so EVERY press clamped to mode 0: the
+arrows worked, the letter moved, and the NOBLE table was **UNREACHABLE** - the suite printed modes
+`[0, 0, 0, 0]`, letters `["C", "C"]`, 14 FAILs. The suite keeps that fact as a check
+(`O2 ... MEASURED, wrapi's UPPER bound is EXCLUSIVE`) so the next `wrapi` in this project is written
+with an exclusive bound too.
+2. **A `Signal.get_connections()` Dictionary's keys in Godot 4 are `["signal", "callable", "flags"]`** -
+there is NO `"method"` key; the method name lives IN the Callable
+(`(c as Dictionary)["method"]` is a runtime `Invalid access to property or key 'method'`).
+3. **`check` text is data, not prose.** The 60 checks of TEST O print a measured value in almost every
+line (`measured [14, 15, 12, 14]`, `measured []`, `sum(classic) == 6`), so a sabotage row above can
+cite the check that fired without re-reading the code.
+4. **The suite's exit leak count is NOISY, and a self-reference cycle is not measurable with it.** The
+same tree printed no leak warning, 4, 6 and 8 leaked ObjectDB instances across the recorded runs. O2's
+`invoker` sentinel is therefore the **SUITE** (`panel.invoker = self`) and not the panel for the reason
+the harness states - `panel.invoker = panel` is a cycle, and a Node a cycle holds is never freed, so it
+survives `queue_free` - not because a leak counter proved it. Do not read a 2-instance swing here as
+evidence.
+5. **A fixture's checks must read the state immediately after the action they measure.** Adding the ring
+and contract block between the 10-press loop and its own check made the CLEAN baseline print
+`1259 PASS / 1 FAIL`: the block's own presses (Right, Left from each mode) left the page on mode 1, and
+the 10-press check then read the mode of the LAST block, not of its own loop. The bug was in the
+fixture, not in the game - the block was moved after that check. A suite that reads state through a
+shared, moving widget has to snapshot it where it is produced.
+6. **A runtime script error aborts ONLY the fixture it fires in** - the suite carries on, so one broken
+helper line prints a wall of downstream FAILs in the fixtures that follow it. The first run of TEST O
+printed 14 FAILs whose only cause was the Dictionary line in fact 2, inside O1; reading them as 14
+behaviour failures would have sent a step-27 implementation change after a bug in the harness.
+7. A Label's rendered width comes from its `LabelSettings` (a `LabelSettings` is not a theme item, so
+`get_theme_font_size` reports the 16 px default) - the same `_gm_text_w` helper TEST L uses.
+8. TEST O runs **before** TEST M for the tail-of-stdout reason recorded under TEST N: the sections a run
+must READ are never the last ones.
+
+**The sabotages (each applied ALONE, suite run, then the exact bytes restored — `RESTORE_IDENTICAL`):**
+
+| # | Sabotage | suite | FAILs | Caught by |
+|---|---|---|---|---|
+| S1 | `show_mode` clamps over `MODE_COUNT - 1` (the inclusive bound) | 1239 PASS | **14** | O2 (modes `[0, 0, 0, 0]`, 10-press walk), O3 x4 (letters `["C","C"]`, the rows, the two pages identical, `MODE_LETTERS`), O4 x6 (no route to the noble table, reset lands on the wrong table), O5 x3 |
+| S2 | the arrows point the WRONG way (`_on_left_button_pressed` advances, `_on_right_...` goes back) | 1260 PASS | **0** | **nothing, and that is the finding** - at 2 modes `m + 1` and `m - 1` land on the same mode, so the swap has NO observable effect (the ring check documents it, the contract check documents it). The pair is pinned by O1's glyphs and by the contract, which a 3rd table makes testable |
+| S3 | the letter is HARD-CODED (`mode_letter()` returns `"C"`) | 1254 PASS | **6** | O3 x2 (mode 1 prints C; the letter is not `MODE_LETTERS[mode]`), O4 x2 (no F to reset in; the player is not shown the table he cleared), O5 x2 (the start page's flip and the pause page open read C) |
+| S4 | the flip changes `mode` and never refreshes the page (`update_labels()` dropped) | 1249 PASS | **11** | O2 (the rows in the press's frame), O3 x5 (letters, the rows per mode, the two pages identical, `MODE_LETTERS`, "the Label prints `mode_letter()`"), O4 x2, O5 x3 |
+| S5 | the arrows are placed OVER the counter rows (`offset_left = 20 / 40` in the scene) | 1257 PASS | **3** | O1 x3 (target sizes, the `x 0..15` margin, and the coverage check measuring `["row2", ...]` - the todo's "no label is covered by a button") |
+| S6 | a flip CLEARS the table it shows (`for i in 14: table()[i] = 0`) | 1256 PASS | **4** | O2 x2 (the rows of the mode entered; "4 flips changed ZERO counters"), O3 (the two pages identical), O4 (the classic history the player arrowed back to is gone) |
+| S7 | Reset clears BOTH tables | 1256 PASS | **4** | O4 x2 (the classic history must survive a noble reset; arrowing back must show it) and **N4 x2** — the same sabotage caught from the data side and the page side |
+| S8 | a flip CLOSES the page (`visible = false`) | 1258 PASS | **2** | O2 ("the page stayed OPEN through 4 flips"), O3 (`is_visible_in_tree()` in both modes, measured `[false, false]`) |
+| S9 | the Right arrow is given the BACK glyph (`frame = 14`) | 1259 PASS | **1** | O1 ("measured `[14, 15, 12, 14]`") |
+| S10 | the app's page close pins the mode (`_on_stats_back_pressed` sets `mode = MODE_CLASSIC`) | 1259 PASS | **1** | O5 ("a CLOSED page keeps the mode the player last browsed") |
+
+A clean tree prints **1260 PASS, 0 FAIL, exit 0** (BASE above: two runs, both 1260 PASS).
+
+**Not covered by this step (deliberately):** the WRITE target is still the page's view (O6 measures it)
+and the save is still ONE legacy key - both are step 28, which indexes the write paths by the running
+game's mode and migrates the 12-counter save.
 
 ## tests/noble_family_smoke.tscn — Noble Family variant, whole games on the AI (steps 7, 11, 14)
 

@@ -17,6 +17,24 @@ frame = 14
 [node name="ResetButton" parent="." unique_id=735065744 instance=ExtResource("2_33svo")]
 frame = 15
 
+[node name="ModeLabel" type="Label" parent="."]
+offset_left = 0.0
+offset_top = 10.0
+offset_right = 9.0
+offset_bottom = 16.0
+text = "C"
+label_settings = ExtResource("3_wnqt8")
+
+[node name="LeftButton" parent="." instance=ExtResource("2_33svo")]
+offset_top = 19.0
+offset_bottom = 28.0
+frame = 12
+
+[node name="RightButton" parent="." instance=ExtResource("2_33svo")]
+offset_top = 29.0
+offset_bottom = 38.0
+frame = 13
+
 [node name="L_H" type="Label" parent="." unique_id=485666700]
 offset_left = 16.0
 offset_top = 1.0
@@ -67,3 +85,5 @@ label_settings = ExtResource("3_wnqt8")
 
 [connection signal="pressed" from="BackButton" to="." method="_on_back_button_pressed"]
 [connection signal="pressed" from="ResetButton" to="." method="_on_reset_button_pressed"]
+[connection signal="pressed" from="LeftButton" to="." method="_on_left_button_pressed"]
+[connection signal="pressed" from="RightButton" to="." method="_on_right_button_pressed"]
