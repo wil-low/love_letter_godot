@@ -112,6 +112,11 @@ func _on_start_play_pressed() -> void:
 
 # The body `_on_start_play_pressed()` used to run: the game is only started once a mode is chosen.
 func start_game() -> void:
+	# Noble Family variant, todo §C.26: the stats page keeps ONE counter table PER mode, and this is the
+	# line where a mode exists, so the page follows the game that is starting - a
+	# classic game's counters land in the classic table and a variant game's in the noble one, which is
+	# the whole "a variant game never adds to a classic game's counters" requirement.
+	_stats.mode = Stats.MODE_NOBLE if _main.noble_family else Stats.MODE_CLASSIC
 	_main.show()
 	_main.init_players(random_seed if random_seed != 0 else Time.get_ticks_usec())
 
@@ -150,6 +155,10 @@ func _on_pause_exit_pressed() -> void:
 
 
 func _on_start_stats_pressed() -> void:
+	# Step 26: the page keeps one table per mode. Opened from the START page no game is running, and the
+	# mode is per game and never persisted, so what a player opens here is the classic history - the
+	# numbers the pre-variant game wrote. Step 27 puts a picker on the page itself.
+	_stats.mode = Stats.MODE_CLASSIC
 	_stats.invoker = _start
 	_stats.update_labels()
 	_stats.show()
@@ -160,6 +169,8 @@ func _on_stats_back_pressed() -> void:
 
 
 func _on_pause_stats_pressed() -> void:
+	# Opened from the PAUSE menu, the page belongs to the game that is running: show THAT game's table.
+	_stats.mode = Stats.MODE_NOBLE if _main.noble_family else Stats.MODE_CLASSIC
 	_stats.invoker = _pause
 	_stats.update_labels()
 	_stats.show()

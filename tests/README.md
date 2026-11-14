@@ -1023,6 +1023,127 @@ stayed in the tree until it was restored by hand. `git status` prints a scene as
 (`?? game_mode/`), which hides that fact — commit a new scene **before** sabotaging it, the same rule
 step 11 learned for test code.
 
+### TEST N — the per-mode STATS tables: two tables, one mode each, and the alias `application.gd` writes through (step 26)
+
+Step 26 (todo §C.26) is the requirement "a variant game never adds to a classic game's counters".
+Before it, `stats/stats.gd` held ONE `Array[int]` of counters and the page showed it for every mode.
+This fixture is the safety net for the data model: it pins the SHAPE of the per-mode tables, the
+ALIAS `application.gd` mutates (its two write paths, `_on_round_won` / `_on_round_finished`, are
+unchanged by step 26), which table a Reset clears, and that a real classic game writes exactly one
+table. The mode is set on the page in `start_game()`; the page's own picker is step 27.
+
+Measured on the 16-card variant deck's own turf — a page built by `load("res://stats/stats.tscn")`, and in
+N6/N7 a real `application.tscn` game (4 seats on levels 4/4/3/2, 2 rounds) driven through its own signals.
+TEST N is **60 checks**; the suite prints **1200 PASS** on the recorded seed where it printed **1140**
+before step 26, 0 FAIL, 0 script error, exit 0:
+
+- **N1 — shape.** 2 tables; index 0 = CLASSIC, index 1 = NOBLE FAMILY; a FRESH page reads CLASSIC; one
+  slot pair per `AI_Level` KEY, and `Player.AI_Level.size()` is **7**, `Disabled` included (the enum is
+  `Disabled = -1` … `Level_5 = 5`), so a table is **14 counters** and the page's 6 label rows show
+  **12** of them — the `Disabled` pair is inert (no game writes level `-1`) and keeping it is what keeps
+  `application.gd`'s size rule and this fixture's formula agreeing. Both tables start at zeros, are
+  DIFFERENT arrays, and `table()` is a window, not a copy. The page's children are 6 Labels + Back +
+  Reset; the 12 slots the 6 rows show are EXACTLY the counters every AI level can write.
+- **N2 — two tables.** A full classic write (12 counters) leaves the noble table at zeros; switching
+  modes reveals an empty noble table, filling it leaves the classic byte-identical, and switching BACK
+  shows the classic numbers intact. Two histories live at once, which is the whole point.
+- **N3 — the alias.** `application.gd` reads `_stats._totals_and_wins`, mutates it by index, and
+  assigns a loaded save WHOLE. So the alias must hand out the SAME array (`is_same`), per-level writes
+  land in the CURRENT table (`[1,3,1,3,…]`, totals at the even slots, wins at the odd, 2 `Disabled`
+  slots untouched), a whole-array assignment writes only the current mode's table, and a 12-counter
+  save KEEPS its length 12 — the setter must not pad it, because `application.gd` drops a save whose
+  size is not `2 * Player.AI_Level.size()`; padding would silently accept the old format (step 28 owns
+  that migration). A fresh `options.cfg` (`get_value(..., [])`) yields size 0, which is what the app's
+  drop rule must see. The array the setter stored stays LIVE, so counters keep accumulating after a
+  save-load round trip.
+- **N4 — Reset.** `_on_reset_button_pressed()` clears ONLY the visible table: at noble mode, Reset
+  leaves the classic table's 14 counters (100…113) byte-identical, switching back shows them, and the
+  labels refresh to the zeros the player reset (a page is a view of the table, not of a snapshot).
+- **N5 — labels.** `update_labels()` at classic mode renders the classic numbers in the pre-variant
+  format `%5d  %s  %-5d` with 6 rows pairing totals with wins (the format string's own `%` count is
+  checked); at noble mode the SAME 6 rows are the noble table, and the two pages are measurably
+  DIFFERENT. `Stats.LABELS` is a **String** (`"H12345"`) — `"H12345".length() == 6` and it has NO
+  `size()`.
+- **N6 — a real classic game writes ONE table.** An app is built the way TEST M builds its menu app
+  (`add_child` first, then `_scene_tree_added` + 2 frames), seeded with 14 saved classic counters
+  (4,15 / 3,15 / 9,30 — 22 total, 22 finish) and driven for 2 real rounds. Measured: `round_won` 2,
+  `round_finished` 8 (one per seat — 4 seats); the file's classic counters match the seed; the game
+  ADDS to them (slot 0: 0 → 1, never replaces); totals grow by exactly the `round_won` count and wins
+  by the `round_finished` count (a double-counting mode index would double here); the NOBLE table is
+  still zeros after the game; the save the game wrote back equals the table the page shows and is 14
+  counters long.
+
+- **N7 — the APP is the only file that names a mode.** A real app: a fresh page reads the CLASSIC table
+  (a game that has not started has no mode); tapping PLAY → NOBLE starts a variant game AND switches the
+  page to the NOBLE table, the alias follows the mode (`is_same`), and the classic table stays at zeros —
+  so a running variant game writes no classic counter, which is the requirement in one line; the page
+  opened from the PAUSE menu shows the NOBLE table (mid-game counters are the game's own); EXIT clears
+  the mode (step 25's rule) and the page opened from the START page shows the CLASSIC table again; the
+  rendered rows equal the rows of the table the page shows, in the pre-variant format. This is the app
+  half of step 26 (`application.gd`: `start_game()`, `_on_start_stats_pressed`, `_on_pause_stats_pressed`
+  are the three lines that name a mode — the two write paths, `_on_round_won` / `_on_round_finished`,
+  never do).
+
+**Harness facts this step paid for (measured, not guessed):**
+
+1. `String` has no `size()`: `Stats.LABELS.size()` is a PARSE error (`Cannot find member "size" in base
+   "String"`) that kills the whole suite before a line of output. `Stats.LABELS` is a String → `.length()`.
+2. `const STATS_COUNT: int = 2 * Player.AI_Level.size()` is a PARSE error too (`Assigned value for
+   constant "STATS_COUNT" isn't a constant expression`) — an enum's `size()` is not a constant expression
+   in Godot 4.7. The 7 is MEASURED at runtime and spelled as `14`, with the formula in the comment, so
+   a new AI level shows up as a failing length check rather than as a silent compile-time doubling.
+3. **Godot's stdout tail is lost when the suite's output is redirected** — the last few kilobytes are
+   simply gone from the log (the committed suite's own log ends at M4's last check: its M5 checks and
+   its `ALL CHECKS PASSED` line are missing there too). A fixture section appended at the END of
+   `_ready()` therefore has NO printed evidence. TEST N sits BEFORE TEST M for that reason; the first
+   three step-26 runs read that missing tail as "the suite died at M5" and chased a SceneTree death
+   that was not there. Order is functionally irrelevant (every fixture builds and frees its own app).
+4. `preload("res://stats/stats.tscn")` at the top of the suite leaks — `ERROR: 2 resources still in use
+   at exit`, the harness's own step-11 rule. Instantiate with `load(...).instantiate()` at runtime.
+5. `table() -> Array[int]` FORCES a typed array, and a typed array rejects an untyped element: a
+   whole-array assignment of a plain `Array` read from `options.cfg` is accepted by the setter and would
+   raise at the first `table()` read (`Trying to return a value of type Array from a function whose
+   return type is Array[int]`) — so the setter normalizes with `int(v)`, and that is why N3's save fixture
+   is built as a plain `Array`, the shape `config.get_value` hands back.
+6. The `options.cfg` a game writes LAGS the in-memory table: `_on_round_finished` fires once PER SEAT and
+   the app saves on every `save_stats` (the measured 4p numbers are 2 counters vs 8 counters after the
+   file's last save). N6 waits for the file to converge on the table (bounded), which is a real fixture
+   property, not a sleep: `round_won` (1/round) and `round_finished` (4/round) are not a 1:1 ratio.
+7. A variant mode is reachable in ONE way, so N6/N7 tap the REAL row (`_tap_row(app, "NOBLE")`):
+   `classic_pressed` / `noble_family_pressed` / `back_pressed` are connected in `application.tscn`
+   (lines 54-56, so every app instance has them, nothing in `_ready()` connects them), a row press
+   hides the panel and THEN emits (step 24's order), and `_on_game_mode_noble_family()` sets
+   `Main.noble_family` and calls `start_game()`. `_stats.mode` is written by `start_game()` and by the
+   two page openers only — a fixture that set the mode by hand would test a path the game cannot take.
+8. An app fixture frees the app as soon as it has measured its point, and a NOBLE app must be settled
+   with `_settle_menu_deal(app, NOBLE_FAMILY_4P, 0)` FIRST: freeing an app whose deal is still animating
+   leaves the Animator's lambdas pointing at freed cards — 6 script errors (`Invalid assignment of
+   property or key 'faceup' ... on a base object of type 'Nil` at `animator.gd:48` and `'position'` at
+   `:51`, each followed by `ERROR: Lambda capture at index 1 was freed`). N7's first run measured that;
+   TEST M's fixtures already settle, which is why they are silent.
+
+**The 6 sabotages of `stats/stats.gd` (each one applied alone, suite run, then reverted):**
+
+| Sabotage | FAILs | Caught by |
+|---|---|---|
+| one array serving both modes (`static var _shared`, `tables = [_shared, _shared]`) | **7** | N1 (length, `is_same`), N2 ×2 (the shared write mixes two histories), N4, N5 ×2 |
+| the alias getter hands out a `duplicate()` | **5** | N3 ×3 (not a live reference; per-level writes vanish; a snapshot replaces the live array) + N6 ×2 (**the app's counters stay 0** — the write path dies) |
+| Reset clears BOTH tables | **2** | N4 ×2 (the classic history is gone; switching back shows zeros) |
+| `update_labels()` reads `tables[MODE_CLASSIC]` | **3** | N4 (labels after a noble reset), N5 ×2 (the noble page shows classic numbers; the two pages identical) |
+| the page defaults to `mode = MODE_NOBLE` | **12** | N1 (a fresh page opens on a mode nobody played), N3 ×3, N5, N6 ×7 — **every** classic write lands in the noble table and the classic history stops growing |
+| the setter pads a short save to 12 | **3** | N3 ×3 (a stale save keeps the length its drop rule must see) |
+| `start_game()` does not name a mode (the wiring line deleted) | **2** | N7 ×2 (the page stays on the CLASSIC table while a variant game runs; the alias aims at the classic table — i.e. the variant game's counters would land in the classic history, exactly what step 26 forbids) |
+| `_on_start_stats_pressed()` pins NOBLE | **1** | N7 (the start page opens on a mode the player never chose) |
+
+*The six `stats/stats.gd` rows were measured before N7 existed (51 checks then); the two
+`application.gd` rows with N7 in place (60 checks). A clean tree prints 1200 PASS, 0 FAIL, exit 0.*
+
+**Not covered by this step (deliberately):** the SAVE format is still ONE key — `Gameplay/totals_and_wins`
+holds the CURRENT table, so a variant game's numbers land under the legacy key and a variant history is
+lost on the next launch. That is step 28 (per-mode keys + the 12-counter migration), and its rule is
+already implied here: the legacy key is the CLASSIC table. The page's own mode picker (a segmented
+Classic / Noble Family control on the stats page) is step 27.
+
 ## tests/noble_family_smoke.tscn — Noble Family variant, whole games on the AI (steps 7, 11, 14)
 
 Variant games (`main.noble_family = true`) with every seat on the AI (levels 4/4/3/2), animations

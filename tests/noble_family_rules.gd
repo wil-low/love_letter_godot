@@ -57,6 +57,15 @@ extends Node2D
 # starts no game and sets no mode, Exit-to-menu CLEARS the mode and a following CLASSIC press deals a
 # classic round with NO families and NO family draws, and `speed_run` bypasses the menu, classic-only.
 #
+# TEST N (todo step 26) pins the STATS data model: ONE 14-counter table PER MODE (0 = classic,
+# 1 = noble family), `mode` selecting which table the page shows and which one the game writes.
+# The pre-variant name `_totals_and_wins` survives as a getter/setter ALIAS of the current table, so
+# `application.gd` is untouched; the setter normalizes a save loaded from `options.cfg` (a plain
+# Array) to `Array[int]` and PRESERVES its length, because the application drops a stale save by its
+# size. Reset clears ONLY the visible table; a classic game writes ONLY the classic table; and the
+# APP is the only file that names a mode (`start_game()` and the two stats-page openers), so a variant
+# game's counters can only land in the noble table.
+#
 # TEST A deliberately needs no Main scene at all, so the deal table is pinned
 # independently of the game loop.
 #
@@ -286,6 +295,13 @@ func _ready() -> void:
 	await _test_modal_rails()
 	await _test_deal_presentation()
 	await _test_game_mode()
+	# TEST N is placed BEFORE TEST M, not appended at the end of the list: Godot's stdout is block-buffered
+	# when it is redirected, and the suite's LAST few kilobytes of prints are gone from the log (measured:
+	# the committed suite's log ends at M4's last check and its M5 checks and its summary line are missing,
+	# in the baseline too). A new section placed last would therefore have NO printed evidence, which is how
+	# step 26's first three runs were read as "the suite died at M5". Order is functionally irrelevant -
+	# every fixture builds and frees its own app - so the section that must be READ goes second-to-last.
+	await _test_stats_tables()
 	await _test_mode_menu()
 	await await_frames(1)
 
@@ -5518,4 +5534,472 @@ func _test_menu_speed_run() -> void:
 	check(int(c["plays"]) >= 6, tag + ": the speed run played " + str(c["plays"]) + " cards")
 	check(int(c["fam_draws"]) == 0 and int(c["pile_draws"]) > 0, tag + ": and it drew from piles only ("
 		+ str(c["pile_draws"]) + " pile draws, 0 family draws)")
+	await _free_menu_app(app)
+
+# ----------------------------------------------------------------------------------------
+# TEST N (todo step 26): the STATS tables, ONE PER MODE (index 0 = CLASSIC, 1 = NOBLE FAMILY).
+#
+# The step 26 gate is "two independent tables exist", and independence is a DATA property, so most
+# of this fixture needs no game: a Stats panel is instantiated and its data is written through the
+# THREE paths the game writes it (the legacy `_totals_and_wins` alias, the `table()` accessor, and a
+# whole-array assignment of a save loaded from `options.cfg`) and read through the two the player
+# sees (`update_labels()` and the Reset button). One fixture DOES run the real application, because
+# "classic mode is untouched" is a claim about the WRITE path: a classic game's counters must land in
+# the CLASSIC table, exactly once per emitted signal, with the NOBLE table staying all zero.
+#
+# N1  shape: 2 tables of 14 counters (2 per `AI_Level` KEY - the enum has 7 keys, `Disabled` included,
+#     `Array[int]` (the outer array is untyped: Godot 4.7 rejects `Array[Array[int]]`), no shared
+#     reference between the tables, `table()` a WINDOW on `tables[mode]` and not a copy, 6 label rows x
+#     2 counters = 12 of the 14 = every counter a game can write is reachable on screen.
+# N2  independence: writing one mode never touches the other table, in either direction, and a mode
+#     switch never clears, never overwrites, never re-sorts what each table holds.
+# N3  the alias contract, replaying `application.gd`'s statements VERBATIM (that file is UNCHANGED by
+#     step 26, so its shapes are the contract): per-level `+1` writes, `= config.get_value(...)`
+#     arriving as an UNTYPED Array that must land as `Array[int]` (an untyped element makes `table()`
+#     raise "Trying to return a value of type Array ... Array[int]"), the LENGTH preserved (the
+#     application drops a stale save BY ITS SIZE, so a setter that padded it would silently accept
+#     stale stats), and the empty-array default of a missing key.
+# N4  reset: only the VISIBLE table is zeroed - the other mode's history survives it - and the reset
+#     does not change the mode, does not close the page and does refresh the labels.
+# N5  labels: `update_labels()` reads the CURRENT table; the format, the H12345 letters and the
+#     (totals, wins) pair order are unchanged from the pre-variant page.
+# N6  the classic write path on the REAL application: the legacy save lands in the classic table, a
+#     classic game writes ONLY that table, and the writes are exactly the emitted signals (no double
+#     write, no lost write).
+# ----------------------------------------------------------------------------------------
+const STATS_COUNT: int = 14  # MEASURED == 2 * Player.AI_Level.size(): `AI_Level` has 7 KEYS
+const STATS_OPTIONS: String = "user://options.cfg"
+
+var _st_won: Array[int] = []
+var _st_fin: Array[int] = []
+
+
+func _test_stats_tables() -> void:
+	print("\n########## TEST N: the per-mode stats tables (step 26) - 2 tables x 14 counters, ##########")
+	print("########## classic = index 0 = the default, the legacy alias writes the CURRENT table, ##########")
+	print("########## reset clears ONLY the visible table, labels read it, and the APP names the mode ##########")
+	await _test_st_shape()
+	await _test_st_independence()
+	await _test_st_alias()
+	await _test_st_reset()
+	await _test_st_labels()
+	await _test_st_classic_writes()
+	await _test_st_app_mode()
+
+
+func _st_panel():
+	# `load()` at runtime, NOT a top-level `preload()`: a preloaded PackedScene is a static reference
+	# that is "still in use at exit" (the scene, its script, its LabelSettings, its button scene), and
+	# Godot exits 1 for a suite that leaks. This suite's own harness rule, step 11.
+	var panel = load("res://stats/stats.tscn").instantiate()
+	add_child(panel)  # `update_labels()` reads `@onready` labels, so a panel must be in the tree
+	await await_frames(1)
+	return panel
+
+
+func _st_free(panel) -> void:
+	panel.queue_free()
+	await await_frames(2)
+
+
+func _st_row(tab) -> Array:
+	var out: Array = []
+	for v in tab:
+		out.append(int(v))
+	return out
+
+
+func _st_tables(panel) -> Array:
+	var out: Array = []
+	for tab in panel.tables:
+		out.append(_st_row(tab))
+	return out
+
+
+func _st_zeros(n: int) -> Array:
+	var out: Array = []
+	for i in n:
+		out.append(0)
+	return out
+
+
+# A recognizable per-mode pattern (base 100 = classic, 200 = noble), written through the raw table
+func _st_fill(panel, mode: int, base: int) -> void:
+	var tab = panel.tables[mode]
+	for i in tab.size():
+		tab[i] = base + i
+
+
+func _st_zero(tab) -> bool:
+	for v in tab:
+		if int(v) != 0:
+			return false
+	return true
+
+
+func _st_labels(panel) -> Array:
+	var out: Array = []
+	for lbl in panel._levels:
+		out.append((lbl as Label).text)
+	return out
+
+
+# The PRE-variant label format, recomputed here so a silent format change (swapped columns, a
+# different label order) shows up as a FAIL instead of a page that just "looks fine"
+func _st_expect(t: Array) -> Array:
+	var out: Array = []
+	for i in Stats.LABELS.length():  # 6 label rows = 12 of the 14 slots (see the N1 note)
+		out.append("%5d  %s  %-5d" % [int(t[2 * i]), Stats.LABELS[i], int(t[2 * i + 1])])
+	return out
+
+
+func _st_saved() -> Array:
+	var cfg := ConfigFile.new()
+	if cfg.load(STATS_OPTIONS) != OK:
+		return []
+	var v = cfg.get_value("Gameplay", "totals_and_wins", [])
+	return _st_row(v)
+
+
+func _st_note_won(level) -> void:
+	_st_won.append(int(level))
+
+
+func _st_note_finished(level) -> void:
+	_st_fin.append(int(level))
+
+
+func _run_menu_rounds(app, wanted: int) -> void:
+	for _f in 40000:
+		if _st_won.size() >= wanted:
+			return
+		await get_tree().process_frame
+
+
+# ---- N1: the shape of the two tables ---------------------------------------------------------
+func _test_st_shape() -> void:
+	var tag := "N1 shape"
+	var panel = await _st_panel()
+	check(panel.tables.size() == Stats.MODE_COUNT, tag + ": the page holds EXACTLY "
+		+ str(Stats.MODE_COUNT) + " counter tables (measured " + str(panel.tables.size())
+		+ ") - 1 table would mix two modes into one history, 3 tables would be a mode the game has")
+	check(Stats.MODE_CLASSIC == 0 and Stats.MODE_NOBLE == 1, tag + ": index 0 is CLASSIC and index 1"
+		+ " is NOBLE FAMILY - the fixed indexing, so `Main.noble_family` maps onto it as a 0/1")
+	check(panel.mode == Stats.MODE_CLASSIC, tag + ": a FRESH page reads the CLASSIC table - the mode is"
+		+ " chosen per game and never persisted, so a page must not open on a mode nobody played")
+	var snaps: Array = _st_tables(panel)
+	var typed: Array = []
+	for tab in panel.tables:
+		typed.append(tab is Array[int])
+	check(2 * Player.AI_Level.size() == STATS_COUNT, tag + ": the counters-per-table formula is"
+		+ " `2 * Player.AI_Level.size()` == " + str(2 * Player.AI_Level.size()) + " - the SAME formula"
+		+ " `application.gd`'s stale-size drop uses, so the length the game writes and the length the"
+		+ " loader accepts are one number (`Player.AI_Level.keys()` has 7 entries: `Disabled` plus"
+		+ " Human plus Levels 1-5; a `const` cannot call `.size()`, so the fixture spells the number out")
+	check(snaps[0].size() == STATS_COUNT and snaps[1].size() == STATS_COUNT, tag + ": "
+		+ str(STATS_COUNT) + " counters per table (measured " + str(snaps[0].size()) + " / "
+		+ str(snaps[1].size()) + ") = totals + wins for every `AI_Level` KEY - 7 keys, `Disabled`"
+		+ " included, so the last 2 slots belong to a level that can never score; the page shows 12 of"
+		+ " them (H12345) and `_on_round_won` writes `2 * ai_level` with `ai_level` in 0..5 = 0..11")
+	check(typed == [true, true], tag + ": every table is a REAL `Array[int]` (measured " + str(typed)
+		+ ") - the OUTER array is untyped because Godot 4.7 rejects `Array[Array[int]]` (nested typed"
+		+ " collections), the same shape `Deck.prepare_noble()` returns")
+	check(_st_zero(snaps[0]) and _st_zero(snaps[1]), tag + ": both tables start empty of history "
+		+ "(" + str(snaps[0]) + " / " + str(snaps[1]) + ") - a table that inherits numbers is a save "
+		+ "leaking into the mode the player is about to choose")
+	check(not is_same(panel.tables[0], panel.tables[1]), tag + ": the two tables are DIFFERENT arrays "
+		+ "- a shared reference shows one mode's counters in the other (the step-17 reference trap)")
+	check(is_same(panel.table(), panel.tables[panel.mode]), tag + ": `table()` is a WINDOW on the "
+		+ "current table, not a copy - a writer that mutates `table()` lands in `tables[mode]`")
+	check(Stats.LABELS.length() == 6 and STATS_COUNT == 2 * Player.AI_Level.size(), tag + ": 6 label"
+		+ " rows (H12345) x 2 counters = 12 of the " + str(STATS_COUNT) + " slots, so every counter a"
+		+ " game can WRITE is reachable on screen and the 2 `Disabled` slots are inert padding - a"
+		+ " COUNTERS-per-table change must move the label rows and the save format together")
+	var labels := 0
+	var buttons := 0
+	for ch in panel.get_children():
+		if ch is Label:
+			labels += 1
+		if ch is BaseButton:
+			buttons += 1
+	check(labels == 6 and buttons == 2, tag + ": the page is 6 Labels + Back + Reset = "
+		+ str(panel.get_child_count()) + " children - the step-27 mode switch ADDS nodes to this page,"
+		+ " so the baseline is written down before it does")
+	await _st_free(panel)
+
+
+# ---- N2: two tables, and writing one cannot touch the other ----------------------------------
+func _test_st_independence() -> void:
+	var tag := "N2 two tables"
+	var panel = await _st_panel()
+	_st_fill(panel, Stats.MODE_CLASSIC, 100)
+	var classic: Array = _st_row(panel.tables[Stats.MODE_CLASSIC])
+	check(_st_row(panel.tables[Stats.MODE_NOBLE]) == _st_zeros(STATS_COUNT), tag + ": a full classic"
+		+ " write leaves the NOBLE table at zeros - two histories, not one mixed history")
+	panel.mode = Stats.MODE_NOBLE
+	check(is_same(panel.table(), panel.tables[Stats.MODE_NOBLE]), tag + ": `mode` switches the WINDOW,"
+		+ " so `table()` (and the alias) now name the NOBLE table")
+	check(_st_row(panel.table()) == _st_zeros(STATS_COUNT), tag + ": the mode switch revealed an EMPTY"
+		+ " noble table - switching modes never copies, pads or seeds a table")
+	var t: Array[int] = panel.table()  # the typed accessor is a reference, so this write is a real write
+	for i in t.size():
+		t[i] = 200 + i
+	var noble: Array = _st_row(panel.tables[Stats.MODE_NOBLE])
+	check(_st_row(panel.tables[Stats.MODE_CLASSIC]) == classic, tag + ": the noble write left the"
+		+ " CLASSIC table byte-identical (" + str(classic) + ")")
+	panel.mode = Stats.MODE_CLASSIC
+	check(_st_row(panel.table()) == classic, tag + ": back to classic, the classic numbers are intact"
+		+ " - a mode switch never clears the table it leaves")
+	panel.mode = Stats.MODE_NOBLE
+	check(_st_row(panel.table()) == noble, tag + ": and the noble numbers are intact too (" + str(noble)
+		+ ") - the two tables hold TWO histories at once, which is the whole point of step 26")
+	await _st_free(panel)
+
+
+# ---- N3: the legacy alias is `application.gd`'s contract, statement for statement -----------
+func _test_st_alias() -> void:
+	var tag := "N3 the legacy alias"
+	var panel = await _st_panel()
+	check(is_same(panel._totals_and_wins, panel.tables[panel.mode]), tag + ": `_totals_and_wins` IS the"
+		+ " current table (the same array, not a copy) - `application.gd` is unchanged by step 26, so"
+		+ " its `alias[i] = clampi(alias[i] + 1, ...)` must mutate the table in place")
+	for level in Stats.LABELS.length():  # `_on_round_won` / `_on_round_finished`, verbatim shapes
+		panel._totals_and_wins[2 * level] = clampi(panel._totals_and_wins[2 * level] + 1, 0, 99999)
+		panel._totals_and_wins[2 * level + 1] = clampi(panel._totals_and_wins[2 * level + 1] + 3,
+			0, 99999)
+	var want: Array = _st_zeros(STATS_COUNT)  # the 2 `Disabled` slots stay 0: no AI level writes them
+	for level in Stats.LABELS.length():
+		want[2 * level] = 1
+		want[2 * level + 1] = 3
+	check(_st_row(panel.tables[panel.mode]) == want, tag + ": the per-level writes landed in the"
+		+ " classic table as " + str(_st_row(panel.tables[panel.mode])) + " - totals at the even slots,"
+		+ " wins at the odd ones, 12 slots written for 6 levels and the 2 `Disabled` slots untouched")
+	check(_st_zero(panel.tables[Stats.MODE_NOBLE]), tag + ": and the NOBLE table is still zeros - the"
+		+ " alias reaches the CURRENT mode, never both")
+	var save: Array = []  # `config.get_value` hands back a PLAIN Array, so this is the load shape
+	for i in STATS_COUNT:
+		save.append(i + 1)
+	panel._totals_and_wins = save
+	var loaded: Array = _st_row(panel.tables[panel.mode])
+	check(loaded == save, tag + ": a WHOLE-ARRAY assignment of a loaded 12-counter save lands in the"
+		+ " CURRENT table elementwise (" + str(loaded) + ") - `load_config()` assigns the whole array, it"
+		+ " never merges it into what the table already holds")
+	check(panel.tables[panel.mode] is Array[int], tag + ": the setter NORMALIZES a loaded save to"
+		+ " `Array[int]` - an untyped table would make `table()` raise a return-type error on the very"
+		+ " next label update, and `--check-only` cannot see a runtime type error")
+	var t_now := 0
+	t_now = panel.table().size()  # the call itself is the check: a type error here is a SCRIPT ERROR
+	check(t_now == STATS_COUNT, tag + ": `table()` reads the loaded save (" + str(t_now) + " counters)")
+	check(_st_zero(panel.tables[Stats.MODE_NOBLE]), tag + ": a save assigned at classic mode lands in"
+		+ " the CLASSIC table only - the load path cannot write a mode the player is not playing")
+	panel._totals_and_wins[0] = 555
+	check(int(panel.tables[panel.mode][0]) == 555, tag + ": the array the setter stored is a LIVE"
+		+ " reference, not a snapshot - the counters keep accumulating after a save was loaded")
+	panel._totals_and_wins = [1, 2, 3, 4, 5, 6]
+	check(panel._totals_and_wins.size() == 6 and panel.tables[panel.mode].size() == 6, tag
+		+ ": a STALE 6-counter save KEEPS its length (" + str(panel._totals_and_wins.size())
+		+ ") - the setter must not pad it, because `application.gd` drops a stale save by EXACTLY that"
+		+ " size check; padding would silently accept it")
+	panel._totals_and_wins = []
+	check(panel._totals_and_wins.size() == 0, tag + ": the missing-key default (`get_value(..., [])`)")
+	panel._totals_and_wins = save
+	panel.mode = Stats.MODE_NOBLE
+	panel._totals_and_wins = [7, 7, 7, 7]
+	check(_st_row(panel.tables[Stats.MODE_NOBLE]) == [7, 7, 7, 7], tag + ": at NOBLE mode the same"
+		+ " assignment writes the NOBLE table - the alias follows the mode, in both modes")
+	check(_st_row(panel.tables[Stats.MODE_CLASSIC]) == save, tag + ": and the classic table is"
+		+ " untouched by it (" + str(_st_row(panel.tables[Stats.MODE_CLASSIC])) + ")")
+	await _st_free(panel)
+
+
+# ---- N4: Reset clears ONLY the table the player is looking at --------------------------------
+func _test_st_reset() -> void:
+	var tag := "N4 reset"
+	var panel = await _st_panel()
+	_st_fill(panel, Stats.MODE_CLASSIC, 100)
+	_st_fill(panel, Stats.MODE_NOBLE, 200)
+	var classic: Array = _st_row(panel.tables[Stats.MODE_CLASSIC])
+	panel.mode = Stats.MODE_NOBLE
+	panel.update_labels()
+	var reset: BaseButton = panel.get_node("ResetButton") as BaseButton
+	check(reset != null, tag + ": the page has a ResetButton the player can press")
+	reset.emit_signal("pressed")  # the scene's OWN connection to `_on_reset_button_pressed`
+	await await_frames(1)
+	check(_st_row(panel.tables[Stats.MODE_NOBLE]) == _st_zeros(STATS_COUNT), tag + ": pressing Reset"
+		+ " zeroed the VISIBLE (noble) table")
+	check(_st_row(panel.tables[Stats.MODE_CLASSIC]) == classic, tag + ": and the CLASSIC table kept its"
+		+ " whole history (" + str(classic) + ") - a variant reset must not delete a year of classic"
+		+ " games, and it is the only way a player can undo a variant reset by accident")
+	check(panel.mode == Stats.MODE_NOBLE, tag + ": Reset did not change the mode (the page shows the"
+		+ " same mode it showed before, after a reset)")
+	check(_st_labels(panel) == _st_expect(_st_zeros(STATS_COUNT)), tag + ": the labels refreshed to the"
+		+ " zeros the player reset - the page is a view of the table, not of a snapshot")
+	check((panel as CanvasItem).visible, tag + ": Reset keeps the page open (a reset that closes the"
+		+ " page hides the result of the player's own action)")
+	panel.mode = Stats.MODE_CLASSIC
+	panel.update_labels()
+	check(_st_labels(panel) == _st_expect(classic), tag + ": switching back shows the classic numbers"
+		+ " the reset did not touch")
+	await _st_free(panel)
+
+
+# ---- N5: the labels read the CURRENT table ----------------------------------------------------
+func _test_st_labels() -> void:
+	var tag := "N5 labels"
+	var panel = await _st_panel()
+	_st_fill(panel, Stats.MODE_CLASSIC, 100)
+	_st_fill(panel, Stats.MODE_NOBLE, 500)
+	panel.update_labels()
+	check(_st_labels(panel) == _st_expect(_st_row(panel.tables[Stats.MODE_CLASSIC])), tag
+		+ ": at classic mode the 6 rows are the CLASSIC table, in the pre-variant format and pair"
+		+ " order (measured " + str(_st_labels(panel)[0]) + ")")
+	panel.mode = Stats.MODE_NOBLE
+	panel.update_labels()
+	var noble_texts: Array = _st_labels(panel)
+	check(noble_texts == _st_expect(_st_row(panel.tables[Stats.MODE_NOBLE])), tag + ": at noble mode"
+		+ " the SAME 6 rows are the NOBLE table (" + str(noble_texts[0]) + ") - `update_labels()` reads"
+		+ " `table()`, so the page follows the mode")
+	check(noble_texts != _st_expect(_st_row(panel.tables[Stats.MODE_CLASSIC])), tag + ": the two modes"
+		+ " are measurably DIFFERENT pages - identical labels would mean one table is being shown twice")
+	var letters: Array = []
+	for txt in noble_texts:
+		letters.append(str(txt).substr(7, 1))
+	check(letters == ["H", "1", "2", "3", "4", "5"], tag + ": the rows are H,1,2,3,4,5 top to bottom"
+		+ " (" + str(letters) + ") - the level a counter belongs to is readable, not positional")
+	await _st_free(panel)
+
+
+# ---- N6: the classic WRITE path, on the real application --------------------------------------
+func _test_st_classic_writes() -> void:
+	var tag := "N6 classic writes"
+	var app = _make_menu_app()
+	_menu_levels = [Player.AI_Level.Level_4, Player.AI_Level.Level_4,
+		Player.AI_Level.Level_3, Player.AI_Level.Level_2]
+	await _menu_ready(app)
+	var stats = app._stats
+	var main: Node = app._main
+	var saved: Array = _st_saved()
+	var live: Array = _st_row(stats.tables[Stats.MODE_CLASSIC])
+	if saved.size() == 2 * Player.AI_Level.size():
+		check(live == saved, tag + ": a save whose length matches `load_config()`'s OWN size formula"
+			+ " is KEPT and lands in the CLASSIC table (" + str(live) + ") - an old-format save is the"
+			+ " classic history, never a mystery mode")
+	else:
+		check(_st_zero(live), tag + ": a " + str(saved.size()) + "-counter save is DROPPED by"
+			+ " `load_config()`'s EXISTING size check (`2 * AI_Level.size()` == "
+			+ str(2 * Player.AI_Level.size()) + "), so the classic table opens at zeros - PRE-EXISTING"
+			+ " behaviour, step 26 changes no save format and no drop rule. The first save the game"
+			+ " writes back is " + str(STATS_COUNT) + " long, so the NEXT boot keeps it; step 28's"
+			+ " migration Check (an old-format save must migrate to the classic table) is the step that"
+			+ " must decide the 12-to-" + str(STATS_COUNT) + " rule, and THIS check is the one that flips"
+			+ " when it does")
+	check(stats.tables[Stats.MODE_CLASSIC] is Array[int], tag + ": the loaded save is NORMALIZED to"
+		+ " `Array[int]` by the alias setter - the file holds a plain array, so the normalization is"
+		+ " what keeps `table()` readable on the load path")
+	check(stats.tables[Stats.MODE_NOBLE] is Array[int] and _st_zero(stats.tables[Stats.MODE_NOBLE]),
+		tag + ": the NOBLE table starts at zeros (no save key for it yet - step 28 adds"
+		+ " `Stats/noble_family`)")
+	check(stats.mode == Stats.MODE_CLASSIC, tag + ": a classic game opens on the CLASSIC table")
+
+	_st_won = []
+	_st_fin = []
+	main.round_won.connect(_st_note_won)  # the counters are COUNTED ON SIGNALS, the harness rule
+	main.round_finished.connect(_st_note_finished)
+	await _tap_start_play(app)
+	await _tap_row(app, "CLASSIC")
+	var base: Array = _st_row(stats.tables[Stats.MODE_CLASSIC])
+	await _settle_menu_deal(app, 0, CLASSIC_4P_MAIN)
+	await _run_menu_rounds(app, 2)
+	# The save is written by `save_stats.emit()` at the TAIL of `round_over()` (after every
+	# `round_won`), and the game keeps playing after the 2nd round, so the file is a LAGGING snapshot of
+	# the table. The check is convergence: poll until "what the file says" == "what the page shows".
+	var matched := false
+	var now: Array = _st_row(stats.tables[Stats.MODE_CLASSIC])
+	for _f in 600:
+		now = _st_row(stats.tables[Stats.MODE_CLASSIC])
+		if _st_saved() == now:
+			matched = true
+			break
+		await get_tree().process_frame
+	var d: Array = []
+	for i in STATS_COUNT:
+		d.append(int(now[i]) - int(base[i]))
+	var totals := 0
+	var wins := 0
+	for i in Stats.LABELS.length():
+		totals += int(d[2 * i])
+		wins += int(d[2 * i + 1])
+	check(_st_won.size() >= 2, tag + ": the classic game finished " + str(_st_won.size())
+		+ " rounds, so the counters are measurable")
+	check(totals == _st_won.size(), tag + ": the TOTALS grew by exactly the number of `round_won`"
+		+ " emissions (" + str(totals) + " counters for " + str(_st_won.size()) + " rounds) - every"
+		+ " winner is credited ONCE, and a mode index written twice would double here")
+	check(wins == _st_fin.size(), tag + ": the WINS grew by exactly the number of `round_finished`"
+		+ " emissions (" + str(wins) + " for " + str(_st_fin.size()) + ")")
+	check(_st_zero(stats.tables[Stats.MODE_NOBLE]), tag + ": a CLASSIC game wrote NOTHING to the noble"
+		+ " table - the write path is mode-scoped, so a variant table cannot collect classic games")
+	check(int(now[0]) >= int(base[0]) and int(now[1]) >= int(base[1]), tag + ": a classic game ADDS to"
+		+ " the saved classic history, it never replaces it (" + str(base) + " -> " + str(now[0])
+		+ " on the first slot)")
+	check(matched, tag + ": the save the game wrote back EQUALS the table the page shows (" + str(now)
+		+ ") - `save_config()` writes the CURRENT table under the legacy key; step 28 splits that key"
+		+ " per mode. Measured lag: the file is written at the TAIL of `round_over()`, so a snapshot"
+		+ " taken right after a `round_won` is one round behind the in-memory table")
+	check(_st_saved().size() == STATS_COUNT, tag + ": the save the game wrote back is " + str(STATS_COUNT)
+		+ " counters long - the length `load_config()`'s own size check expects, so the format the game"
+		+ " writes and the rule that drops a save agree with each other (a 12-counter legacy save does"
+		+ " NOT, which is the drop measured above; step 28 owns that gap)")
+	main.round_won.disconnect(_st_note_won)
+	main.round_finished.disconnect(_st_note_finished)
+	await _free_menu_app(app)
+
+
+# ---- N7: the APP is the only place a mode exists, so the page has to follow it ----------------
+# `application.gd` is the file that owns a mode (step 25: the picker writes `Main.noble_family`, the
+# stats page stores nothing), and step 26 gives the page one table per mode. This fixture pins the
+# THREE places the app names a mode, on a real app - start a game, open the page from the pause menu,
+# leave the game and open it from the start page.
+func _test_st_app_mode() -> void:
+	var tag := "N7 the app follows the mode"
+	var app = _make_menu_app()
+	_menu_levels = [Player.AI_Level.Level_2, Player.AI_Level.Level_3,
+		Player.AI_Level.Level_2, Player.AI_Level.Level_3]
+	await _menu_ready(app)
+	var stats = app._stats
+	var main: Node = app._main
+	check(stats.mode == Stats.MODE_CLASSIC, tag + ": a fresh app's page reads the CLASSIC table - the"
+		+ " mode is per game, and a game that has not started has none")
+	var classic_before: Array = _st_row(stats.tables[Stats.MODE_CLASSIC])
+	await _tap_start_play(app)
+	await _tap_row(app, "NOBLE")
+	# TEST M's settle, NOT a fixed number of frames: freeing an app whose DEAL is still animating leaves
+	# the Animator's lambdas pointing at freed cards (`Invalid assignment of property 'faceup' ... on a
+	# base object of type 'Nil` at animator.gd:48/51, 6 of them). Measured on the first N7 run.
+	await _settle_menu_deal(app, NOBLE_FAMILY_4P, 0)
+	check(main.noble_family, tag + ": the NOBLE row started a variant game")
+	check(stats.mode == Stats.MODE_NOBLE, tag + ": and the page switched to the NOBLE table -"
+		+ " `start_game()` is the ONE line where a mode exists, and `application.gd`'s two write paths"
+		+ " (`_on_round_won`, `_on_round_finished`) never name a mode, so a variant game's counters can"
+		+ " only land in the noble table")
+	check(is_same(stats._totals_and_wins, stats.tables[Stats.MODE_NOBLE]), tag + ": the alias follows"
+		+ " the mode - the per-level writes of a running variant game mutate the NOBLE table in place")
+	check(_st_row(stats.tables[Stats.MODE_CLASSIC]) == classic_before, tag + ": a variant game IN"
+		+ " PROGRESS writes no classic counter at all - the classic table is not its target, which is"
+		+ " the requirement in one line (" + str(classic_before) + " -> "
+		+ str(_st_row(stats.tables[Stats.MODE_CLASSIC])) + "; a counter moves at a ROUND END, and the"
+		+ " noble table a settled variant deal sits on is at zeros too)")
+	app._on_pause_stats_pressed()  # the pause page belongs to the game that is running
+	check(stats.mode == Stats.MODE_NOBLE, tag + ": opened from the PAUSE menu in a variant game, the page"
+		+ " shows the NOBLE table - the counters a player checks mid-game are the game's own")
+	app._on_stats_back_pressed()
+	await _tap_pause_exit(app)
+	check(not main.noble_family, tag + ": EXIT cleared the mode - step 25's rule, the mode is per game"
+		+ " and never persisted, so the next PLAY must choose it again")
+	app._on_start_stats_pressed()
+	check(stats.mode == Stats.MODE_CLASSIC, tag + ": opened from the START page, the page shows the"
+		+ " CLASSIC table - no game is running, so what a player opens is the history the classic game"
+		+ " wrote, not the mode of the game that just ended")
+	check(_st_labels(stats) == _st_expect(stats.table()), tag + ": the page that opens renders the 6 rows"
+		+ " OF THE TABLE IT SHOWS (" + str(_st_labels(stats)) + ") - the labels are the table's view, in"
+		+ " both modes, in the pre-variant format")
 	await _free_menu_app(app)
