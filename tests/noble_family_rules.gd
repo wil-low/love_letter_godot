@@ -115,6 +115,19 @@ extends Node2D
 # Help has 21 pages, a classic game's Pause Help and the Start Help have 17, Back returns to the
 # invoker, and the page a player closed on is what the next open clamps.
 #
+# TEST R (todo step 31) runs the step's OWN rails over whole games: `CountingMain.joint_legality()`
+# states every rule of a (draw, play, target) triple on the LIVE board (the drawn slot of a 1-card
+# seat's family, played X is one of the pair, X + kept are the pair, the Countess pair plays the
+# Countess, the per-type target rules, the protection rule, the node shape of a drawn play), and
+# `check_enumeration()` runs it on the FULL list at the seam where production enumerates it - so the
+# moves the AI did NOT play are checked too. R1 is a scripted Countess-forcing supply (4 Countesses,
+# every family carrying a man) whose whole round is derived by hand; R2 compares 7 whole games
+# (scripted and REAL-deck) by play LOG: same seed + level 1 twice = identical, same seed + level 4 =
+# different, seed+1 = different. It runs immediately AFTER TEST J because `Main.round_over()` picks
+# the next round's starter with `randi()`, so a game's round ends spend global RNG (measured: R in
+# front of J moved J1 from 19 plays to 16). The section prints its own `END R: n checks` line, since
+# a fixture that raises mid-frame prints no check at all and the suite still exits 0.
+#
 # TEST A deliberately needs no Main scene at all, so the deal table is pinned
 # independently of the game loop.
 #
@@ -344,6 +357,12 @@ func _ready() -> void:
 	await _test_human_modal()
 	await _test_prince_human_modal()
 	await _test_modal_rails()
+	# TEST R (step 31) runs right AFTER TEST J, and the reason is the round end: `Main.round_over()`
+	# picks the next round's first player with `randi()` among the round winners, so a scripted game
+	# whose play counts are pinned consumes global RNG and is sensitive to how much RNG the sections
+	# before it spent (measured: J1's 19 plays became 16 with this section moved in front of it). J is
+	# the only section measured to be sensitive; the rest of the suite tolerated the shift.
+	await _test_joint_legality_and_determinism()
 	await _test_deal_presentation()
 	await _test_game_mode()
 	# TEST O (step 27) sits with TEST N, NOT after it: the suite's last kilobytes of prints are lost to
@@ -7847,3 +7866,320 @@ func _test_help_app() -> void:
 	check(!bool(help.visible) and bool(app._start.visible), tag + ": Help's Back returned to the START"
 		+ " page (the invoker is the opener, not a fixed page)")
 	await _free_menu_app(app)
+
+
+# ----------------------------------------------------------------------------------------
+# TEST R (todo §D.31) - joint move legality in REAL games, and level 1 determinism
+# ----------------------------------------------------------------------------------------
+# The step's own words: "joint move legality (every enumerated move plays a card the seat can
+# legally play, Countess forced when required); L1 determinism under a fixed seed". The legality
+# rail lives in the harness (`CountingMain.joint_legality()` / `check_enumeration()`, documented in
+# tests/counting_main.gd) and runs on EVERY play of every game this fixture plays - on the
+# enumerated list at `_begin_play_selection`, and on the committed triple at `_on_move_chosen`
+# before the chain animates the draw. TEST B pins the enumeration's SHAPE on a hand-built board;
+# TEST H pins the Countess forcing on a 2-card hand; this section pins that the rails stay silent
+# through whole scripted and whole REAL-deck games, and that a Countess-forcing supply is detected
+# as such by the rail, play after play.
+#
+# THE SCRIPTED CASES THE STEP ASKS TO "COLLECT" ARE THE FIXTURES THE EARLIER STEPS ALREADY BUILT,
+# named here so the suite has one address for the rule set: TEST A + C (step 4, the deal table and
+# the family-out round end), TEST J (step 14, the modal rails of a whole human game), TEST D (step
+# 15, the Prince chain - family draw, widow fallback, elimination), TEST E (step 16, the elimination
+# reveal), TEST I (the Countess-forced play of a human seat). What THIS section adds on top of them
+# is the pair the step names and none of them has: a rail over WHOLE games on the joint triple, and
+# a determinism gate that compares games rather than boards.
+#
+# R1 is a scripted 4p game built so the Countess rule FIRES every round. `Player.is_man` is Prince
+# + King only (a Guard + Countess pair is FREE), so the supply pairs Countesses with Princes and
+# Kings. Deal order (4p: 4 first-hand cards, then the 3 family columns; `FakeDeck.prepare_noble()`
+# pops from the FRONT, so `scripted` reads in deal order):
+#   seat 0 = Countess + [King, Handmaid, Guard]    seat 1 = Prince  + [Countess, Guard, Handmaid]
+#   seat 2 = Prince  + [Countess, Handmaid, Guard] seat 3 = Guard   + [Countess, King, Handmaid]
+# The multiset is 4 Countess / 4 Guard / 4 Handmaid / 2 Prince / 2 King = 16 cards; 4 Countesses is
+# FICTION (the real deck holds 1), exactly like TEST D's 4 Handmaids.
+#
+# Round derivation, all four seats on level 1 (`valid_moves[0]`: the lowest family index with a legal
+# play, the ACTIVE card when the pair is not forced, then the first legal target in `_players` order,
+# and for a Guard the first declared type, Priest). THE TURN'S FAMILY DRAW RUNS BEFORE THE PLAY AND
+# ITS EFFECT, which is what makes the derivation non-obvious: a King swap moves the card the acting
+# seat KEPT (not the one he played), and a Prince hit spends the VICTIM's next family card.
+#   T1  s0 plays the ACTIVE Countess - pair (Countess, fam0 King) is FORCED, he keeps the King
+#   T2  s1 plays the DRAWN Countess - pair (Prince, fam0 Countess) is FORCED, he keeps the Prince:
+#       the played card has NO node at decision time (`Move._played_card == null`)
+#   T3  s2 the same forced-drawn pair as s1
+#   T4  s3 plays the ACTIVE Guard - a Guard + Countess pair is FREE (`Player.is_man` is Prince + King
+#       only) - and probes s0 declaring Priest, a miss (s0 holds the King); he keeps the Countess
+#   T5  s0 plays the ACTIVE King and swaps with s1: the swap moves the Handmaid s0 drew ON THIS TURN
+#       and kept, so s0 ends the turn with the Prince and s1 with the Handmaid
+#   T6  s1 plays the ACTIVE Handmaid (protected)
+#   T7  s2 plays the ACTIVE Prince and hits s0 (the first active unprotected seat): s0's Handmaid is
+#       discarded and s0 redraws from his family - his LAST family card, which is what ends the round
+#   T8  s3 plays the ACTIVE Countess - pair (Countess, fam1 King) is FORCED again
+#   T9  s0 is the seat to act with an EMPTY family -> round over, winner seat 3
+#   => 8 plays, 9 turns, 4 forced pairs (2 play the ACTIVE Countess, 2 the DRAWN one), 0
+#      eliminations, 0 main-pile draws, 8 family draws of the 12 cards the round dealt.
+# Round 2 opens with the round-1 winner as the first seat (`Main.round_over()` picks the starter), so
+# seat 3 plays first and the round takes ONE PLAY MORE: 9 plays, 10 turns, the same 4 forced pairs.
+#   => 17 plays, 19 turns, 8 forced pairs (4 ACTIVE + 4 DRAWN), 0 eliminations, 0 pile draws, 8
+#      first-hand deals, round-end actor 0 in BOTH rounds.
+const NOBLE_4P_COUNTESS: Array[Deck.CardType] = [
+	Deck.CardType.Countess, Deck.CardType.Prince,  Deck.CardType.Prince,  Deck.CardType.Guard,
+	Deck.CardType.King,     Deck.CardType.Countess, Deck.CardType.Countess, Deck.CardType.Countess,
+	Deck.CardType.Handmaid, Deck.CardType.Guard,   Deck.CardType.Handmaid, Deck.CardType.King,
+	Deck.CardType.Guard,    Deck.CardType.Handmaid, Deck.CardType.Guard,   Deck.CardType.Handmaid,
+]
+const NOBLE_4P_COUNTESS_LEFT: Array[int] = [4, 0, 0, 4, 2, 2, 4, 0]
+const R1_FIXTURE_ROUNDS := 2
+const R1_PLAYS := 17
+const R1_TURNS := 19
+const R1_FORCED_PAIRS := 8
+const R1_FORCED_ACTIVE := 4
+const R1_FORCED_DRAWN := 4
+const R1_ELIMINATIONS := 0
+const R1_ACTOR := 0
+
+# TEST R's checks go through THIS wrapper, not `check()`, for the suite's own safety: a fixture that
+# raises mid-frame skips every later check of its section and the suite STILL exits 0, so a section has
+# to be able to prove how many checks it ran. The wrapper counts them and the END line prints the count.
+var _r_checks: int = 0
+
+
+func r_check(ok: bool, desc: String) -> void:
+	_r_checks += 1
+	check(ok, desc)
+
+
+func _test_joint_legality_and_determinism() -> void:
+	print("\n########## TEST R: joint move legality + level 1 determinism, real games")
+	print("           (step 31, §D.31) ##########")
+	var fixture := await _r_game(4, NOBLE_4P_COUNTESS, NOBLE_4P_COUNTESS_LEFT,
+		Player.AI_Level.Level_1, SEED, R1_FIXTURE_ROUNDS)
+	var log: Array[String] = fixture["log"]
+	var rounds: int = fixture["rounds"]
+	var rail: int = fixture["rail"]
+	var enum_decisions: int = fixture["enum_decisions"]
+	var enum_moves: int = fixture["enum_moves"]
+	var enum_forced: int = fixture["enum_forced"]
+	var enum_active: int = fixture["enum_active"]
+	var enum_drawn: int = fixture["enum_drawn"]
+	var elims: int = fixture["elim"]
+	var piles: int = fixture["pile"]
+	var fh: int = fixture["fh"]
+	var turns: int = fixture["turns"]
+	var draws_checked: int = fixture["draws_checked"]
+	var rail_fails: Array = fixture["rail_fails"]
+	var enum_fails: Array = fixture["enum_fails"]
+	var mismatches: Array = fixture["mismatches"]
+	var fams: Array = fixture["fams"]
+	r_check(rounds == R1_FIXTURE_ROUNDS, "R1: the scripted Countess-forcing supply ran "
+		+ str(rounds) + " whole rounds (round-end actors " + str(fixture["actors"])
+		+ ", seat " + str(R1_ACTOR) + " opens each round to an EMPTY family - the fixed family-out end)")
+	r_check(log.size() == R1_PLAYS, "R1: " + str(log.size()) + " COMMITTED joint moves in the play log, "
+		+ str(R1_PLAYS) + " = the 8 plays of round 1 + the 9 of round 2 (round 2 opens with the round-1"
+		+ " winner, so seat 3 plays first and the round takes ONE PLAY MORE) - the log is recorded at the"
+		+ " SAME seam as the legality rail, which is what makes it the object the determinism gate compares")
+	print("  R1 play log:")
+	for l in log:
+		print("    " + str(l))
+	r_check(rail == log.size(), "R1: the rail checked EVERY committed move ("
+		+ str(rail) + " of " + str(log.size()) + "), and every one of them is a joint move")
+	r_check(rail_fails.is_empty(), "R1: the committed triple of EVERY play is legal, "
+		+ "stated from the rules (draw slot = the named family slot of a 1-card seat's family, played X "
+		+ "is one of the pair, X + kept are the pair, the target rule per card type, the Countess pair "
+		+ "plays the Countess): " + str(rail_fails.size()) + " violations")
+	r_check(enum_decisions == log.size(), "R1: the ENUMERATED list was checked at every "
+		+ "one of the " + str(enum_decisions) + " decision points of the variant (hand 1 card)")
+	r_check(enum_moves > log.size(), "R1: " + str(enum_moves)
+		+ " enumerated moves checked, i.e. more than the " + str(log.size()) + " played - the"
+		+ " enumeration is WIDER than what the seats played, so the legality check covers the moves"
+		+ " the AI did NOT play, which is the todo's `every enumerated move`")
+	r_check(enum_fails.is_empty(), "R1: every enumerated move plays a card the seat"
+		+ " can legally play, and every family index whose pair is Countess + man enumerates ONLY the"
+		+ " forced play: " + str(enum_fails.size()) + " violations")
+	r_check(enum_forced == R1_FORCED_PAIRS, "R1: the rail FOUND " + str(enum_forced)
+		+ " Countess + man pairs (" + str(R1_FORCED_PAIRS) + " = 4 per round), so `forced when required`"
+		+ " is exercised on a real board and not merely asserted")
+	r_check(enum_active == R1_FORCED_ACTIVE and enum_drawn == R1_FORCED_DRAWN,
+		"R1: the forcing is measured in BOTH directions - " + str(enum_active)
+		+ " pairs force the ACTIVE card (the Countess sits in the hand) and " + str(enum_drawn)
+		+ " force the DRAWN card (the Countess is the family card, the move plays a card with NO node yet)")
+	r_check(elims == R1_ELIMINATIONS, "R1: " + str(elims) + " eliminations - the Prince hit of the round"
+		+ " found its victim WITH a family card left, so he redrew and stayed in the round; the rail"
+		+ " checked that decision too (a Prince hit is a draw the seat did not choose)")
+	r_check(piles == 0, "R1: " + str(piles) + " main-pile draws - the round ended"
+		+ " on the family, the pile was never touched")
+	r_check(fh == 4 * R1_FIXTURE_ROUNDS, "R1: " + str(fh) + " first-hand deals"
+		+ " = 4 seats x " + str(R1_FIXTURE_ROUNDS) + " rounds, 1 per seat per round")
+	var actor_fam: int = fams[R1_ACTOR]
+	r_check(actor_fam == 0, "R1: the seat that OPENED the next round (seat " + str(R1_ACTOR)
+		+ ") starts it with an EMPTY family (" + str(fams) + " family cards per seat at the round end)"
+		+ " - the fixed round end is `the seat to act has no family card`, and seat 0 is exactly that seat:"
+		+ " his 3 family cards went to 2 turn-start draws + THE PRINCE REDRAW of T7, so his next turn start"
+		+ " is a 4th draw of a 3-card family. The round-end families also show the mid-effect draw in the"
+		+ " arithmetic: 8 plays = 8 family draws of the 12 dealt, the 4 left are one per surviving seat")
+	r_check(turns == R1_TURNS, "R1: " + str(turns) + " turns = 9 (round 1: 8 plays + its family-out end)"
+		+ " + 10 (round 2: 9 plays + its family-out end), read out of the harness' CUMULATIVE per-seat"
+		+ " turn counts at the last round end")
+	r_check(draws_checked == R1_PLAYS and mismatches.is_empty(),
+		"R1: the " + str(draws_checked) + " plays that named a family draw drew EXACTLY that"
+		+ " slot, so the legality checked on the enumerated list is the legality of the moves the seats"
+		+ " really played: " + str(mismatches.size()) + " mismatches")
+
+	# ── R2: determinism. Level 1 has NO random branch at all (select_move returns valid_moves[0],
+	# the AI never evaluates, so no `randi()` is spent), so under a fixed seed the whole game -
+	# deal, family order, every (draw, play, target) - is pinned. The gate compares PLAY LOGS: one
+	# line per committed triple, in commit order, recorded by the harness at the decision seam.
+	var scripted_a := await _r_game(4, NOBLE_4P_COUNTESS, NOBLE_4P_COUNTESS_LEFT,
+		Player.AI_Level.Level_1, SEED, 3)
+	var scripted_b := await _r_game(4, NOBLE_4P_COUNTESS, NOBLE_4P_COUNTESS_LEFT,
+		Player.AI_Level.Level_1, SEED, 3)
+	var la: Array[String] = scripted_a["log"]
+	var lb: Array[String] = scripted_b["log"]
+	r_check(la.size() >= 12 and la == lb, "R2 scripted: the same deal, the same seed, level 1 -> "
+		+ str(la.size()) + " plays reproduced LINE FOR LINE (" + str(lb.size()) + " lines in the"
+		+ " second run), every rail silent in both runs")
+	var level4 := await _r_game(4, NOBLE_4P_COUNTESS, NOBLE_4P_COUNTESS_LEFT,
+		Player.AI_Level.Level_4, SEED, 3)
+	var l4: Array[String] = level4["log"]
+	r_check(l4 != la and l4.size() >= 12, "R2 scripted: THE SAME deal and the SAME seed on level 4 give a"
+		+ " DIFFERENT log (" + str(l4.size()) + " plays) - the log records the DECISIONS, so the"
+		+ " comparison is not a comparison of two decks; and it proves the rail is silent on a game"
+		+ " whose plays are scored")
+	var real_a := await _r_game(4, [], [], Player.AI_Level.Level_1, SEED, 3)
+	var real_b := await _r_game(4, [], [], Player.AI_Level.Level_1, SEED, 3)
+	var ra: Array[String] = real_a["log"]
+	var rb: Array[String] = real_b["log"]
+	r_check(ra.size() >= 12 and ra == rb, "R2 REAL deck: " + str(ra.size()) + " plays of "
+		+ str(real_a["rounds"]) + " whole 4p games dealt by the PRODUCTION shuffle under seed "
+		+ str(SEED) + " replayed byte-identically (the shuffle is seeded, so level 1 reproduces the"
+		+ " whole game, not just the plays)")
+	var real_other_seed := await _r_game(4, [], [], Player.AI_Level.Level_1, SEED + 1, 3)
+	var rc: Array[String] = real_other_seed["log"]
+	r_check(rc != ra, "R2 REAL deck: seed " + str(SEED + 1) + " deals a DIFFERENT game - the equality above"
+		+ " is a property of the seed, not two runs of one fixed supply")
+	var real_level4 := await _r_game(4, [], [], Player.AI_Level.Level_4, SEED, 3)
+	var rd: Array[String] = real_level4["log"]
+	r_check(rd != ra and rd.size() >= 12, "R2 REAL deck: the SAME seed on level 4 gives a DIFFERENT log ("
+		+ str(rd.size()) + " plays, " + str(real_level4["rounds"]) + " rounds) - the seed pins the DEAL,"
+		+ " level 1 pins the DECISIONS, and the two are separable")
+	var rails_total := 0
+	var fails_total: Array = []
+	for run in [scripted_a, scripted_b, level4, real_a, real_b, real_other_seed, real_level4]:
+		var run_rail: int = run["rail"]
+		var run_enum: int = run["enum_moves"]
+		rails_total += run_rail + run_enum
+		fails_total.append_array(run["rail_fails"])
+		fails_total.append_array(run["enum_fails"])
+	r_check(fails_total.is_empty(), "R2: 0 legality violations over " + str(rails_total) + " rail checks in "
+		+ str(7) + " whole games (2 scripted, 5 REAL-deck) - the determinism gate compares games that are"
+		+ " legal move by move, so `determinism` is measured on a game that satisfies the rules and not on"
+		+ " a game that was already broken")
+	# The section's OWN completion marker, printed LAST. The suite loses the last kilobytes of stdout to
+	# block buffering, so a missing END line means the section ABORTED - and an abort is the dangerous
+	# failure mode here: a script error inside a fixture skips the rest of the frame, prints no check, and
+	# leaves `_failed` at 0, so the suite exits 0 with the section's evidence missing (measured: the run
+	# that typed `int()` on an Array element exited 0 having run 0 of this section's checks).
+	print("  END R: " + str(_r_checks) + " checks run, " + str(_failed) + " failure(s) so far")
+
+
+# The deck's per-type counters, read the way the harness reads them: `Deck._left` is a plain var and
+# neither the production Deck nor the scripted FakeDeck exposes a getter.
+func _r_left(main) -> Array:
+	var left: Array = []
+	for n in main._deck._left.size():
+		left.append(main._deck._left[n])
+	return left
+
+
+# The same fixture recipe as `_scripted_main()`, with the level the fixture asks for and the option
+# of a REAL deck (`scripted` empty leaves the production Deck script in place).
+func _r_build(count: int, scripted: Array[Deck.CardType], scripted_left: Array[int],
+		level: Player.AI_Level):
+	var main = MainScene.instantiate()
+	var card_scene: PackedScene = main.card_scene  # set_script resets exported vars
+	main.set_script(load(CountingMainScript))
+	main.card_scene = card_scene
+	var deck = main.get_node("Table/Deck")
+	if not scripted.is_empty():
+		deck.set_script(FakeDeckScript)
+		deck.scripted = scripted
+		deck.scripted_left = scripted_left
+	add_child(main)
+	main.noble_family = true
+	for i in 4:
+		main._players[i].ai_level = level if i < count else Player.AI_Level.Disabled
+	return main
+
+
+# Stop the game and free it. The recipe is the smoke suite's own `_stop_game()`
+# (`tests/noble_family_smoke.gd:442`): `Main.interrupted` is the ONLY stop switch the production code
+# exposes - every step of the turn chain tests it and returns - so it is set first, the animation
+# layer is drained (a Main freed mid-animation frees nodes an await still references), and only then
+# is the Main taken out of the tree and freed. A determinism gate builds SEVERAL whole games in one
+# frame, so a game left running would churn rounds while a later fixture plays: measured, 7 alive
+# mains starved TEST J's per-frame watcher to 16 of its 19 plays and shifted the RNG stream the next
+# fixture reads. The fixture asks the game to stop on its own (`CountingMain.stop_after_rounds`), so
+# by the time this runs the Main is idle - no suspended coroutine, no churning round.
+func _r_stop(main) -> void:
+	main.interrupted = true
+	for _i in 600:
+		await get_tree().process_frame
+		if main._animation_layer.get_child_count() == 0:
+			break
+	remove_child(main)
+	main.queue_free()
+	await get_tree().process_frame
+
+
+func _r_game(count: int, scripted: Array[Deck.CardType], scripted_left: Array[int],
+		level: Player.AI_Level, seed_value: int, rounds: int) -> Dictionary:
+	var main = _r_build(count, scripted, scripted_left, level)
+	main.stop_after_rounds = rounds
+	await main.init_players(seed_value)
+	var fam: int = Deck.NOBLE_FAMILY_SIZE[count]
+	await await_until(func() -> bool:
+		var ready := true
+		for p in main._players:
+			if p.is_active():
+				ready = ready and p.hand.get_child_count() == 1 and p.family_size() == fam
+		return ready, 20000)
+	# the gate at the round-over press is what ends the game, so poll on IT and not on the count:
+	# a game that hits a GAME over at the last round stops through `_on_game_over_pressed()`
+	await await_until(func() -> bool: return main.stopped, 60000)
+	var turns: int = 0
+	# `round_end_turns` is ONE ENTRY PER ROUND of PER-SEAT CUMULATIVE `new_turn()` counts
+	# (`CountingMain._turn_counts` is cumulative, TEST C reads it as `round_end_turns[0][2] == 4`), so
+	# the game's TOTAL turn count is the sum of the LAST entry - summing every entry would count the
+	# early rounds twice
+	var end_turns: Array = main.round_end_turns
+	if end_turns.size() > 0:
+		var last: Array = end_turns[end_turns.size() - 1]
+		for i in last.size():
+			var t: int = last[i]
+			turns += t
+	var fams: Array[int] = []
+	for p in main._players:
+		fams.append(p.family_size())
+	var out := {
+		"log": main.move_log.duplicate(),
+		"rounds": main.round_end_actor.size(),
+		"actors": main.round_end_actor.duplicate(),
+		"turns": turns,
+		"elim": main.eliminations,
+		"pile": main.pile_draws,
+		"fh": main.first_hand_deals,
+		"rail": main.rail_checks,
+		"rail_fails": main.rail_failures.duplicate(),
+		"enum_decisions": main.enum_decisions,
+		"enum_moves": main.enum_moves_checked,
+		"enum_forced": main.enum_forced_pairs,
+		"enum_active": main.enum_forced_active,
+		"enum_drawn": main.enum_forced_drawn,
+		"enum_fails": main.enum_failures.duplicate(),
+		"draws_checked": main.draws_checked,
+		"mismatches": main.draw_mismatches.duplicate(),
+		"left": _r_left(main),
+		"fams": fams,
+	}
+	await _r_stop(main)
+	return out

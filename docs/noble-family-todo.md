@@ -409,6 +409,34 @@ Decisions come from `GRILL-ME.md`; they are not re-litigated here.
   L1 determinism under a fixed seed. Document in `tests/README.md`.
 - **Check:** `godot --headless --path . tests/noble_family_rules.tscn; echo $?` → `0`.
 - **Gate:** the resolved rules are pinned by assertions, not by manual play.
+- **Implemented (2026-08-20, TEST R in `tests/noble_family_rules.gd`, 21 checks):** the six
+  scripted cases the step lists were ALREADY in the suite (A/C = deal table + family-out round
+  end, J = the human modal rails, D = the Prince family/widow/elimination chain, E = the
+  elimination reveal, I = a human's Countess-forced play), so what the step was missing is the
+  pair of rails the two bullets name. `CountingMain.joint_legality(move, seat)` states the whole
+  joint rule over the LIVE board (~20 numbered rules, each with its own message: the drawn slot
+  exists in a 1-card seat's family, played X is one of the pair, X + kept BE the pair, the Countess
+  pair plays the Countess, the per-type target rules, the protection rule stated from the seats and
+  NOT read off `Main._other_protected`, and the node shape - a drawn play has no hand node, an
+  active play references it); `check_enumeration()` runs it on the FULL `find_valid_moves()` list at
+  the seam where production enumerates it, and the committed triple is checked again at
+  `_on_move_chosen` before the chain animates the draw. R1 (4p, 4 Countesses - twice the real
+  supply - every family carrying a man, all seats level 1, whole rounds): **17 plays, 19 turns, 8
+  Countess+man pairs (4 forcing the ACTIVE Countess, 4 the DRAWN one), 465 enumerated moves
+  checked, 0 eliminations, 0 main-pile draws, 0 violations**, with the derivation written out in the
+  section header and reproduced by the printed play log. R2: **8 whole games, 4737 rail checks, 0
+  violations**; same seed + level 1 twice → IDENTICAL play logs (scripted 25 lines, REAL-deck 23 -
+  the production shuffle is seeded, so the deal and family order are inside the equality), the same
+  seed on level 4 → a DIFFERENT log, seed+1 → a different game. Clean tree **1433 PASS, 0 FAIL, 0
+  script error, exit 0 in 73 s** (1412 / 66 s at step 29); the classic gate carries the same section
+  nested and went 101 s → 139 s.
+- **Two suite facts this step measured** (they constrain every later fixture): a game's round ends
+  spend global RNG (`Main.round_over()` picks the next starter with `randi()`), so a section that
+  plays whole games MOVES the RNG stream the scripted fixtures read - R placed in front of TEST J
+  moved J1 from 19 plays to 16, so R runs immediately after J; and a fixture that raises mid-frame
+  prints NO checks and the suite still exits 0 (measured: 0 of R's 21 checks ran, 1412 PASS, exit 0),
+  which is why R counts its checks through `r_check()` and ends with `END R: 21 checks run, 0
+  failure(s)`.
 
 ### 32. Classic regression sweep
 

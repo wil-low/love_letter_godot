@@ -1543,6 +1543,64 @@ would need its own tag semantics — the todo names one variant, and Q1 pins the
 (4 tagged, 17 untagged) so that change cannot happen quietly. Step 30 (the Noble Family smoke suite) is
 the next section.
 
+### TEST R — the joint triple of every play, checked against the rules on the live board, and the level 1
+replay that proves the variant is reproducible (step 31)
+
+Step 31 (todo §D.31) asks for two things at once: "joint move legality (every enumerated move plays a
+card the seat can legally play, Countess forced when required); L1 determinism under a fixed seed". The
+step is a **rail**, not a board: TEST B already pins the enumeration's SHAPE on a hand-built state, so
+what was missing is a statement of the rules that runs on EVERY play of EVERY game. That statement is
+`CountingMain.joint_legality(move, seat)` — ~20 rules over the live board, each with its own message
+(the draw slot must exist in a **1-card** seat's family, the played card must be one of the pair, played
++ kept must BE the pair, the Countess pair plays the Countess, the King never a protected seat, the
+Princess not the actor, the Guard's target and declared type, the Handmaid never an opponent, a
+self-target alone when every other seat is protected, the drawn play having NO hand node and the active
+play referencing it). `CountingMain.check_enumeration()` runs it on the **whole list** at the seam where
+production enumerates it (`_begin_play_selection`), which is what the todo's "every enumerated move"
+means: **465 enumerated moves** checked in R1's 2 rounds, against **17** plays, so the moves the seats
+never played are checked too. The committed triple is checked again at `_on_move_chosen`, BEFORE the
+chain animates the draw, and appended to `move_log` — the log and the rail read the same board, the
+family array and the 1-card hand the seat decided from, and they see the effect's rewrites afterwards.
+R1 measures the forcing in **both** directions: **4 pairs force the ACTIVE Countess** (it sits in the
+hand) and **4 force the DRAWN one**, which is the only move in the game that plays a card with **no node
+yet** (`Move._played_card == null`). The supply is fictional by design — **4 Countesses**, twice the
+real supply, and every 3-card family carries a man, so a forced pair shows up **4 times per round**
+under a level 1 policy that is fully derivable (`valid_moves[0]`: lowest family index with a legal play,
+the ACTIVE card when the pair is not forced, first legal target in `_players` order). Measured round 1:
+**8 plays, 9 turns**; round 2 opens with the round-1 winner, so seat 3 plays first and the round takes
+**9 plays, 10 turns** — **17 plays, 19 turns, 8 forced pairs, 0 eliminations, 0 main-pile draws**, with
+the round-end families `[0, 1, 1, 0]` (the 8 plays of 12 dealt family cards leave one per surviving
+seat, and seat 0's 3rd card went to the **Prince redraw**, which is why HIS next turn start ends the
+round). R2 then compares **7 whole games**: same seed + level 1 twice → **identical 25-line / 23-line
+logs** (scripted and REAL-deck — the real shuffle is seeded too, so the equality covers the deal and the
+family order, not just the plays); the SAME seed on level 4 → a **different** log (23 plays vs 25, and
+vs 23 scored ones); seed+1 → a **different** game. All of it legal: **4737 rail checks, 0 violations**.
+R is **21 checks**, and the clean tree goes **1412 → 1433 PASS, 0 FAIL, 0 script error, exit 0 in 73 s**
+(66 s at step 29; the delta is animation time — R plays **8 whole games**, 1 scripted, 6 on the REAL
+shuffle and 1 on level 4, each stopped the moment its last round is scored). The nested NOBLE UI line of
+the classic gate carries the same section, so `tests/smoke_games.tscn` went **101 s → 139 s** for the
+same reason (measured on the same tree).
+
+Two measurements of this step are about the suite itself, and both are the reason its code looks odd:
+
+- **Where it runs is part of the fixture.** `Main.round_over()` picks the next round's first player with
+  `randi() % len(round_winners)`, so **a game's round ends spend global RNG**, and the scripted fixtures
+  whose play counts are pinned are sensitive to how much RNG the sections before them consumed. R run in
+  FRONT of TEST J moved J1 from **19 plays to 16** (measured, twice) — a FAIL of a fixture that has never
+  touched the code it tests. R therefore runs **immediately after** `_test_modal_rails()`: J keeps its
+  stream position, and the sections after R were measured to tolerate the shift.
+- **A section must be able to prove it ran.** The first R run exited **0 with 1412 PASS** — its 21 checks
+  were **never executed**, because a script error inside a fixture (reading a `get_left()` that the deck
+  does not have, summing the per-round turn arrays as ints) skips the rest of the frame, prints no check
+  and leaves `_failed` at 0. So R's checks go through `r_check()`, which counts them, and the section ends
+  with **`END R: 21 checks run, 0 failure(s)`** — the line whose absence means the section aborted. The
+  games are STOPPED for the same reason they are counted: the Main has no stop API, only the `interrupted`
+  flag the turn chain checks at every step, so `_r_stop()` sets it, drains `_animation_layer` and frees
+  the Main (the smoke suite's recipe, `noble_family_smoke.gd:442`), and `CountingMain` gained
+  `stop_after_rounds` so a fixture's game ends AT the round-over gate instead of dealing round 4, 5, 6.
+  Seven mains left churning also starve the per-frame fixtures — the same failed run measured TEST J at
+  **16 plays of its 19**.
+
 ## tests/noble_family_smoke.tscn — Noble Family variant, whole games on the AI (steps 7, 11, 14, 30)
 
 Variant games (`main.noble_family = true`) with every seat on the AI (levels 4/4/3/2), animations

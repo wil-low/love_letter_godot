@@ -660,6 +660,9 @@ func new_turn():
 func _begin_play_selection(p: Player) -> void:
 	audit_left("pre-decision, seat " + str(p.idx) + " (hand " + str(p.hand.get_child_count())
 		+ " cards, family " + str(p.family_size()) + ")")
+	if noble_family and !p.is_human() and p.hand.get_child_count() == 1:
+		# step 31: the ENUMERATED list is checked in the very state production enumerates it from
+		check_enumeration(p)
 	super(p)
 
 
@@ -688,6 +691,13 @@ func _on_move_chosen(move: Move) -> void:
 	# the moment the seat COMMITS its (draw, play, target) triple, before the chain draws anything
 	audit_left("decision, seat " + str(seat) + " plays " + Deck.card_names[int(move.played_type())]
 		+ " and draws family #" + str(named))
+	# step 31: the play log is the log a determinism check compares, so it is recorded at the SAME
+	# seam the legality rail uses - the committed triple, before the chain animates anything.
+	move_log.append("s" + str(seat) + " lvl" + str(int(_players[seat].ai_level)) + " " + str(move))
+	if named >= 0:
+		rail_checks += 1
+		for msg in joint_legality(move, seat):
+			rail_failures.append("committed move s" + str(seat) + " " + str(move) + ": " + msg)
 	await super(move)
 	if named < 0:  # a classic Move (the eliminated seat's forced resign play) draws no family card
 		return
@@ -706,3 +716,176 @@ func _on_move_chosen(move: Move) -> void:
 # Reset it through a method call instead.
 func clear_draw_mismatches() -> void:
 	draw_mismatches.clear()
+
+
+# ─── Step 31 (todo §D.31): joint move legality in REAL games, and the play log ───────────────
+# The todo's step 31 line is "joint move legality (every enumerated move plays a card the seat can
+# legally play, Countess forced when required); L1 determinism under a fixed seed". Two rails:
+#
+# 1. `check_enumeration()` runs on the ENUMERATED LIST, at the seam production decides in
+#    (`_begin_play_selection`, i.e. `find_valid_moves()` -> `ai_move()` on the live board). A list
+#    is a joint move list only in the variant with a 1-card hand, so a classic enumeration and a
+#    human's post-modal 2-card enumeration are out of its scope (TEST B and TEST H pin those).
+#    Every emitted move is checked, and every family index whose pair is a Countess + man pair is
+#    counted with the flavour of the force (play the ACTIVE Countess / play the DRAWN Countess) -
+#    that is what makes "forced when required" a measured number and not a code reading.
+# 2. `joint_legality()` runs on the COMMITTED move, at `_on_move_chosen` BEFORE the chain animates
+#    the draw, so the family array and the 1-card hand it reads are the state the move was chosen
+#    from. `move_log` records the same triple, in commit order: the determinism gate compares logs.
+#
+# THE RULE IS STATED HERE, NOT READ OFF `Main`: a rail that reads `_other_protected` agrees with a
+# buggy enumerator by construction, so the protection rule is restated from the rules - naming a
+# protected opponent is LEGAL only when every other active seat is protected (the classic
+# everyone-hid-behind-a-Handmaid case).
+var rail_checks: int = 0
+var rail_failures: Array[String] = []
+var enum_decisions: int = 0
+var enum_moves_checked: int = 0
+var enum_forced_pairs: int = 0
+var enum_forced_active: int = 0   # the pair forces the ACTIVE card (the Countess sits in hand)
+var enum_forced_drawn: int = 0     # the pair forces the DRAWN card (the Countess is the family card)
+var enum_failures: Array[String] = []
+var move_log: Array[String] = []  # one line per COMMITTED move, in commit order
+
+
+# Every property one joint move must have, on the live board, in the state its seat decided from.
+func joint_legality(m: Move, seat: int) -> Array[String]:
+	var p: Player = _players[seat]
+	var v: Array[String] = []
+	if not m.is_noble():
+		v.append("names no family draw (_drawn_family_idx == -1), so it is not a joint move")
+	var fam_idx: int = m._drawn_family_idx
+	var drawn_t: Deck.CardType = m._drawn_type
+	if fam_idx < 0 or fam_idx >= p.family_size():
+		v.append("names family index " + str(fam_idx) + " of a family of " + str(p.family_size()))
+	elif p.family[fam_idx] != drawn_t:
+		v.append("names family[" + str(fam_idx) + "] as " + Deck.card_names[int(drawn_t)]
+			+ ", that slot is " + Deck.card_names[int(p.family[fam_idx])])
+	var hand_n: int = p.hand.get_child_count()
+	if hand_n != 1:
+		v.append("decides with " + str(hand_n) + " cards in hand, the variant seat holds the 1 active card")
+	var active_t: Deck.CardType = Deck.CardType.Unknown
+	if hand_n > 0:
+		active_t = p.hand.get_child(0).type
+	var idx: int = m._played_card_idx
+	var played_t: Deck.CardType = m.played_type()
+	if idx != 0 and idx != 1:
+		v.append("_played_card_idx == " + str(idx) + ", 0 = the active card / 1 = the drawn one")
+	if played_t != active_t and played_t != drawn_t:
+		v.append("plays " + Deck.card_names[int(played_t)] + ", which is neither the active card ("
+			+ Deck.card_names[int(active_t)] + ") nor the drawn one (" + Deck.card_names[int(drawn_t)] + ")")
+	var keep: Deck.CardType = drawn_t if idx == 0 else active_t
+	if m._leftover_type != keep:
+		v.append("keeps " + Deck.card_names[int(m._leftover_type)] + ", the pair leaves "
+			+ Deck.card_names[int(keep)])
+	var forced: int = p.countess_restricted_types(active_t, drawn_t)
+	if forced != -1 and forced != idx:
+		v.append("plays the man of a Countess + man pair (the Countess is forced, forced idx "
+			+ str(forced) + ", played idx " + str(idx) + ")")
+	if idx == 1 and m._played_card != null:
+		v.append("carries a hand node for a play of the DRAWN card, which has no node at decision time")
+	if idx == 0 and (m._played_card == null or m._played_card.get_parent() != p.hand):
+		v.append("plays the active card without naming this seat's hand node")
+	var tgt: int = m._target_player
+	var all_others_protected: bool = true
+	for pl in _players:
+		if pl.is_active() and !pl.protected and pl.idx != seat:
+			all_others_protected = false
+	match played_t:
+		Deck.CardType.Guard:
+			if tgt == seat or tgt < 0 or tgt >= _players.size():
+				v.append("a Guard probes seat " + str(tgt) + ", which is not an opponent")
+			elif tgt >= 0 and tgt < _players.size() and _players[tgt].protected \
+						and not all_others_protected:
+					v.append("a Guard probes protected seat " + str(tgt)
+						+ " while an unprotected opponent is available")
+			elif m._target_type < Deck.CardType.Priest or m._target_type > Deck.CardType.Princess:
+				v.append("a Guard names " + Deck.card_names[int(m._target_type)]
+					+ ", the guessable types are Priest..Princess")
+		Deck.CardType.Priest, Deck.CardType.Baron, Deck.CardType.King:
+			if tgt == seat or tgt < 0 or tgt >= _players.size():
+				v.append(Deck.card_names[int(played_t)] + " targets seat " + str(tgt)
+					+ ", which is not an opponent")
+			elif tgt >= 0 and tgt < _players.size() and _players[tgt].protected \
+						and not all_others_protected:
+					v.append(Deck.card_names[int(played_t)] + " targets protected seat " + str(tgt)
+						+ " while an unprotected opponent is available")
+		Deck.CardType.Prince:
+			if tgt < 0 or tgt >= _players.size():
+				v.append("a Prince targets seat " + str(tgt)
+					+ ", any active seat including self")
+			elif _players[tgt].protected:
+				v.append("a Prince targets protected seat " + str(tgt))
+		Deck.CardType.Handmaid, Deck.CardType.Countess, Deck.CardType.Princess:
+			if tgt != -1:
+				v.append(Deck.card_names[int(played_t)] + " targets seat " + str(tgt)
+					+ ", this card is played on self")
+	if tgt >= 0 and tgt < _players.size() and not _players[tgt].is_active():
+		v.append("targets seat " + str(tgt) + ", who is out of the round")
+	return v
+
+
+# The enumerated list of the seat that is about to decide, checked move by move. Production calls
+# `find_valid_moves()` itself inside `super(p)`; calling it here costs one extra list build and no
+# state change (it reads the board and allocates Moves), so the list checked is the list played.
+func check_enumeration(p: Player) -> void:
+	enum_decisions += 1
+	var moves: Array[Move] = find_valid_moves()
+	var active_t: Deck.CardType = p.hand.get_child(0).type
+	# family index -> {forced, plays, bad}, `plays` counts the moves the enumeration emits for that
+	# draw and `bad` the ones that play a card other than the forced one
+	var per_draw: Dictionary = {}
+	for m in moves:
+		enum_moves_checked += 1
+		for msg in joint_legality(m, p.idx):
+			enum_failures.append("enumerated move s" + str(p.idx) + " " + str(m) + ": " + msg)
+		var f: int = m._drawn_family_idx
+		if not per_draw.has(f):
+			per_draw[f] = {"forced": p.countess_restricted_types(active_t, m._drawn_type),
+				"plays": 0, "bad": 0}
+		per_draw[f]["plays"] = int(per_draw[f]["plays"]) + 1
+		if int(per_draw[f]["forced"]) != -1 and int(per_draw[f]["forced"]) != m._played_card_idx:
+			per_draw[f]["bad"] = int(per_draw[f]["bad"]) + 1
+	for f in per_draw.keys():
+		var forced: int = int(per_draw[f]["forced"])
+		if forced == -1:
+			continue
+		enum_forced_pairs += 1
+		if forced == 0:
+			enum_forced_active += 1
+		else:
+			enum_forced_drawn += 1
+		if int(per_draw[f]["bad"]) > 0:
+			enum_failures.append("family[" + str(f) + "] of seat " + str(p.idx) + " is a Countess + man"
+				+ " pair and " + str(int(per_draw[f]["bad"])) + " of its " + str(int(per_draw[f]["plays"]))
+				+ " enumerated moves play the man")
+
+
+# ─── Step 31: a fixture-side way to END a game ───────────────────────────────────────────────
+# A Noble Family game runs forever: `round_over()` auto-presses its own round-over label in an AI
+# game, `_on_round_over_pressed()` -> `_new_round()` -> the next deal, and the production stop is
+# `max_games` (a const, 1000 games). A determinism fixture builds several whole games in ONE frame,
+# so a game that is never stopped keeps churning rounds for the rest of the suite - and a round end
+# spends global RNG (`_cur_player = round_winners[randi() % len(...)]`), so churning fixtures move
+# the RNG stream of every later fixture. `Main` exposes no stop, so the harness gates the two
+# presses the game loop is made of: once the fixture has the rounds it asked for, the gate returns
+# WITHOUT starting the next round and the main goes idle with no suspended coroutine, which is the
+# state a fixture can safely `remove_child()` + `queue_free()` from.
+# `stop_after_rounds == 0` (the default, every fixture that does not ask) leaves both presses
+# exactly as they were.
+var stop_after_rounds: int = 0
+var stopped: bool = false
+
+
+func _on_round_over_pressed() -> void:
+	if stop_after_rounds > 0 and round_end_actor.size() >= stop_after_rounds:
+		stopped = true
+		return
+	await super()
+
+
+func _on_game_over_pressed() -> void:
+	if stop_after_rounds > 0 and round_end_actor.size() >= stop_after_rounds:
+		stopped = true
+		return
+	await super()
