@@ -1,0 +1,1579 @@
+CONVENTIONS / SHARED FACTS (referenced by every step below; not repeated per step)
+Gates — "GATES OK" = `godot --headless --path . --check-only --quit project.godot` exit 0 with 0 SCRIPT
+ERROR + tests/noble_family_rules.tscn 0 + tests/noble_family_smoke.tscn 0 + classic suites at BASELINE:
+smoke_games 300 rounds / 10 games / 137 eliminations; VARIANT smoke 4p|3p|2p x 40 @ seed 20260607:
+76|56|33 eliminations, 329|299|203 plays, 3|4|7 family-out ends. rules PASS growth: A 30 -> +B 48 ->
++C 71 -> +D 205 -> +E 336 -> +F 531.
+ENV: godot 4.7.2 (~/.local/bin/godot). Always `--path .` — the project path as a POSITIONAL arg fails
+("projects_untrusted=1"). User flags need `--` after the scene path, else Godot swallows them and the
+suite silently uses its defaults (seed 20260607, 4p, 40 rounds) so a run looks seed-insensitive.
+smoke_games takes 50-90 s -> nohup to a log + poll (timeout 30 fits only --check-only). A FAILing
+rules/smoke run needs >28 s (long frame-poll loops) -> background the sanity sabotages.
+repro_belief_truth is interactive (waits for a human tap) -> headless it runs forever; gate it with
+`-- --rounds=N`. Exit noise "ObjectDB instances leaked" + Android adb 5037 is pre-existing, ignore (its
+count varies per run, so same-seed logs are byte-identical modulo it). Never commit: progress.txt, .pi/,
+GRILL-ME.md.
+NUMBERING: progress.txt compresses docs/noble-family-todo.md (the authority) — our step 12 = todo §A.11
+(joint enumeration) + §A.12 (AI draw policies), our step 13 = §A.13. `git log` shows what shipped.
+HARNESS RULES (each cost real time; mirrored in tests/README.md):
+- At `Animator._speed = 0` never poll per frame: one frame can hold family-draw->play->effect->next turn,
+  even eliminate->round_over->label->_new_round->active=true. Hand-size polls missed plays, `Player.active`
+  polls missed eliminations, round-over-label polls merged round boundaries. COUNT EVENTS ON SIGNALS
+  (`move_chosen`/`card_played` via `.bind(seat)`; handler args arrive signal-then-bound) and override Main
+  methods in an `extends Main` subclass (counting_main.gd, installed with `set_script`).
+- `set_script` RESETS exported vars: save/restore `main.card_scene` or `card_scene.instantiate()` is null
+  in deal_card. preload()-ing main.tscn AND a script `extends Main` = cyclic dependency -> instantiate()
+  on null: `load()` the subclass at runtime. Coroutine overrides need `await super(...)` (set_inactive) or
+  plain `super()` where production never awaits (round_over).
+- `init_players()` does NOT await `_new_game()`/`_new_round()`: on return the deal is not done. Poll frames
+  (`for i in 600: ... await get_tree().process_frame`) until the needed state is true, then snapshot.
+- A harness root must declare `var print_memory` / `print_valid_moves` (main.gd reads
+  `get_parent().print_memory`; `main.print_memory = ...` is a hard SCRIPT ERROR).
+- Never reset typed array fields from a harness (`obj.typed_field = []` -> runtime SCRIPT ERROR, kills the
+  rest of the frame): use a method (`clear_draw_mismatches()`). `p.family = fam` with both sides
+  `Array[Deck.CardType]` SHARES the reference -> `clear_family()` emptied the caller's array; typed arrays
+  copy ONLY when assigned from an untyped Array.
+- `is Array[Deck.CardType]` works on Variants; a statically typed local cannot be tested (`is Array[int]`
+  parse error). `Array[int].sum()` does not exist -> sum in a loop.
+- Parse traps: `var x := a <= b` with Variant `a` (for-loop over a literal array) -> "cannot infer type"
+  (use `for count: int in [...]` + explicit `: bool`); multiline `"""` must open on the SAME line as `var`
+  and its content may not contain `"`; multiline concat outside parens must end the line with `+`.
+- Harness cards are built like deal_card: add to `_animation_layer` first, then `Player.add_card`
+  reparents — setting `Card.type` before the node is in the tree is a SCRIPT ERROR on `_sprite.frame`.
+- Live-seat snapshots use `Player.is_active()`, NOT `p.active`: a Disabled seat keeps `active == true`
+  (`_new_round()` sets it for all seats) and holds 0 cards -> using `active` fakes a 1-hand-card violation.
+- Lambdas in a SceneTree script must be called `f.call(...)`; prefer plain methods. A fixture's `Main`
+  keeps playing after its checks -> `main.queue_free()` + `await await_frames(2)` per fixture, else the
+  next fixture shares the Animator with a running game.
+- COMMIT test code BEFORE sabotage experiments: an `edit` that fails on ANY block applies NOTHING and
+  `git checkout --` discards uncommitted suite work (both hit step 11; TEST B + smoke wiring re-applied).
+- `Deck.card_names` are PADDED ("Priest  ") -> mutations guarded by `card_names[t] == "Priest"` are
+  silent no-ops (a sabotage measured 0 FAILs).
+
+## Step 1 — Mode flag on Main (§A.1) — DONE — edc7395
+- main/main.gd:16 `var noble_family: bool = false` beside `interrupted`; no behaviour change.
+- Side fix (PRE-EXISTING HEAD failure, not ours): @tool setters in help/card_help_page.gd ran while
+  @onready children were null (export props apply before _ready) -> guard each with
+  `and _card/_name/_description != null`. GATES OK.
+
+## Step 2 — Family storage on Player (§A.2) — DONE — 12924f7
+- player.gd: `var family: Array[Deck.CardType] = []` after `total_score`; `family_size()`,
+  `pop_family(family_idx)`, `clear_family()` after `clear_hand()`. No callers yet.
+- DEVIATION: param `family_idx`, not todo's `idx` (shadows exported player `idx`). Index 0 = next card to
+  draw, as-dealt order; pop_family asserts in-range then `pop_at(i)`. clear_family clears DATA only —
+  visual clearing lands in step 18 (`render_family()` + `$Family`; todo's "step 17" ref is off by one).
+- GATES OK.
+
+## Step 3 — Noble deal table in Deck (§A.3) — DONE — fff9e4b (deck/deck.gd)
+- `NOBLE_BURN [0,0,3,1,0]`, `NOBLE_FAMILY_SIZE [0,0,5,4,3]` (index = player count), `var first_hand:
+  Array[CardType]`, `prepare_noble(count)`, `_build_deck()`; deck construction (fill _cards/_widow_cards/
+  _left + shuffle) now shared with classic `prepare()` — classic behaviour verified identical.
+- Deal order: burn -> 1 first-hand per seat -> families round-robin (seat-major outer, family-column
+  inner), so as-dealt order is kept per seat, never sorted.
+- `_left` stays FULL (16) after prepare_noble: burn/first-hand/family cards leave the main pile, not
+  play. Asserts count 2..4 and burn + count*(1+family) <= 16.
+- DEVIATION: `-> Array[Array[Deck.CardType]]` does NOT compile (4.7 "Nested typed collections are not
+  supported") -> untyped outer Array whose elements are real `Array[CardType]` (typed local appended by
+  reference); `Player.family = families[i]` is legal.
+- Throwaway scene: 2p burn3/first2/fam5/main1, 3p 1/3/4/0, 4p 0/4/3/0; conservation 16, `_left` sum 16,
+  per-type multiset == card_count, widow sprite visible iff burn>0. GATES OK.
+
+## Step 4 — Deal-table repro test (§A.4) — DONE — 26ec931 (.gd/.uid/.tscn + tests/README.md)
+- tests/noble_family_rules.gd + .tscn (Node2D root, `check()` PASS/FAIL + `_failed`,
+  `get_tree().quit(1 if _failed>0 else 0)`) — TEST A: no Main scene, drives the real deck/deck.tscn
+  directly. 200 seeded `prepare_noble()` per count x 10 checks = 30 PASS: widow == burn AND
+  `_widow.visible == (burn>0)`; first_hand == count; count families of size fam; elements really typed;
+  main == 1/0/0 AND `_main.visible`; conservation 16; `_left` elementwise == `Deck.card_count`;
+  multiset(widow+first_hand+families+main) == card_count (catches dup/loss/Unknown). The 200x loop
+  doubles as the no-accumulation-across-rounds check (`_build_deck()` is clean).
+- DESIGN: suite is APPEND-friendly — header names the later cases (14 round end, 15 Prince, 16
+  reveal+discard, 31 joint-move legality + L1 determinism) so future steps add functions, not files.
+- Sanity: widow expectation patched to `burn + 1` -> 3 FAIL + exit 1 (reverted, not committed). GATES OK;
+  removed stray tmp_check.gd.
+
+## Step 5 — Noble round setup in Main (§A.5) — DONE — d278253 (main.gd)
+- `_new_round()`: `if noble_family:` -> `prepare_noble(_player_count)`, animated
+  `deal_card(p, false, _deck.first_hand[seat])` per active seat, `p.family = families[seat]` instantly,
+  `clear_family()` for inactive seats. Classic branch untouched.
+- KEY: family/first-hand are indexed by the **ordinal of the active seat**, NOT player idx — active seats
+  can be non-contiguous (levels picked per seat; `is_active()` = ai_level > Disabled and active) and the
+  deal table is sized by `_player_count`. Contiguous 0..count-1 (all tests so far) makes both readings
+  identical; this is the safe generalization of todo's `_players[i]`.
+- `deal_card(p, allow_widow=false, card_type=Unknown)`: an explicit type pops nothing, `src = _deck._main`,
+  `_left` untouched (first-hand cards leave the supply only when played); classic keeps
+  `_deck.pop(allow_widow)`.
+- Debug made PERMANENT (todo said temporary): family-sizes line in the `print_memory` block of
+  `new_turn()` -> `Families: 0=3 1=3 2=3 3=3`; the gate is now in every harness log.
+- Throwaway `tmp_noble_setup.tscn` (2p/3p/4p): families 5/4/3, 1 hand card, sum(_left) 16, first_hand ==
+  count, widow 3/1/0 + visible, main leftovers 1/0/0, inactive seats family-less. GOTCHA: the main-pile
+  leftover is already popped at that snapshot frame by the classic `new_turn()` `_main.visible` branch
+  (replaced in step 7) and the card is in flight in `_animation_layer` — count main pile + in-flight.
+- BLOCKER for step 7 (expected): `new_turn()` still uses `if _deck._main.visible:` -> 3p/4p hit
+  `round_over()` on the first turn, 2p draws the single leftover. GATES OK.
+
+## Step 6 — Family draw helper in Main (§A.6) — DONE — 8b64039 (main.gd)
+- `deal_from_family(p, family_idx)`: `_deal_audio_player.play()`, `p.pop_family(idx)`, instantiate
+  `card_scene` in `_animation_layer`, `type = popped`, `faceup = p.idx == 0`, start
+  `global_position = p.global_position`, `await Animator.move_card(c, p.drawn_card_position())` (dst
+  computed BEFORE add_card — child-count slot, as in deal_card), `p.add_card(c)` +
+  `c.position = p.hand.to_local(dst)`. NO pop, NO `_left` change, NO `update_piles()`.
+- Deck untouched by design: family cards count inside `_left` while in the family and leave the supply
+  only when played -> step 17's `sum(_left) == 16 - played` holds (comment says why). Source pos =
+  `p.global_position` per todo; to start the flight at the human stack, point it at the seat's `Family`
+  origin (one line, single call site).
+- Throwaway 21 checks (4p noble, seat0 Human + AI 4/3/2 parks at ROUND OVER because seat 0 is human =>
+  no auto-press; 3 family + 1 hand per seat): family 3->2 with as-dealt order kept (index 0 AND index 1
+  pops — middle `pop_at` verified), hand 1->2, type == popped, faceup true seat0 / false AI,
+  parent == p.hand, final pos == drawn_card_position, hand-local pos set, `_left` array identical,
+  `_main`/`_widow` visibility unchanged, `_deck._cards` size unchanged, card lands inside 84x48. GATES OK.
+
+## Step 7 — Turn-start branch: family draw or round over (§A.7) — DONE — 6fa6ff7
+- `new_turn()`: `if noble_family:` -> `p.family.is_empty()` => `round_over()` + return; else
+  `await deal_from_family(p, 0)` (placeholder, `# TODO(step 20)`) -> `_begin_play_selection(p)`. Classic
+  keeps `if _deck._main.visible: await deal_card(p)` then the SAME helper (play-selection body —
+  current_mark, human SELECT_CARD + countess dim, AI ai_move — factored into `_begin_play_selection`).
+- DEVIATION (needed to make the gate observable): step 15's Prince chain landed EARLY in
+  `resolve_effect()` — with an empty main pile `_deck.pop(true)` returns `{}` and a Prince play crashed on
+  `result["type"]`. Variant cascade now: target family non-empty -> `deal_from_family(tp, 0)`
+  (`# TODO(step 21)` human modal) -> elif widow non-empty -> `deal_card(tp, true)` -> else
+  `set_inactive(tp, false)`. NO early return after the elimination: resolve_effect must still discard the
+  played card, run the 1-card hand assert and pick the next seat. Step 15 = tests + human call site only.
+- New: tests/noble_family_smoke.gd/.tscn (variant games, seat levels 4/4/3/2, seats > count Disabled) +
+  tests/counting_main.gd (`extends Main` via `set_script`, records set_inactive / round_over + the seat to
+  act / deal_from_family per seat).
+- RULE INSIGHT (steps 14/17/31): family consumption is NOT plays — a Prince aimed at a seat eats one of
+  *his* family cards, so `plays[seat] <= family_draws[seat] <= family size`, and a seat can hit an empty
+  family with fewer plays than the family size. 40 rounds: avg plays/round 8.4 (4p, ceiling 12), 6.67
+  (3p), 3.9 (2p); family-out ends 4/40, 2/40, 5/40.
+- `_left` formula validated over 120 variant rounds: `sum(_left) == 16 - plays - prince_plays` on
+  NO-elimination rounds only (a Prince play discards the TARGET's hand card = 1 extra decrement;
+  elimination discards add more). TODO(step 17)'s `16 - played_total` misses Prince + revealed-family
+  discards — re-derive, do not copy it. GATES OK + deterministic variant smoke.
+
+## Step 8 — Move gains the draw (§A.8) — DONE — 4b14e1c (player/move.gd)
+- `_drawn_family_idx: int = -1` (-1 = classic / no draw choice), `_drawn_type`, `_leftover_type` (both
+  `Deck.CardType.Unknown`), `_drawn_card: Card = null`. `_init()` keeps the positional prefix
+  `played_card, played_card_idx, target_player, target_type` and appends the 4 new params LAST, all
+  defaulted -> every existing `Move.new(...)` call site (main.gd x5, 2 tests) untouched.
+- `_to_string()` null-safe via `played_type()` (`= _played_card.type` when the node exists, else
+  `_drawn_type`) — step 11 nulls `_played_card` when the DRAWN card is the played one
+  (`_played_card_idx`: 0 = active, 1 = drawn). Variant shape:
+  `Move score N: King (1), draw King (#3), keep Countess, tgt 2`. Pair semantics: played card +
+  `_leftover_type` = the card kept in hand after the play; `is_noble()` = `_drawn_family_idx != -1`.
+- Throwaway SceneTree script: classic string byte-identical to the old format; full positional order
+  works; `Move.new(null, 1, 2, Unknown, 3, King, Countess)` prints and scores via types. GATES OK
+  (belief_truth at `-- --rounds=60` and at the 500-round default, no FAIL).
+
+## Step 9 — eval_moves scores from types (§A.9) — DONE — 3263449 (player/player.gd)
+- `eval_moves()`: the `hand.get_child_count() == 2` assert moved INSIDE the loop behind
+  `m._drawn_family_idx == -1` (variant moves are scored before the draw; hand has 1 card);
+  `my_type = m._leftover_type` falling back to `hand.get_child(1 - m._played_card_idx).type` when Unknown;
+  `match m._played_card.type` -> `match m.played_type()` (old code would crash on step 11's null).
+- Guard count heuristic subtracts the pair cards (`played_t` + `my_type`) instead of `hand.get_child(0/1)`.
+  Classic: {played, leftover} == {hand[0], hand[1]} as a set, so classic scores are IDENTICAL — proved by
+  repro_score_multiplier's exact numbers 400 / 0 / 400 / 350.
+- Throwaway: 5 pairs scored twice (classic 2-card hand vs variant 1-card hand + null `_played_card`) —
+  Baron-keep-King vs believed Priest 400==400; self-Prince keep Handmaid 10==10; King on unknown 5==5;
+  Guard guess on Princess 0 when the pair holds the last Princess (pair subtraction works), 5 when King
+  kept. 9/9 PASS. GATES OK; variant smoke numbers UNCHANGED (find_valid_moves still emits classic-style
+  moves until step 11).
+
+## Step 10 — Countess rule over types (§A.10) — DONE — e229ecf (player/player.gd)
+- `countess_restricted_types(a, b) -> int` (0 = `a` forced, 1 = `b` forced, -1 = none) + new `is_man(t)`
+  (Prince/King). `countess_restricted()` is a 1-liner delegating with the two hand cards; same -1/0/1
+  contract, so main.gd:262 (human dim) and main.gd:607 (forced play) are untouched.
+- Index semantics for step 11: callers pass (active card, drawn family card) so 0/1 line up with
+  `Move._played_card_idx` (documented in the function comment).
+- Throwaway: all 81 ordered CardType pairs vs the pre-step-10 expression pasted verbatim into the harness
+  — 0 diffs; exactly 4 pairs force a play (Countess x Prince/King, both orders). Plus 8 real-hand cases:
+  C+Prince->0, Prince+C->1, C+King->0, King+C->1, C+Priest->-1, C+C->-1 (has_men false), Prince+King->-1,
+  Guard+Princess->-1. 10/10 PASS. GATES OK.
+
+## Step 11 — Joint (draw, play, target) enumeration — DONE — 8d835d0 (§A.11 + step-12 gate asserted early)
+- main.gd: AI seats no longer draw family idx 0 at turn start. `find_valid_moves()` branches to
+  `_find_noble_moves(cp)` when the variant hand holds 1 card: enumerate every family index f, Countess
+  enforced over the pair (active, family[f]) via `countess_restricted_types`, emit every legal
+  (draw, play, target) triple. `_append_play_moves()` shared by classic and variant (identical target
+  rules). `_on_move_chosen()` animates the chosen move's family draw, then sets `_drawn_card` /
+  `_played_card` (0 = active card, 1 = drawn family card). Empty move list -> push_warning +
+  `round_over()` (never `valid_moves[0]` on an empty list).
+- player.gd level 3 for noble moves: cheapest `_drawn_type` first, then plays with
+  `played_type() <= _leftover_type`, random among ties, Countess fallback. Levels 1/2/4 untouched.
+- rules TEST B (Main instantiated, game loop never started): hand-written counts 68 / 4 / 17 / 2 / 24,
+  per-move pair + target legality, no duplicate triples, L1-L4 policies = 48 PASS. counting_main
+  `_on_move_chosen` override pairs a move's named family index with the draw its own chain executes;
+  smoke prints the pairing count (329/299/203 in 4p/3p/2p x 40) and fails on a mismatch.
+- Decisions: the draw is deferred to the move for AI seats, the human keeps the idx-0 placeholder at turn
+  start (step 20 replaces it) -> suite is AI-only, so no human draw in the pairing. Moves are enumerated
+  as TYPES only — the drawn card node does not exist at decision time. Princess plays are enumerated in
+  the variant ONLY (Princess+Princess forces one; classic has 1 copy and never offers it to the AI) and
+  level 4 never pays for it (no eval branch => score 0 => the weighted prefix loop cannot pick it while
+  the list scores). Guard/other targeting cards with every opponent protected legitimately yield 0 moves
+  -> the round ends (classic has the same dead end for a human; target selection never accepts a tap).
+- Pairing MUST live inside the play chain: `move_chosen` fires BEFORE the chain animates the draw, so
+  per-round polling produced 36 phantom mismatches in 20 rounds (moves one ahead of draws). Chains
+  abandoned by a round end never resume => that move is unpaired and its draw never happened. plays[seat]
+  counts `move_chosen` emissions (175 plays == 175 verified pairings, 4p/20); the eliminated seat's
+  forced play is a classic Move (idx -1) and is not paired.
+- Verified: GATES OK; determinism — same seed -> byte-identical 506-line play log, `--seed=999` -> 489
+  lines. Sabotage: broken rules count expectation -> 2 FAIL + exit 1; main.gd forced to draw index 0 ->
+  3 "move/draw mismatch" FAIL + exit 1, then the desynced hand crashes the run.
+- Deferred by todo order: step 13 animation of the deferred family draw, step 16 elimination family reveal
+  (set_inactive had no reveal path), step 17 `_left` accounting, step 20 human draw modal.
+
+## Steps 12 & 13 — independent re-check (tree clean at 160faae): DONE, gates green
+No section above for 12/13, so the evidence lives here.
+- Step 12 (AI draw policies, §A.12): `player/player.gd:190` `select_move()`, variant branch at
+  player.gd:214 (`if valid_moves[0].is_noble()`). L1 `valid_moves[0]`; L2 `randi() % len(valid_moves)`;
+  L3 = lowest-rank `_drawn_type` -> filter moves to that draw -> keep plays with
+  `played_type() <= _leftover_type` -> random pick, with the "every play of that draw is Countess-forced"
+  fallback to the draw-filtered list; L4 = the untouched weighted loop, scoring through `_drawn_type` /
+  `_leftover_type`. L1/L2 need no variant branch (first-valid and uniform-random are the same policy over
+  a joint list); only L3 had to be re-expressed on the pair, not on two hand cards.
+- Step 13 (play the chosen draw, §A.13): `main/main.gd:359` `_on_move_chosen()`, variant branch at
+  main.gd:365: `await deal_from_family(p, move._drawn_family_idx)` ->
+  `move._drawn_card = p.hand.get_child(1)` -> `move._played_card = move._drawn_card` when
+  `_played_card_idx == 1` -> `await _on_card_played(move._played_card)`.
+- Gates (fresh, all exit 0): rules ALL CHECKS PASSED — L1 determinism 30/30 picks on family index 0; L2
+  spread 5/4 family indices reached; L3 policy 100% min-rank draw + 100% cheap play; joint move legality
+  over 300 moves; play-chain pairing 1224 pairings, 0 mismatches. smoke_games + 3 repro suites 0; smoke
+  40 rounds, 3 family-out ends; same seed twice -> byte-identical logs, seed 111 vs 222 -> 2958
+  differing lines, so the seeded randomness really reaches the AI picks.
+- Caveats: (1) git log has NO commits named "step 12"/"step 13" — that production code landed inside
+  8d835d0 ("step 11: joint ... move enumeration"), history jumps 11 -> 14; the tree is clean, so
+  "committed through 14" is true in substance, only per-step commit granularity is missing. Found with
+  `git log -S"deal_from_family(p, move._drawn_family_idx)" -- main/main.gd`. (2) smoke asserts >=1
+  family-out round end, which is UNSATISFIABLE on short runs: `-- --seed=111 --rounds=6` exits 1 (all 6
+  rounds ended by elimination, 12 eliminations); the same seed passes at 40 rounds. Not a 12/13 defect.
+  Hardening: scale the assertion with the requested round count, or report INFO below ~20 rounds.
+
+## Step 14 — Scripted 4p family-out round + round-end invariants — DONE — 160faae (tests only)
+Production already had the rule (step 10: round ends at turn start on an empty family; step 13: the family
+draw belongs to the chosen move, AI never draws at turn start). This step is the proof.
+- tests/fake_deck.gd: `prepare_noble()` replays a scripted supply through the REAL Noble deal table (4p
+  burns 0 -> first-hand 1/seat, family 3/seat, main pile 0, no widow). Pops from the BACK so `scripted`
+  reads front to back; `scripted_left` rebuilds `_left`. The classic `prepare()` path is untouched (the
+  classic repro suites use it).
+- counting_main: counts `new_turn()` calls per seat (a round = `plays + 1` turns: every play is a turn
+  plus the turn that FOUND the empty family), the seat that opened each round, pile draws vs first-hand
+  deals (`deal_card` with an explicit `card_type` is the first-hand deal, `Unknown` is a pile pop), and
+  snapshots family sizes / hand sizes / `Deck._left` INSIDE `round_over()` (`_new_round()` re-deals in the
+  same frame; polling cannot recover them).
+- rules TEST C: whole real games on a scripted Prince-free 4p supply (Guard/Handmaid/Countess only -> no
+  Priest in any hand -> NO seat can be eliminated; all seats level 1 -> the scripted deal re-applies
+  identically, so 4 rounds are comparable). 71 checks per round: 12 plays == 4 x family size; 13 turns
+  == plays + 1; ending seat == opening seat; the seat to act has 0 family cards and every family sums to
+  0; 0 eliminations, 0 pile draws, 4 first-hand deals; per seat plays == family draws == 3 with every
+  draw index 0; 1 card in every live seat; `_left` == [3,0,0,0,0,0,1,0] and sum == 16 - 12.
+- smoke per round: pile draws <= Prince plays; 1 first-hand card per seat; a CLEAN family-out round (no
+  elimination, no Prince) is exactly `seats x family size` plays, `plays + 1` turns, ended by the seat
+  that opened it. README: TEST C + the new smoke checks + the `draw_mismatches` lesson.
+- KEEP: per-seat equality `plays == family draws` holds ONLY with no Prince played — a Prince play draws
+  the TARGET's family card, and a chain abandoned at a round end lets one draw land in the next round's
+  bucket; so smoke keeps the bound `plays <= draws <= family size` and the equality lives in TEST C.
+  Today (pre-step 15) the ONLY pile draw in the variant is the Prince's redraw of its target
+  (`play_card`'s Prince branch, `deal_card(target, true)`) — the widow fallback was unimplemented, so a
+  round must touch no pile beyond the Prince plays. `set_inactive()` does NOT emit `move_chosen` (it
+  discards the hand) -> per-seat plays never over-count.
+- Sabotage: round end at `family.size() <= 1` -> TEST C 25 FAIL + exit 1 (8 plays, 9 turns, actor with 1
+  family card, `_left` [5,0,0,0,0,0,3,0]) and 4p smoke 21 FAIL + exit 1; placeholder turn-start draw for
+  AI seats -> 23 FAIL (219 draws/seat, family empties in half a round, `pop_family` past the end);
+  first-hand dealt from the pile -> pile-bound + first-hand FAIL, 4p flow stalls (timeout). GATES OK;
+  variant baselines UNCHANGED.
+
+## Step 15 — Prince paths (§A.15) — DONE (test-only) — 8ed3e09 + b0f5766 (production untouched)
+- rules TEST D: 4 scripted rounds, one per Prince-fallback branch, all seats level 1 => fully
+  deterministic; hits forced by Handmaids (target = lowest index live unprotected seat; the acting seat is
+  always unprotected at turn start). 4p: no widow (burn 0) -> hit at family 2 draws family, hit at family
+  0 -> ELIMINATED. 3p: widow 1 -> family 3->2, 2->1, family 0 + widow 1 -> widow, family 0 + widow 0 ->
+  eliminated. 3p #2: a hit finding the target's LAST family card (family 1 -> 0, widow untouched, nobody
+  dies). 2p: a family 0 hit draws the 1-card MAIN-PILE leftover, not a widow card.
+- counting_main: `resolve_effect()` override snapshots the full board before/after every play
+  (`effect_log`): family sizes, hand sizes, is_active(), widow size + sprite, cards on the table, `_left`;
+  plus derived `main_pile` / `on_table`.
+- Production cascade pinned: `if not tp.family.is_empty(): family[0] elif widow: pile (main pile first,
+  then widow) else set_inactive(target)`. `Deck.pop(true)` pops the MAIN PILE before the widow, so the
+  order is family -> main pile -> widow. In 2p the main pile keeps 1 card and the empty-family window is
+  ONE turn long, so that 1 card absorbs the round's only empty-family hit: the 3-card widow is INERT and
+  no seat can be Prince-eliminated (worth a line in the step-33 player-facing rules doc).
+- Identity verified at every snapshot: `_left == main pile + widow + every family + every hand + cards on
+  the table` (`Deck.discard()` is the ONLY decrement; a played card leaves `_left` only when discarded).
+  For these scripted rounds `sum(_left) == 16 - plays - prince_hits`, which holds ONLY because every
+  elimination here is Prince-caused (a Guard/Baron/Princess elimination adds one more decrement — step 16).
+- Coverage lesson: a victim's family is only ever at an EVEN size at a hit in "neighbour turns" fixtures,
+  so `family.size() >= 2` passes them. Fixture 3p #2 (victim's own turns spaced so the family hits 1) is
+  the only thing that catches it: sabotage widow-first -> 20 FAIL, `family.size() >= 2` -> 7 FAIL (all in
+  3p #2). Fixture design matters more than count.
+- FakeDeck: `_left` is rebuilt from the scripted multiset so `scripted_left` MUST match the scripted
+  supply exactly (a 1-Prince mismatch tripped `discard()`'s assert mid-effect and cascaded into confusing
+  FAILs). `Deck.CardType.size()` == 9 (includes Unknown) vs 8 `_left` entries. Scripted family slots are
+  round-robin: 2p slot 3+k*2 = seat0, 4+k*2 = seat1 (burn 3, first-hand 2); 3p 4+k*3; 4p 5+k*4 (no burn).
+- Files: rules, counting_main, tests/README.md. rules 205 PASS (was 112). GATES OK.
+
+## Step 16 — Elimination: reveal + discard the out seat's family (§A.16) — DONE — 26f9b53
+(main.gd + rules + counting_main + smoke)
+- `set_inactive()` is the ONE place a seat leaves play, so the family leaves play there too:
+  `reveal_out_family(p, reveal_hand)` -> `await discard(family_pile)` -> `family_pile.queue_free()` ->
+  `p.clear_family()`, all inside `set_inactive()`, NOT in `_new_round()` — a round-end / next-effect
+  snapshot always sees an out seat with 0 family cards.
+- Reveal = temporary Node2D `FamilyReveal`, a CHILD OF THE SEAT (follows its position/scale/fade),
+  holding `card_scene` instances in as-dealt family order at `FAMILY_STACK_ORIGIN` (26,0) —
+  `FAMILY_STACK_MIRROR` (-11,0) for the `right_score` seats — cascading by `FAMILY_CASCADE_STEP` (9 px:
+  the biggest step keeping 3 cards inside the 84x75 board; 2p/3p burn 3/1 leaves 5-card stacks, so a
+  3-card test stack must pass at every family size). Revealed cards connect NO `input_event` (Card's
+  Area2D fills the whole 11x17 rect and would steal the human's hand tap).
+- The family ALWAYS leaves play with its owner (fixed rule); only the FLIP is gated by `reveal_hand`, the
+  same flag the hand uses. `reveal_hand == false` (Baron winner / Prince victim: the hand card is already
+  public) takes the family out face-DOWN, publishing nothing the classic rules did not publish.
+- `Main.discard()` is the game's only `_left` decrement; each revealed card is a child of the reveal
+  container exactly once, so family cards decrement exactly once (family draws never touch `_left` — they
+  are still in the supply). A non-Prince elimination drops played + hand + family. Revealed cards resolve
+  no effect, are never played, and a revealed Guard never matches a declared Priest (`resolve_effect()`
+  is driven by `_played_card`/`_target_player` only).
+- rules TEST E: E1 Guard kills a seat that NEVER played (family Baron/King/Countess + Priest hand,
+  face-up, left-handed cascade [0, 9, 18]); E2 Princess self-kill (reveal = family MINUS the card drawn
+  for that play: King/Countess, right-handed cascade [0, -9], `target == -1`); E3 human WINS a Baron
+  (`reveal_hand == false`): family King/Countess/Princess out face-down, cascade [0, 9, 18]. Each fixture
+  asserts: 1 reveal call per elimination, `show == reveal_hand`, as-dealt order, one container gone at the
+  round end, in-bounds cards, 0 input connections, family discarded through `Main.discard()` with the
+  hand discard following, per-type `_left` drop == played + revealed, round-end
+  turns/plays/eliminations/hands/families, `_left` never negative. Smoke (`check_round`): a seat
+  eliminated in the checked round must have `family_size() == 0`; live seats keep `fam - family_draws`.
+- Round-end `_left` cannot be read live: `_new_round()` overwrites `_deck._left` 1-2 frames after
+  `round_over()` at `_speed = 0` -> CountingMain snapshots `round_end_left` inside `round_over()` (next to
+  `round_end_turns` / `round_end_actor`). `_target_type` must be captured BEFORE `await super()` in the
+  harness `resolve_effect()`: the tail `new_turn()` resets it to Unknown and at `_speed = 0` the whole
+  next turn runs synchronously inside that call (the first red run reported every Guard as "Unknown").
+  Proving a card counts EXACTLY ONCE needs CUMULATIVE counters, not per-play `_left` deltas (a family
+  counted twice and one counted zero times give the same delta): `CountingMain.discarded[type]` counts
+  every card seen by a `discard()` call, compared with `scripted_left - round_end_left`;
+  `debug_discards = true` gives a per-call `_left` trace.
+- Hardest fixtures: E3's supply needs the Baron at index 2 (`_left` [10,1,1,0,0,2,1,1]); a human-seat
+  round ends on the seat's own empty-family turn start, so E3 needs a settle loop after the last tap
+  (plays 9, turns [4,0,3,3], actor 0, end `_left` [3,0,0,0,0,0,0,0]).
+- rules 336 PASS (was 205); smoke 4p 40 rounds / 80 eliminations / 326 plays. Then-current note: the
+  human's family was invisible — `new_turn()` gave him the placeholder idx-0 draw BEFORE he tapped, so he
+  played `hand.get_child(0)` = the oldest family card and his first-hand card was never played.
+
+## Step 17 — Continuous `_deck._left` accounting audit (2026-11-08) — DONE — 0b32fcf (tests only)
+main.gd, deck.gd, player.gd untouched.
+- The todo's formula is the CLEAN-ROUND special case. `Deck._build_deck()` resets `_left` to the full 16
+  every round start and decrements nothing for the burn (it counts family cards, hands, main pile AND
+  widow); `Deck.pop()` decrements nothing; a family pop touches `Player.family`, not the Deck —
+  `Main.discard()` is the ONLY decrement in the game. A Prince hit discards the target's hand card and an
+  elimination discards a whole family, so in general
+  `sum(_left) == 16 - (plays + hand-card discards + revealed family cards + other discards)`, tracked PER
+  TYPE because a double decrement of one type and a missed decrement of another cancel in a sum.
+- `CountingMain.audit_left(tag)` checks two identities at EVERY audit point, not only at round ends:
+  (1) `_left[t] == (supply as dealt for this round) - (cards of type t discarded in it)`;
+  (2) `sum(_left) == main pile + widow + every family + every hand + table + cards in flight`.
+  Points: `new_turn()`, `_begin_play_selection()` (pre-decision state, where the AI levels run),
+  `_on_move_chosen()` (the decision), both sides of `resolve_effect()`, the round-end record. The
+  baseline is taken at the round's FIRST turn (`_new_round()` is mid-flight between rounds: table and
+  hands discarding, families re-dealing, first-hand cards animating) and `_record_round_end()` closes the
+  round, so audits never run against a half-dealt baseline.
+- Every discard is classified at `discard()` ENTRY by its container: table (a play) / a seat's hand / the
+  revealed family of an out seat / other — "other" is a FAIL; the four counters bracket the round. Skips
+  are counted, never silent (`left_audits` / `left_skips` / `left_violations`; smoke FAILS if a run
+  audits nothing): animation in flight (the frame after `discard()` decrements `_left` card by card while
+  the Card nodes are still children, so a census counts them twice), between rounds, and fixtures on
+  `FakeDeckScript` — `audit_applies()` is a script-identity test, so a fixture cannot forget a flag.
+- New fixture TEST C2 = the same audit on the REAL deck (deck script stays on, 4 level-1 seats, fixed
+  seed, 3 rounds; TEST C and everything after it runs FakeDeck, so it skips there and its own
+  end-of-round `_left` checks stay the gate).
+- Measured, 40 variant rounds: 4p 1615 audits / 40 skips / 0 violations (326 played, 174 hand cards, 116
+  revealed family cards, 0 other); 3p 1515/40/0; 2p 982/40/0. TEST C2: 114 audits, 3 skips, 0 violations,
+  `_base_left == Deck.card_count` and `sum(_base_left) == 16` in every round (the deck IS reset every
+  round, families included), `sum(_left) == 16 - discards`. Sabotage: skipping the `_left` decrement for
+  Priest discards in `Main.discard()` -> 258 violation lines in a 6-round run, both identities, tagged at
+  every boundary, exit 1. GATES OK.
+
+## Step 18 — Family stack node + rendering for the human seat (§B.18) — DONE — b61f3ef
+The family becomes pixels: 1 `Card` node per family card in the seat's OWN child `$Family`, cascading
+9 px, as-dealt order, for the human seat only. 195 new checks pin the todo Check ("seat 0 shows a
+readable cascade, the row stays inside 84x48 with 5 family cards + 2 hand cards; AI seats show nothing");
+the todo Gate ("look at your noble family at any time, no extra widget") is met by the stack ALONE — the
+step-19 modal opens ON it, not replaces it.
+- GEOMETRY LIVES IN THE SEAT, not Main: the stack is a seat child so it follows the seat's position,
+  scale and fade (a seat fades at 0.6, a card only at 0.3). `FAMILY_STACK_ORIGIN (26,0) /
+  FAMILY_STACK_MIRROR (-11,0) / FAMILY_CASCADE_STEP 9` moved main.gd -> player.gd; main.gd keeps
+  `Main.FAMILY_*` aliases so every harness reference keeps working. 9 px is the biggest step fitting the
+  2p row: seat-local hand cards end at x 24 (13 px pitch, global 5..29) and the stack is 26 + 9*i + 11 ->
+  global 31..77 for 5 cards on the 84 px board, no overlap, 2 px visible slivers; `right_score` seats
+  (x 68) mirror with origin -11 and the step negated in `family_cascade_step()`, leftmost card at x 21.
+- VISIBILITY = THE PRIVACY RULE: `render_family(faceup, force)` renders only when `is_human() or force` —
+  an AI seat's family is DATA with ZERO nodes (the human must not see what an opponent draws out of).
+  `force` is the elimination reveal, the one moment a family goes public, and `Main.reveal_out_family()`
+  is its ONLY force caller.
+- THE STACK IS A VIEW OF THE DATA, never more: `render_family()` is a REBUILD (clears, then re-renders
+  `family`) so `family_root.get_child_count() == family_size()` at every sample; `clear_family()` clears
+  data AND nodes (a stack outliving its data is a ghost family next round); the cascade always starts at
+  x 0, so the top-left card is the card the seat draws next.
+- THE REVEAL RENDERS INTO THE SEAT'S OWN STACK — step 16's throwaway `FamilyReveal` container is gone.
+  Consequence: `set_inactive()` must NOT `queue_free()` it (the node is the menu, the reveal surface and
+  the next round's re-deal; freeing it crashes `clear_family_nodes` and stalls the suite). `discard()`
+  removes and frees the revealed card children — still the only `_left` decrement. NO input on stack
+  cards (Area2D fills 11x17; a connected stack card steals the hand's tap); `Player.add_card()` stays the
+  only place connecting `input_event`. Re-render points: `_new_round()` refills the human stack,
+  `deal_from_family()` re-renders right after the pop (screen matches what the seat holds),
+  `clear_family()` empties it.
+- Files: player.gd (+consts, `family_root`, `render_family()`, `clear_family_nodes()`,
+  `family_cascade_step()`, `clear_family()` clears nodes, mirror in `_ready()`), player.tscn (+`Family`
+  Node2D), main.gd (aliases; render in `_new_round()`; re-render in `deal_from_family()`;
+  `reveal_out_family()` renders into the seat stack; `set_inactive()` drops the container free), rules
+  (+TEST F1/F2/F3, `_check_stack_p`, +2p scripted supply, step-18 leak check), counting_main
+  (+`is_seat_stack` record; discard container classified by IDENTITY `from == p.family_root`, not the
+  name `FamilyReveal`), tests/README.md (+TEST F).
+- Measured: rules **531 checks ALL PASSED** (was 336); GATES OK; classic smoke 300/137; noble smoke 40
+  rounds / 2 family-out ends / 80 eliminations / 326 plays — the step moved NO gameplay number.
+- Sabotage (measured, then `git checkout --`): sorted render 15 FAIL (and F3's round ends on seat 1 — a
+  sort changes the DRAW ORDER, i.e. the game); render every seat's family 67 FAIL (F1 3 / F2 16 / F3 13 /
+  E1 13 / E2 12 / E3 9 / C2 1 — the step-17 census counts a public family twice); connect `input_event`
+  16 FAIL; free the stack node in `set_inactive()` -> "Cannot call method 'get_children' on a previously
+  freed instance" + audit violations + the run stalls.
+- FOR STEP 19 (todo Phase B: `family_selector/family_selector.{gd,tscn}`, `signal
+  draw_selected(family_idx)`, cards at `x = 12 + i*12, y = 22`, 5 max, tap => index, no cancel; step 20
+  wires the human turn-start draw through it): the stack stays display-only — the modal is where the human
+  CHOOSES the family index; today the human's turn-start draw always takes index 0 (`new_turn()`
+  placeholder) so nothing in the rules layer changes. The human's stack renders face-UP at family 4 max
+  measured (2p family 5 - 1 drawn); a 5-node stack exists only in the instant between `_new_round()`'s
+  render and the first turn-start draw — render BEFORE the placeholder draw if step 19 needs a 5-card row
+  (window exists; F1 covers 5-card width math, F2 asserts the 4-card live row). TEST F is seed-sensitive
+  in 2p round 2 only (`family_size() in [4,5]` — `round_over()` picks the next round's starting seat with
+  `randi()`); everything else is scripted-supply deterministic.
+
+## 2026-08-21 — Noble Family step 19: the family draw modal `family_selector` (todo steps 1-19 + 31 done)
+
+- Implemented. `family_selector/family_selector.gd` + `.tscn` + `.gd.uid` (new): the modal a human
+  seat uses for the **mandatory** family draw, in the `type_selector` shape (a `Node2D` of `Card`
+  children + the `selection.png` sprite, `visible = false`, `z_index = 10`). `open(family)` rebuilds
+  ONE row of face-up cards from the family data at `x = 12 + i*12, y = 22` (`MAX_CARDS = 5`); a tap
+  commits: `draw_selected.emit(family_idx)` exactly once per `open()`, the selection sprite jumps to
+  the tapped card, the nonchosen cards dim to 25, and the panel closes itself (row cards freed,
+  `_types` cleared, disarmed). No cancel/BACK control exists in the scene at any point.
+- Key design decisions:
+  - **The panel reports an INDEX, never a type.** `Main` will pop `p.family[idx]`, so the modal is a
+    *view* of the seat's data and cannot invent, add, remove, reorder, hide, sort or count a card.
+    `open()` `duplicate()`s the array — the step-17 reference-sharing trap, applied one scene earlier
+    (an untyped `var types = family` shares the seat's array, so the panel's `close()` would empty
+    the seat's family; measured: 1 FAIL in G3).
+  - **No cancel path**: `open()` is the only arming path and `close()` the only disarming one. The
+    draw is mandatory, so a BACK button is an unusable affordance, and a `close()` that re-armed the
+    panel would allow a second draw at the same turn start (measured: 7 FAILs).
+  - **`open()` on an empty family refuses AND closes.** An empty family means the round is over (turn
+    start) or the target is out (Prince); a modal with no card to tap is a deadlocked turn, and a
+    modal left open on its *previous* row is a family the seat no longer owns. The first version only
+    warned + returned, which left a 3-card live row on screen — TEST G1 caught it as the suite's first
+    FAIL.
+  - **5 cards fit one row, so no paging**: measured with a 5-card fake family (the todo's debug run),
+    the row spans x 12..71 of the 84 px board at 12 px pitch, 1 px gaps, 11x17 tap targets
+    (88x136 px at scale 8); `MAX_CARDS == Deck.NOBLE_FAMILY_SIZE.max() == 5` is pinned against the
+    deal table so a family-size change must move the modal cap too.
+- Tests: **TEST G** in `tests/noble_family_rules.tscn` (unit fixtures; the scene is added to the
+  suite's free bottom strip at y 150 so its card `Area2D`s cannot overlap the live Table/board), 49
+  checks (531 -> 580), all PASS, exit 0.
+  - G1 the row: exactly 1 child at start (the sprite, no widgets); row geometry + **as-dealt order**
+    at 3/4/5 cards; every card face-up; exactly one `input_event` connection per card;
+    `MAX_CARDS == NOBLE_FAMILY_SIZE.max()` and the 5-card row inside the board (x 60..71); re-`open()`
+    rebuilds the row exactly (one panel serves every turn start + every Prince redraw); an empty
+    family refuses to open **and** closes the stale row; `set_selection(2)` dims the others (25/25/100/25)
+    and moves the sprite onto the chosen card, `set_selection(-1)` clears both.
+  - G2 tap -> index: synthetic taps at index **2, 0, 4** of a 3- and 4-card row emit exactly that
+    index, once, and close the panel. The index -> card mapping is what a sorted row / a position-based
+    report / a re-read-at-commit would break while still showing a plausible row. A second tap on the
+    same index is refused, an out-of-row index is refused, a CLOSED panel commits nothing, and `close()`
+    alone never re-arms (only `open()` does).
+  - G3 a view, never an owner: popping a card out of the family **while the modal is open** cannot
+    retype the row (5-card row, 4-card caller array); `open()` never pops; `close()` leaves the family
+    elementwise intact; no Control/Button node is ever created across the whole lifecycle; after
+    `close()` the panel is back to the bare sprite node.
+  - 11 sabotages, each restored with `git checkout --`: emit index 0 always -> 5; tap does not close
+    -> 3; cards not tappable -> 3; row sorted -> 5; `close()` keeps the row -> 3; a `Button "BACK"`
+    added to the .tscn -> 6; family kept by reference -> 1; close keeps row+data+armed -> 7;
+    `MAX_CARDS = 4` -> 2; the row reuses the CARD column (`x = 30 + i*22`) -> 2; `open([])` warns and
+    returns -> 1. **Measured non-detection:** deleting only `select()`'s `_armed = false` line leaves
+    all 580 checks PASS — `close()` disarms *and* empties `_types`, so the commit gate G2 pins is the
+    row's contents (a closed panel cannot name a card it no longer shows); that line is redundant.
+- Gates: `godot --headless --path . --check-only --quit project.godot` 0 (registers the
+  `FamilySelector` global class); rules 580 PASS / 0 FAIL exit 0; `family_selector.tscn` standalone 124
+  (runs forever, as a persistent panel should) with 0 SCRIPT ERROR; `noble_family_smoke` 0 (40 rounds /
+  2 family-out ends / 80 eliminations / 326 plays — baseline, this step touches no gameplay path);
+  `smoke_games` 0 (300 rounds, 10 games, 137 eliminations — baseline); 4 repro suites 0. See
+  `tests/README.md` TEST G.
+- Notes for the next session:
+  - **Headless tap recipe for Area2D UI** (verified with a throwaway probe scene, deleted): the game's
+    input path is `Area2D.input_event` -> `Control.pressed` (`Card.pressed()` consumes it, its
+    `mouse_focus_mode = 2`, so `_get_focus_control("click")`/`_input` never runs; classic clicks arrive
+    via `_unhandled_input`'s `_select.click(...)`). `Input.action_press("left_click")` alone does
+    nothing. A tap = emit `area.input_event(viewport, event, get_canvas().get_canvas().get_viewport_index(),
+    -1)` with an `InputEventMouseButton` (`button_mask = MOUSE_BUTTON_LEFT`, `pressed = true`,
+    `position = card_center * Vector2(scale, scale)`) then the release. TEST G2 uses the shorter
+    3-arg form (`viewport = null`) and it works. A hidden panel cannot receive a real mouse event, so
+    the "closed panel commits nothing" check calls `select()` directly.
+  - `tests/noble_family_rules.gd` is 2623 lines / ~171 KB; `grep -c PASS <log>` is the check counter
+    (never rely on `tail` at ~50 KB), and `godot --headless --path . <scene>` needs `--path .`.
+  - Pre-existing log noise, unrelated to this step: 2x `SCRIPT ERROR: Invalid assignment of property
+    or key 'visible' ... on a base object of type 'Nil'` from `tests/counting_main.gd:61` during TEST
+    E (present since step 16, the suite still exits 0), plus the usual ObjectDB-leak / resources-in-use
+    lines at exit.
+- Next step: todo **step 20** — "Human turn-start draw through the modal"
+  (`docs/noble-family-todo.md:261-270`): add the `FamilySelector` node to `main.tscn` as a sibling of
+  `TypeSelector` (`z_index = 10`, `visible = false`), factor `human_draw_from_family(p)` (hide
+  `_table`, `open(p.family)`, await the selection, close, show `_table`, `deal_from_family(p, idx)`),
+  and replace the step-7 human placeholder in `new_turn()`. Step 18 deliberately left all `Main`
+  family-panel wiring to steps 20-22.
+
+## 2026-08-22 — Noble Family step 20: the human turn-start draw runs through the modal (todo steps 1-20 + 31 done)
+
+- Todo step 20 ("Human turn-start draw through the modal"). Production + tests. Commit dcb84af
+  (`main/main.gd`, `main/main.tscn`, `tests/noble_family_rules.gd`, `tests/README.md`). The todo
+  file is untouched — the user's rule for this session: never edit `docs/noble-family-todo.md`.
+- Production:
+  - `main.tscn`: `FamilySelector` node, sibling of `TypeSelector`, `visible = false`, `z_index = 10`,
+    instance of `family_selector.tscn`. Modal allocated ONCE, like the other selector modals.
+  - `Main`: `@onready var _family_selector`, `_family_selector.close()` in `init_players()`, and
+    `human_draw_from_family(p)` = warn+return on empty family → `_table.hide()` → `open(p.family)` →
+    `var family_idx: int = await _family_selector.draw_selected` → `close()` → `_table.show()` →
+    print "drew family[i] = NAME" → `await deal_from_family(p, family_idx)`.
+  - `new_turn()` variant branch: family-empty → `round_over()` FIRST; then `p.is_human()` →
+    `await human_draw_from_family(p)` + `_begin_play_selection(p)`; AI → `_begin_play_selection(p)`
+    only. Step-7 placeholder `await deal_from_family(p, 0)` DELETED: no path auto-picks a family
+    card for a human seat.
+- Decisions:
+  - Modal is `Main`'s, not the seat's: `open(Array[Deck.CardType])` copies the array, so no `Player`
+    reference is needed; the family is private data in the seat (step 18), the choosing is the
+    manager's (design.md); a seat child at z 10 cannot cover `Table`/`Main` z-10 siblings.
+  - Table hidden for the whole choice — one interactive surface per human turn; `_left` accounting is
+    safe because the played card's decrement happens at `discard(_table)`, end of effect chain.
+  - No cancel path (mandatory draw); the empty-family case is NOT a modal page — it is the round-end
+    (turn start) or the Prince/elimination chain (step 21), which is why `open([])` refuses to open.
+  - The "drew family[i] = NAME" print reads `p.family[idx]` BEFORE `deal_from_family()` pops: the
+      post-pop array has shrunk and `hand.get_child(1)` is not guaranteed to be the drawn card.
+- TEST H (3 tests, 52 checks; rules suite 580 → 656, `ALL CHECKS PASSED`, exit 0):
+  - H1 gate (4p, `NOBLE_4P_BARON_HUMAN`): panel open at the human's turn start, Table hidden, no
+    other selector surface, play selection closed, 1 hand card, family 3 untouched, `family_draws
+    == 0` / `family_draw_idx[0] == []`, `pile_draws == 0`, row = own family as-dealt `x [12,24,36]
+    y [22,22,22]`, 1 `input_event` per card, panel is Main's node at z 10 after TypeSelector in the
+    tree, other seats full family + 0 nodes; **200 frames with no tap change nothing** (no timer, no
+    fallback, no auto-pick).
+  - H2 tap (4p, E3's fixture): tap index 1 → `family_draw_idx == [1]`, 2nd hand slot is family[1],
+    stack `[King, Guard]` (index-0 draw would leave `[Guard, Guard]` + King in hand), family 3→2,
+    widow untouched, `_left` unchanged, panel self-closed + Table back + row gone, SELECT_CARD. The
+    choice decides the game: the Baron played with the tapped Guard LOSES (Guard = rank 0!) to seat
+    1's Priest, so the HUMAN is the out seat; his published family is `[King, Guard]` (the two he
+    did not draw); an eliminated seat never opens the modal again.
+  - H3 whole 2p round under a per-frame watcher: 5 openings for 5 turn starts, all seat 0, 0 AI
+    openings, 0 with the Table visible, 0 with another selector open; row 1 = full 5-card family,
+    row 3 = `[Guard, Guard, Guard]` (live family, not the dealt one); `family_draw_idx[0] ==
+    [0,3,0,0,0]` == the tapped indices; 5 draws per seat, 0 pile draws, 0 eliminations, round ends
+    on seat 0's empty family with 1 hand card.
+- Harness changes in `tests/noble_family_rules.gd`:
+  - `_fs_tap()` fires `area.input_event` with a mouse-press event at the card centre (the event
+    `Card.pressed()` consumes; `dispatch_event` is swallowed headless).
+  - `_human_draw(main, idx)` taps and waits for the seat to reach SELECT_CARD; `_settle_deal_human()`
+    and `_settle_redeal()` call it — a human seat can no longer settle on "1 hand card + a full
+    family" (his turn start waits on the modal); `_settle_deal_human(main, w)` can start a watcher
+    before the FIRST turn start.
+  - `_watch_modal(main, w)` counts rising edges of `is_open()` + the acting seat + its row + Table /
+    other-selector visibility.
+  - Human-seat fixtures (F2, F3, E3, TEST G, H1-H3) settle through the modal: each `_human_play()`
+    tap list is the family index the seat draws at that turn start.
+  - **Fixed a dead test**: F2 read `main.turns_log`, which `CountingMain` never defined — the script
+    error aborted F2, so its 8 round-end / round-2 checks never ran. Now reads `round_end_turns[0]
+    == [6,5]` (the 11th turn) and those checks run and pass.
+  - Sabotage (restored): step-7 placeholder back (no panel) → 13 FAIL (H1 11, H3 2) + H2 aborts on
+    `Out of bounds get index '1' (on base: 'Array')`; 1 s timeout fallback auto-picking 0 → 7 FAIL
+    (H1 1, H2 4, H3 2); modal opened for every seat with a one-frame auto-pick → 32 FAIL (H3
+    AI-actor `[0,0,0,0,0,1]`, E2's whole round 18, draw/play pairing 5).
+- Gates: `--check-only --quit project.godot` 0; classic `smoke_games` 0 (300 rounds / 137
+  eliminations); `noble_family_smoke` 0 (40 rounds / 2 family-out ends / 80 eliminations / 326
+  plays); `noble_family_rules` 656 PASS / 0 FAIL exit 0; repro suites `guard_princess` 0,
+  `prince_memory` 0, `score_multiplier` 0, `belief_truth` 0 (500 rounds, ~7 min).
+- Notes for the next session:
+  - **Manual gate NOT run**: the todo's step-20 Check line ("modal at every turn start, tap draws,
+    then play selection works") is only covered headless by H1/H2/H3. Run `godot --path .
+    main/main.tscn` and click through one human round.
+  - Next todo step: **21** — mid-effect forced human Prince draw through the modal (target's
+    family modal, widow fallback when family is empty, out-target no draw). `open([])` already
+    refuses, so the modal covers both Prince branches; the "target is human" gate is `tp.is_human()`.
+  - Watch out: in a variant human game the modal is open at the human's turn start, so a harness
+    that awaits hand sizes must tap first — every old human-seat fixture helper needs `_human_draw`.
+
+## 2026-11-10 — Noble Family step 21: a human target's Prince redraw runs through the modal (todo steps 1-21 + 31 done)
+
+- Todo step 21 ("Human target selection: the human target picks the family card in the modal") — the
+  `# TODO(step 21)` the step 15 Prince chain left behind. Production + tests. Files: `main/main.gd`,
+  `main/main.tscn` (editor resave, see notes), `tests/noble_family_rules.gd`, `tests/README.md`. The
+  todo file is untouched (session rule: never edit `docs/noble-family-todo.md`).
+- Production (`resolve_effect()`, Prince arm, ONE branch — the whole step):
+  ```
+  if not tp.family.is_empty():
+      if tp.is_human():  await human_draw_from_family(tp)   # the target picks HIS card in the modal
+      else:              await deal_from_family(tp, 0)      # an AI seat has no choice to make
+  elif not _deck._widow_cards.is_empty(): await deal_card(tp, true)    # widow fallback, unchanged
+  else:                                    await set_inactive(tp, false) # elimination, unchanged
+  ```
+  `human_draw_from_family()` is unchanged and now has exactly TWO call sites: `new_turn()` (step 20) and
+  this one (step 21). A mid-effect draw IS a turn-start draw: Table hidden, `open(tp.family)`,
+  `await draw_selected`, `close()`, Table back, `deal_from_family(tp, idx)` — no new function, no second
+  modal path, so "no path auto-picks a family card for a human seat" stays a property of the whole game.
+- Decisions:
+  - The panel is the TARGET's (`tp`), never the actor's. The branch reaches two shapes: a self-Prince
+    (`tp == p`, legal — `_find_noble_moves` enumerates self, `_on_target_player_selected` accepts it under
+    INPUT_ANY_P) and an AI's Prince aimed at the human, which opens the HUMAN's panel ON THE AI'S TURN.
+    Opening the ACTOR's family would put an AI's cards into a human's hand and publish an AI family.
+  - The fallbacks stay panel-free: family 0 draws the widow, family 0 + widow 0 eliminates. "An empty
+    family is never a modal page" needs NO new guard — step 19's `open([])` refuses to open, and
+    `human_draw_from_family()` warns + returns on an empty family (Main owns the round-over /
+    elimination decisions).
+  - A mid-effect draw is a REDRAW, never an addition: the Prince branch reveals + discards the target's
+    hand card first, so the human's hand is 0 cards while the panel is open — the 1-card invariant, now
+    checked mid-effect, and the hand never passes through 2.
+  - `_left`: a modal draw is `family -> hand` (-0); the Prince victim's card leaves by the branch's own
+    `discard(tp.hand)` (-1); a widow draw pops and decrements (-0); the elimination's `set_inactive`
+    reveals + discards a family that is already empty (0 cards, -0) and the hand. Measured: I1 after
+    play 1 `[12,0,0,0,0,1,1,0]`; round ends `[6,...]` = 16-8-1, `[7,...]` = 16-8-1, `[2,...]` = 16-10-4,
+    `[2,...]` = 16-11-3. Family draws change nothing, every card that leaves is a play, a Prince victim
+    or an elimination reveal.
+- TEST I (4 fixtures, 78 checks; suite 656 -> 765 PASS, `ALL CHECKS PASSED`, exit 0):
+  - I1 4p self-Prince + [King, Guard, Countess]: 3 panel openings = 3 family cards, ONE at the turn start
+    and ONE INSIDE the Prince effect on a 0-card hand, rows equal to the seat's live family data 1 frame
+    before each tap, taps [1, 0] -> the King is the 1 card he ends the round with, Table hidden and no
+    other panel at ANY opening, family [3,2]->[2,1]->[1,0], `_left` after play 1 and at round end, 8
+    plays / 9 turns / 1 hit / 0 eliminations / 0 pile draws, round ends on seat 0's turn start with an
+    empty family, scores 1 0 0 0, panel closed + no panel in 200 frames of the round-end state.
+  - I2 4p seat 1 = Prince aimed at the human: the 2nd opening has actor 1, row [Guard, Countess] (the
+    human's data, never seat 1's 3 Guards), the human's hand 0 / family 2 at that moment, `fams[0] 2 -> 1`
+    attributed to seat 1's play, hand 1 King -> 1 Countess, taps [0, 1, 0] with `family_draw_idx == [0, 0]`
+    and his 3rd turn start's active card = the Countess he picked during seat 1's turn.
+  - I3 3p (widow 1) 2 hits + elimination: 4 taps drain [Guard x3, Countess] (rows are live data), taps
+    [2, 1, 1, 0], 4 openings all on his own turn and all BEFORE the elimination, hand [1,0,0,1], play 5
+    hits family 0 + widow 1 (widow 1->0, hand 0->1, ACTIVE, 1 pile draw in the round), play 6 hits
+    family 0 + widow 0 -> out, 1 reveal with 0 cards materialized, round ends on seat 0's turn start
+    with an empty family, 11 plays, 11 turns, `_left == [2,0,...]`.
+  - I4 4p family 0 + no widow for BOTH seat 0 (Prince) and seat 1 (Countess): 3 openings for 3 family
+    cards then 2 eliminations [0,1], 2 reveals of 0 cards, 11 plays, 12 turns, round ends on seat 2's
+    turn start with an empty family, no modal after any elimination.
+  - Harness additions: `_tap_watcher()` + `_tap_modal()` — the human seat's hands for a WHOLE round: the
+    queue taps every rising edge of `is_open()` and samples actor / row / live family data / Table hidden
+    / crowded / his hand count / family size / hand[0] type (no `connect()` — `_commit_draw`'s
+    disconnects-on-resume eat multi-listener bindings, and the queue IS the human seat's hands);
+    `_settle_taps()` starts them BEFORE `init_players()`; `_fam_names()`; `_check_no_leak()`;
+    `_human_play_idx(main, hand_idx, target, type, draw_idx, tag)` plays an arbitrary HAND INDEX
+    (`_human_play` only plays index 0) and asserts `countess_restricted()` first — (King, Countess)
+    forces index 1, (Countess, x) forces 0 — and FAILs + returns when the seat never reaches a 2-card
+    SELECT_CARD hand (a TEST-H-style harness crash on a diverged flow, pre-existing in
+    `_run_to_first_round_end`, now reported instead of crashing).
+  - `_human_draw(main, -1)` = "the watcher serves this turn start" (the helper only waits for the close);
+    4 new fixture consts + 5 new `_left` expectation arrays; the suite grew 656 -> 765 PASS.
+- Sabotages (measured, restored after each — `tests/README.md` TEST I table):
+  - the step 20 TODO back (an AI picks for a human target): **16** FAILs + a harness stall (killed at
+    220 s) — I1 1 (no 2nd panel in the same play), **I2 13** (the AI-turn opening, the row, the 0-card
+    hand, the tapped index, `family_draw_idx`, the Table, the leak check), I3 1, + 0-effect-records.
+    The queue shifts by one tap, which is what "the game drew for the human" looks like from outside;
+  - only a SELF-Prince uses the modal (`tp.is_human() and p.idx == tp.idx`): **15** FAILs, the same list
+    minus I1 — the gate is the target's family on ANOTHER seat's turn;
+  - the panel opens on the ACTOR's family: **5** (I2 3, I3 2) — the row is seat 1's `[Guard, Guard]`;
+  - the widow fallback skipped for a human target: **5**, all in I3 (widow 1->0, ACTIVE, `pile_draws == 1`,
+    `_left [4,...]` vs `[2,...]`).
+- Gates: `--check-only --quit project.godot` 0 (0 script errors); classic `smoke_games` 0 (300 rounds /
+  10 games / 137 eliminations); `noble_family_smoke` 0 (40 rounds / 6 games / 2 family-out ends / 80
+  eliminations / 326 plays); `noble_family_rules` 765 PASS / 0 FAIL exit 0; repro suites
+  `guard_princess` 0, `prince_memory` 0, `score_multiplier` 0, `belief_truth` 0 (500 rounds, 4666
+  decisions, 412 beliefs, 0 false).
+- Notes for the next session:
+  - Manual gate still NOT run (since step 20): `godot --path . main/main.tscn`, play one round as seat 0
+    — the cascade, a modal at every turn start, a tap draws, play/target selection, the 1-card hand.
+    Steps 20 + 21 are UI-dependent; a second pair of eyes on the modal's position/timing is due.
+  - Next todo step: 22 — `# TODO(step 22): a human player picks a target in a target selector.` in
+    `new_turn()`. The harness drives targets by calling `main._on_target_player_selected()` /
+    `_on_target_type_selected()` directly (`_human_play_idx`); step 22 makes that a real selector, so
+    plan to replace those direct calls with taps on the new panel (the TEST I helpers are the place).
+  - `--check-only --quit project.godot` does NOT parse test scripts: a parse error in
+    `tests/noble_family_rules.gd` shows up only in a suite run, and a test scene whose script fails to
+    load never quits, leaving orphan godot processes — `pgrep -fa godot`, kill them.
+  - A fixture that diverges from the expected flow burns `_run_to_first_round_end`'s 20000-frame cap:
+    run sabotages under `timeout` and read the partial log — the FAILs print before the stall.
+  - `main/main.tscn`: Godot resaved it (a `unique_id` on the FamilySelector node) and DROPPED the node's
+    `visible = false`; restored. `init_players()`'s `_family_selector.close()` also guards the start state,
+    but keep the scene property explicit.
+  - Background runs: logs in /tmp got wiped mid-task (reboot) and killed a running gate script — write
+    logs under the session scratchpad, launch with `setsid nohup ... &`.
+
+## Step 22 — modal/input guard rails (DONE, commit a34e7f7)
+
+- Task: `docs/noble-family-todo.md` **step 22** — exclusivity for the human family-draw modal +
+  the `smoke_games` NOBLE UI print. Todo steps 1-22 are done; next is **step 23** (family deal
+  presentation: families dealt instantly, `render_family()` after every family change, one
+  `_deal_audio_player.play()` per family batch).
+- main/main.gd: `_drawing` / `_draw_idx` + `is_drawing()`; ONE panel listener connected in
+  `_ready()`, guarded by `_drawing` (a stray emission is dropped by the RECEIVER — that is what
+  "CONNECT_ONE_SHOT-safe" is really asking for: the panel is a permanent scene child, not an
+  `instantiate()` per turn). `human_draw_from_family` is the only place a modal opens and it is
+  exclusive: nested request dropped, `_table` / `_type_selector` / `_select_other_player` /
+  `_select_any_player` / `_player_selection` put away, the seat's `_state` forced to `IDLE`
+  (`Player._on_card_input_event` gates card taps on `_state`), index validated with a
+  `family[0]` fallback (the turn-start draw is MANDATORY: a turn that never draws never ends).
+  `_drawing` guards in `_on_card_played`, `_on_target_player_selected`, `_on_target_type_selected`,
+  `_on_move_chosen`; `deal_from_family` warns when a seat draws under a panel;
+  `_close_family_modal()` on the commit + in `init_players` (interrupted game: a suspended `await`
+  never resumes) + in `_new_round` (the family is RE-DEALT, a stale row is a menu of cards that do
+  not exist).
+- tests/noble_family_rules.gd: **TEST J, 91 checks, J1..J6**, wired after `_test_prince_human_modal`.
+  Decision that shaped it: the rails are a PER-FRAME property, so `_watch_rails()` samples EVERY
+  frame (in headless at speed 0 one frame carries a whole game — deal, 19 plays, a round end, the
+  next deal; a 1-frame check sees a 1-frame bug). J1 = a 2-round 4p human game (Guard target+type,
+  King swap, Baron compare, self-Prince + its mid-effect panel) driven only by taps on the modal's
+  real Card nodes: 108 frames, 6 openings / 6 taps, `family_draw_idx == the taps`, every row == the
+  live family data, 0 mismatch / 0 crowded / 0 leaks. J2 inertness probes, J3 dirty board +
+  re-entrancy, J4 the guarded listener, J5 the bad-index anti-deadlock, J6 closed on all four exit
+  paths. The suite publishes `suite_done`, `fails()`, `quit_on_fail` and J's counters.
+- Key reasoning: **J1 monitors the rails, J3 is what PINS them** — measured, deleting the four
+  `hide()`s, or the `p._state = IDLE` write, changes 0 checks in J1, because the production flow
+  arrives at the modal with those surfaces already hidden and the state already IDLE. J3 holds the
+  surfaces AND the seat's state on stage on every closed-panel frame, so the opening frame is a
+  fair test. Sabotages (each reverted): card-play guard out **4** FAILs; target-player+target-type
+  guards out **2**; the hide()s out **1** (J3); the state write out **1**; `_new_round`'s close out
+  **3** (J6 path 4); the nested-request guard out **0 FAILs + a hung suite at 849 checks** — the
+  deadlock the todo's gate names, visible from outside as a suite that stops printing.
+- Also fixed 4 pre-existing SCRIPT ERRORs that were silently SKIPPING 24 checks (a check whose
+  expression raises is neither PASS nor FAIL): `Player.ai_level`'s setter touches `@onready`
+  children → `_test_stack_unit` must `add_child` first (`right_score` BEFORE `add_child`:
+  `_ready()` mirrors the family stack off it); TEST I2 read a watcher's 3rd opening before seats 2
+  and 3 had played. Suite 764 → **879 PASS / 0 FAIL / 0 script errors**, exit 0.
+- tests/smoke_games.gd: NOBLE UI = a NESTED run of the rules suite (`quit_on_fail = false`, await
+  `suite_done`, print the measured counters) so the classic command carries the step 22 number.
+  It frees the classic game FIRST: an AI seat consumes the global RNG every turn, and a running
+  classic game steals the scripted fixtures' shuffles (measured 16 plays vs the standalone 19).
+- Files changed: `main/main.gd`, `tests/noble_family_rules.gd`, `tests/smoke_games.gd`,
+  `tests/README.md` (TEST J section + the measured sabotage table + the NOBLE UI section).
+- Gates: `--check-only --quit project.godot` 0; `noble_family_rules` 879 PASS / 0 FAIL exit 0;
+  `smoke_games` 0 (300 rounds / 10 games / 137 eliminations; NOBLE UI 6 openings / 6 taps / 19
+  plays / 108 frames / 0 leaks); `noble_family_smoke` 0; repro `guard_princess`, `prince_memory`,
+  `score_multiplier` 0; `belief_truth` 0 **but it needs > 120 s** (a 120 s timeout reports 124).
+- Blockers / notes for the next iteration:
+  - **Lost scaffolding, still not resolved:** `tests/smoke_games.gd` from previous sessions
+    referenced 5 scene files that are not in the tree and were never tracked
+    (`smoke_game_smoke.tscn`, `noble_smoke_scene.tscn`, `noble_stack_scene.tscn`,
+    `noble_selector_scene.tscn`, `noble_modal_scene.tscn`). The current tracked
+    `tests/smoke_games.gd` (86 lines, commit a76546c) has NO noble sections, so the old NOBLE
+    SMOKE / STACK / SELECTOR prints do not exist. The tracked suites cover the same ground
+    (`noble_family_smoke` = whole variant games; `noble_family_rules` TEST F = the stack, TEST G =
+    the selector, TEST H/I/J = the modal). Decision for the user: re-create the scene scaffolding,
+    or accept the nested rules-suite run as the UI gate (that is what step 22 did).
+  - Manual gate STILL not run (since step 20): `godot --path . main/main.tscn`, play one round as
+    seat 0 — the cascade, a modal at every turn start, a tap draws, play/target selection. Steps
+    20-22 are UI-dependent; J's counters are measurements, not eyes on the layout.
+  - `tests/noble_family_rules.gd` is ~4200 lines; append blocks with `cat >>` in pieces and verify
+    the tail — an interrupted append left duplicated functions + 2 stray blank lines inside a
+    multi-line string in this session (a parse error) and the file has no `_ui_harness_scene`
+    nested gate print (the convention is the `smoke_games` print).
+  - Background runs: `setsid nohup ... &` writing logs under /tmp works, but a suite must not race a
+    `cp` of `main/main.gd` (a half-written file = a cascade "Parse error" that is not the code's).
+    Sabotage runs: copy → run → copy back, sequentially, one process at a time.
+
+## Step 23 — Family deal presentation (todo §B.23) — DONE — fee8301 + 1c1d0d1
+- Production (`main/main.gd`, 3 lines of behavior): new seam `deal_sound()`, and EVERY deal sound in
+  the game asks for it (`deal_card`, `deal_from_family`, the family batch). The family batch plays ONE
+  sound per noble round, after the animated first-hand cards. Nothing else moved: first-hand cards
+  still animate through `deal_card`, families are still filled as data + `render_family()` in the same
+  instant, `render_family()` still runs at its four sites (deal, `deal_from_family`, elimination reveal,
+  re-deal).
+  WHY A SEAM: Godot 4.7 rejects an override of `AudioStreamPlayer.play()` ("overrides a method from
+  native class AudioStreamPlayer" is a warning treated as an error), so the only countable thing is the
+  call that asks for the sound — and that is exactly the shape of a batch rule. `play()` RESTARTS its
+  stream, so a per-card batch is `family_size x player_count` plays of one stream in one frame (a
+  stutter); "one sound for the whole batch" is a statement about call counts.
+- Harness (`tests/counting_main.gd`): `deal_sounds` (seam calls, override + `super()` so the real
+  player plays on the real path); per round `(audio, pile_draws, family_draws)`; per deal first-hand
+  flights + PEAK simultaneous flights (a counter around `deal_card`/`deal_from_family`, never a frame
+  sample: at `_speed = 0` one frame can carry an entire deal); per-round setup ms (`_new_round()` entry
+  -> the round's first turn); per deal main pile, `sum(_left)`, per-seat family size + stack nodes.
+  `set_inactive()` now marks the whole elimination window on `reveal_depth`, so the `_left` audit and
+  the per-frame stack mirror both skip it (an out seat with 3 family cards and 0 nodes is a legitimate
+  frame inside an elimination, before `reveal_family()` runs).
+- Tests (`tests/noble_family_rules.gd`, TEST K, 84 checks x2 passes = 168 in the log; suite 879 ->
+  1047 PASS / 0 FAIL / 0 script errors):
+  - K1 real deck 2p/3p/4p, 2 rounds each: burn applied at the deal (widow 3/1/0, node visible iff
+    burn>0), main pile 1/0/0, `sum(_left)==16`, 1 hand card + `NOBLE_FAMILY_SIZE[count]` per seat,
+    deal animates THE HAND (`count` flights), peak flights 1, deal sound `count+1` for the 10/12/12-card
+    batch, and in EVERY round `audio == first_hand + pile_draws + family_draws + 1` (4p 13=4+0+8+1,
+    12=4+0+7+1; 3p 10=3+0+6+1, 15=3+0+11+1; 2p 10=2+0+7+1, 8=2+0+5+1).
+  - K2 the human 2p deal: 16 = 3+2+10+1, widow IS the supply's first 3, families start at slot 5,
+    seat 0's stack == data at the deal (5 nodes, as-dealt order, x 0/9/18/27/36, face-up, inside the
+    84x48 viewport, 0 input connections), AI seat's 5-card family = 0 nodes, then the modal tap pops
+    family[2] -> family 4 + stack 4 in the same frame, hand 2, Countess `_left` untouched.
+  - K3a/K3b `_watch_family_view()`: the stack is a VIEW, checked EVERY frame (human renders, out seat
+    renders what he left, live AI renders nothing, in the frame the data changed); frames inside a
+    discard/reveal window are SAMPLED (the reveal is what must be seen) and NOT judged. K3a (real 4p AI
+    game, Guard kill, round end, re-deal): 65 sampled frames, 0 violations, 3 reveal frames, 150
+    private frames, 18 changed-total frames all matching, 9 skipped. K3b (live modal-rails human game,
+    4 openings/4 taps/12 plays, mid-effect Prince, round end, re-deal): 0 violations, 42 human-matching
+    frames, 201 private frames, 16 changes all matching, 4 modal draws each re-rendering in the shrink
+    frame.
+  - K4 wall clock: `_speed 2` 4p 1013 ms (2nd pass 992) / 3p 758 / 2p 503 = `first_hand x 0.5/speed`;
+    `_speed 5` 4p 407 ms; CLASSIC control identical (1013 vs 1013, 503 vs 503) => the batch adds 0 ms.
+- Sabotages (each reverted, one process at a time, `.pi/tmp/sab.sh`): per-deal batch sound **14 FAILs**;
+  silent batch **14**; family batch ANIMATED (0.4 s beat per family card, at `_speed > 1`) **6 FAILs,
+  all in K4, 0 in any per-round snapshot**; the deal fills data and forgets `render_family()` **10**.
+  The `_speed > 1` condition in the third sabotage is a harness fact, not a game rule: the suite's
+  fixtures run at `_speed = 0`, so an unconditional real timer per family card makes the suite take
+  > 300 s (measured: killed at the timeout, 63 checks in).
+- Gates: `--check-only --quit project.godot` 0 (and `--check-only` on the rules script 0);
+  `noble_family_rules` 1047 PASS / 0 FAIL / 0 script errors, exit 0; `smoke_games` exit 0 with
+  **300 rounds / 10 games / 137 eliminations and the same scores as the baseline** (the seam changed
+  nothing observable); `noble_family_smoke` exit 0 (40 rounds, 80 eliminations, 326 plays, 1615 `_left`
+  audits / 40 skips / 0 violations).
+- Files: `main/main.gd`, `tests/counting_main.gd`, `tests/noble_family_rules.gd` (fee8301);
+  `tests/README.md` (TEST K section + step 23 in the suite header) and the `render_family()` marker
+  comment in `main/main.gd` (1c1d0d1).
+- Notes for the next iteration:
+  - Fixed during this step: `NOBLE_MAIN_LEFT` was indexed [_,1,0,0] and a 4p lookup raised
+    "Out of bounds get index '4'" — a script error SKIPS its checks (neither PASS nor FAIL), so the
+    suite printed 1033 PASS / 3 FAIL while K1 4p's checks never ran. Any new fixture must be watched
+    for `grep -c "SCRIPT ERROR"` = 0, not just for FAILs.
+  - K3's thresholds are calibrated to `_speed = 0` reality (>= 40 sampled frames, >= 15 human-matching
+    frames). A per-frame watcher that samples 40000 frames is not reachable: at `_speed = 0` a round
+    collapses into a handful of frames, so the game's own transitions, not the sampler, set the count.
+  - Manual gate (eyes on the layout) STILL not run for steps 20-23: `godot --path . main/main.tscn`,
+    seat 0, one round — cascade visible at the deal, one slide sound, modal at every turn start.
+  - Next todo step: 24 (the `game_mode` scene, Phase C).
+
+## Step 24 — the mode picker scene `game_mode/game_mode.{gd,tscn}` (todo §C.24) — DONE — f545144
+- Production = a NEW scene only, no caller yet (step 25 wires it): 3 rows in the `start.tscn` shape
+  (a Label row + ONE `flat` Button child on anchors_preset 15 = the full row rect, so the whole word is
+  the target). Rows y 16/26/36 (6 px tall, centered, x 4..80); a flat Button adds Godot's 1 px content
+  margin, so tap rects are x 4..80 at y 15..23 / 25..33 / 35..43 (76x8 board px = 608x64 real px at 8x),
+  non-overlapping with a 2 px gap, all inside 84x48, title above, BACK clear of the bottom edge.
+  "NOBLE FAMILY" = 48 px at the game's 7 px font (Gamebuino.ttf, measured) — fits 76 px, no 2nd line.
+- DEVIATION (measured, not taste): the entry point is `show_rows()`, NOT `show()`. `func show()` in a
+  CanvasItem script is a PARSE ERROR in Godot 4.7 ("overrides a method from native class CanvasItem",
+  warning treated as error) — probe-verified, same class of rejection as `AudioStreamPlayer.play()`.
+  `_ready()` hides root AND all rows; `show_rows()` shows rows then the root. `hide()` stays native
+  (handlers call it, they don't redefine it). L2 pins the consequence: the NATIVE show() opens the root
+  and leaves every row hidden.
+- Handlers: `hide()` FIRST, then emit — pinning requires recording `panel.visible` INSIDE the emit
+  (a post-press `visible` check passes either way). Signals `classic_pressed`/`noble_family_pressed`/
+  `back_pressed`, parameterless: the picker reports WHICH ROW, never a mode value. Zero state: the scene
+  declares NO script variables (checked via the property list filtered by PROPERTY_USAGE_SCRIPT = 4096;
+  Godot 4 does not export that constant as an identifier) so "mode is not persisted" is STRUCTURAL.
+- Harness facts (cost time, keep):
+  - Headless CANNOT tap a Control: `Window.push_input()` delivers nothing because the headless window is
+    64x64 (measured) and viewport-scaled coords fall outside it. A Button row's real tap IS its `pressed`
+    signal (no Area2D in this scene, unlike cards), so fixtures drive it with `emit_signal("pressed")` —
+    the same connection the engine's GUI input drives — and prove tappability with
+    `Control.is_visible_in_tree()`, the engine's own input gate (hidden parent => zero mouse input).
+    Eyes-on tap targets stay in the manual gate (step 34).
+  - `get_signal_list()` dicts key **`args`**, not `arguments`. Hitting it raised SCRIPT ERROR mid-check and
+    SKIPPED that check (37 printed where 38 are written) with 0 FAILs — the step-23 rule holds: a green
+    suite must be `grep -c "SCRIPT ERROR"` = 0, never "0 FAIL".
+  - `LabelSettings` is NOT a theme item: `get_theme_font_size("font_size")` answers 16 (theme default)
+    while the label draws at 7. Text-width checks read `label.label_settings.font/.font_size`.
+  - **Sabotaging an UNTRACKED file cannot be reverted with `git checkout --`** (git doesn't know it) and
+    `git status` prints a whole new dir as `?? game_mode/`, hiding that. S6's .tscn sabotage stayed in the
+    tree until restored by hand. Commit a new scene BEFORE sabotaging it (same lesson as step 11's rule).
+- Tests (`tests/noble_family_rules.gd`, TEST L, 5 fixtures, 38 checks; suite 1047 -> **1085 PASS / 0 FAIL
+  / 0 script errors**, exit 0): L1 shape (3 rows = Labels owning exactly 1 child; Title owns none; 4 Labels
+  + 3 Buttons and nothing else in 7 nodes; flat; full-area coverage; centered); L2 open/close (hidden root
+  + hidden rows at `_ready()`, 0 targets visible-in-tree, `show_rows()` opens all 3 in ONE open, idempotent
+  re-open = 3 rows, native show() opens rows = false); L3 press (1 signal per press, in its OWN signal,
+  recorded `visible == false` at the emit, BACK emits only back, 3 parameterless signals); L4 stateless
+  (3 visits/3 presses/3 signals, texts + alphas unchanged, 0 nodes added, 0 script vars); L5 geometry
+  (labels+targets inside 84x48, each >= 48x8, non-overlapping, reading order, text width vs row width,
+  title above, BACK off the bottom edge).
+- Sabotages (6, each reverted, one process at a time): rows not hidden at `_ready()` **1** (only the row
+  check bites — the root's `hide()` is a separate line); `show_rows()` = root only **3**; emit-before-hide
+  **4**; double emit **3**; a press that remembers the mode (`var last_mode` + row dimmed 0.4) **2**; the
+  NOBLE row moved onto the CLASSIC row (.tscn y 26..32 -> 20..26) **2** — and NOT the inside-board check:
+  "on the board" and "not on top of another row" are different properties.
+- Gates: `--check-only --quit project.godot` 0 / 0 SCRIPT ERROR; `noble_family_rules` 1085 PASS / 0 FAIL /
+  0 SCRIPT ERROR exit 0; `smoke_games` 0 (300 rounds / 10 games / 137 eliminations / scores
+  0:1 1:1 2:0 3:1 = BASELINE, + NOBLE UI 6 openings / 6 taps / 19 plays / 108 frames / 0 leaks);
+  `noble_family_smoke` 0 (40 rounds / 80 eliminations / 326 plays / 1615 `_left` audits, 40 skips,
+  0 violations = BASELINE — step 24 touches no gameplay path); repro guard_princess, prince_memory,
+  score_multiplier 0; repro_belief_truth `-- --rounds=150` 0; `game_mode.tscn` standalone runs forever
+  (124) with 0 SCRIPT ERROR, as a persistent panel should.
+- Files: `game_mode/game_mode.gd`, `game_mode/game_mode.tscn`, `game_mode/game_mode.gd.uid` (new);
+  `tests/noble_family_rules.gd` (TEST L + the header paragraph + the GameModeScene preload + the
+  `_ready()` call), `tests/README.md` (TEST L section + step 24 in the suite header).
+- Blockers / notes for the next iteration (step 25 = wire the menu into `application.{gd,tscn}`):
+  - `application.gd` will call `_game_mode.show_rows()` (NOT `show()`) — L2 pins that the native call
+    leaves the rows hidden, so a step-25 wiring that uses `show()` shows an EMPTY panel.
+  - Step 25's own checks: PLAY -> picker -> NOBLE FAMILY starts a variant game (`_main.noble_family =
+    true` BEFORE `init_players`); BACK -> start page; pause-Exit resets `noble_family = false`;
+    `speed_run` stays classic-only. The picker stores nothing, so the reset must live in `application.gd`.
+  - Manual gate STILL not run (since step 20): `godot --path . main/main.tscn` as seat 0 — cascade,
+    modal at every turn start, taps. Headless cannot tap a Control, so steps 20-24 + 25's menu stay
+    unmeasured by eyes until step 34.
+
+Step 25 - wire the mode picker into the application: PLAY opens a menu and starts NOTHING.
+Task: `application/application.tscn` had no mode entry - PLAY started a game immediately, so a player
+had NO WAY to reach the variant. Production: add `GameMode` (the step-24 scene) under `Application`;
+`_on_start_play_pressed()` now hides Start, shows the picker and starts no game; `start_game()` is the
+new game-start body (`_main.show()` + `init_players(config.random_seed)` + clear `interrupted`); three
+handlers do EXACTLY what step 24 predicted (`_main.noble_family = false/true` then `start_game()`, BACK
+only shows Start); `_on_pause_exit_pressed()` clears the flag. Wiring is 3 signal connections - the
+picker's 3 `GameMode` signals -> 3 app handlers, zero script variables (the picker stores nothing).
+Gate: `godot --headless --path . --check-only --quit project.godot` (the todo's gate).
+Decisions:
+- THE sequencing rule is the step: `Main.noble_family` must be set BEFORE `init_players()`, because
+  `init_players()` -> `_new_game()` -> `_new_round()` READS the flag once, at the deal. Sampling the flag
+  after a row press cannot tell "set then start" from "start then set", so the suite records it at two
+  ENTRY seams: `start_game()` (tests/counting_application.gd) and `init_players()` (tests/counting_main.gd).
+- seams are split across two scripts because `init_players()` is a Main method, not an Application one;
+  a Main-only scene has no picker around it, so the seam records panel state as -1 (null) there.
+- the seam also pins the deal must not run UNDER an open menu: at the deal the picker is `visible ==
+  false` AND 0 rows are `is_visible_in_tree()` (the engine's own input gate). The step-24 trap - a panel
+  shown WITHOUT `show_game()` never gets its input blocks, `ready_focus_owner` stays null - is only
+  observable through the wiring, so it is asserted there.
+- Exit-to-menu CLEARS the mode. TEST L proved the picker stores nothing, so the application is the only
+  place a mode can be cleared; a variant flag left on Main would make the NEXT game a variant game the
+  player never chose (mode is chosen per game, never persisted).
+- `speed_run` bypasses the menu entirely (boots straight into `init_players(42)`) and stays classic-only.
+- Fixture technique: the REAL `application.tscn`, instrumented by `set_script` with
+  tests/counting_application.gd + tests/counting_main.gd; the scene's own PLAY / row / Exit buttons are
+  pressed by emitting their `pressed` signal (a headless window is 64x64, so a real tap is never
+  delivered - the step-24 lesson). Exported vars are saved/restored around `set_script` (`card_scene`,
+  `random_seed`, `speed_run`, ...); `Player.ai_level` writes `@onready` sprites so levels can only be set
+  once the node is in the tree => build and settle are separate functions, and a coroutine fixture must
+  be called with `await` (Godot 4 rejects a bare call).
+- TEST M (55 checks): M1 PLAY (picker opens, 3 rows tappable, 0 `start_game()`, 0 deals, mode unset);
+  M2 NOBLE row (mode true at BOTH seams; variant deal = family 3/seat in 4p, hands 1, sum(_left)==16,
+  no widow, pile hidden; >=6 plays, >=6 family draws, 0 pile draws, move/draw pairings clean, `_left`
+  audit clean); M3 BACK (start page back, NEITHER seam reached, no mode set, PLAY re-opens the picker);
+  M4 variant game -> in-game menu -> Exit -> PLAY -> CLASSIC (mode cleared; classic deal at the seam;
+  no families; main pile visible with 11 cards + widow 1; 0 family draws, >=4 pile draws, 0 `_left`
+  violations - all measured as DELTAS, because counters mix two games in one application instance);
+  M5 `speed_run` (menu never opened, classic-only, piles only).
+Traps found (fixed in TEST, 1 in production):
+- `Animator._speed` is a GLOBAL exported static (Animator.gd:51) and `Application._ready()` ->
+  `load_config()` restores the SAVED speed AFTER the suite set `_speed = 0`; the saved config also has a
+  HUMAN seat 0, which parks a headless game at a tap. A menu fixture must pin speed + levels after `add_child`.
+- A plain `super()` in a `init_players` override makes the override NON-coroutine: fixtures that
+  `await main.init_players(seed)` return before the deal chain finishes (symptoms: empty families,
+  "575 plays"). Coroutine overrides need `await super(random_seed)` (the standing rule, re-paid).
+- Real production bug: the classic deal left a VARIANT family on the seat. Family data is inert in
+  classic mode (no classic path reads it) but NOT invisible - `Player.render_family()` draws the human
+  seat's stack from it - so a classic game started after an abandoned variant game showed a ghost family.
+  Fixed: `_new_round()`'s classic branch clears every seat's family with the rest of the round setup
+  (no-op in a classic-only app, so classic is untouched).
+- The audit baseline belongs to a ROUND; a game abandoned MID-ROUND leaves it inherited by the next game,
+  which audits a fresh 16-card supply against the dead game's discards ("Guard: _left == 5, expected 2").
+  The fixture calls `reset_audit()` at the new game's deal - harness-side, no production change.
+- The main pile is measured as a CEILING in the deal settle: every classic turn draws from it, so a poll
+  demanding the exact deal-time count races past it and times out.
+Files changed: application/application.gd, application/application.tscn, main/main.gd (classic clear),
+tests/noble_family_rules.gd (TEST M), tests/counting_main.gd (`init_players()` seam),
+tests/counting_application.gd (NEW: `start_game()` seam + PLAY counter).
+Gates: rules 1140 PASS / 0 FAIL / exit 0, 0 SCRIPT ERROR; noble smoke 40 variant rounds / 2 family-out
+/ 326 plays, exit 0; `--check-only` 0 script errors; classic smoke_games 300 rounds / 10 games / 137
+eliminations, 0 FAIL, 0 SCRIPT ERROR, exit 0.
+Blockers: none. Next: todo step 26 (stats screen gets a Noble Family column - the mode is chosen per
+game and never persisted, `Main.noble_family` is the single source of truth).
+
+## 2026-11-08 — todo step 12: AI draw policies (L1-L4 joint moves) — DONE
+Step 12's production code was ALREADY in main/main.gd..player/player.gd via commit 8d835d0 (step 11):
+select_move variant branches L1 valid_moves[0] / L2 uniform randi / L3 cheapest _drawn_type then
+cheapest play (played_type() <= _leftover_type, fallback to the draw-filtered list) / L4 unchanged
+weighted loop. So this iteration implemented the missing step 12 CHECK + GATE, not new production code.
+Production diff: none. Harness + docs only.
+
+Decisions:
+- --levels=DDDD on tests/noble_family_smoke.gd (1 digit per seat, 1..5). Default stays 4432. Makes
+  "levels 1-4 all play legal joint moves" a real-game measurement: 4p 1234, 3p 123, 2p 14, 4p 5454.
+- Legality rail check_joint_move() on each seat's move_chosen: fires BEFORE the chain animates the
+  draw, so family data + the 1-card hand the harness reads == the state the move was chosen from.
+  Checks: named family idx exists and names that slot's type; played type in (active, family[f]);
+  _leftover_type == the other card; Countess+man never plays the man; _played_card is a hand node for
+  idx 0 and null for idx 1; hand size 1; target rules per played type. Counted per AI level, fails on
+  violation / 0 checks / a configured level with 0 plays.
+- HARNESS LESSON (cost one debug cycle): the rail must state the target rule, not read
+  Main._other_protected. Naming a PROTECTED opponent is LEGAL when every other active seat is
+  protected (Handmaid edge case); my first rail inverted it and flagged 1 legal move per 6-round run.
+- --log=1 prints `LOG  r<round> s<seat> lvl<level> <Move>` per play, nothing nondeterministic in it
+  (Main._new_game seeds the global RNG per game, so a fixed seed == reproducible run). Replaces the
+  step 11 "count dump lines" determinism claim.
+- L1 note: 4p all-L1 in 40 rounds gives 0 family-out ends -> the suite's family-out gate exits 1
+  (93 eliminations, policy property, not a stall: L1 always takes family #0, fights start early).
+  Use --rounds=120 (3 family-out ends, exit 0); 2p/3p all-L1 hit family-out ends within 40 rounds.
+
+Measured (0 illegal joint moves, 15 runs, numbers in tests/README.md):
+- seed 20260607 levels 1234 twice -> byte-identical 330-line logs; levels 1111 twice -> identical 335;
+  2p levels 11 seed 777 twice -> identical 126.
+- 1234 seed 20260607 vs seed 999, 1111 vs 777, 2222 vs 777 -> all DIFFER.
+- 1111 vs 2222 SAME seed -> DIFFER (identical deals, policy changes the plays).
+- L1 fingerprint: 335/335 plays draw family index #0; in the 1234 run 78/79 plays the active card, the
+  1 exception is `Countess (1), draw Countess (#0), keep Prince` = the Countess forcing the drawn card.
+- L2/L3/L4 spread over family indices (L2 42/26/9 over #0/#1/#2) and play the drawn card ~as often as
+  the active one (L3 44/47, L4 38/45).
+- Regression: tests/noble_family_smoke.tscn (default 4432) exit 0; tests/noble_family_rules.tscn exit 0;
+  tests/smoke_games.tscn (classic, nested suite) exit 0; 0 SCRIPT ERROR lines.
+
+Files changed: tests/noble_family_smoke.gd (--levels, --log, check_joint_move, per-level counters,
+plays_by_level_str, _arg_str, header docs), tests/README.md (invocations + the "Step 12 - the AI draw
+policies" section). Committed 59818a8 (progress.txt NOT committed).
+
+Notes for the next iteration:
+- Next todo item: step 13 "Play the chosen draw" in main/main.gd `_on_move_chosen` is ALREADY done
+  (commit history: it handles move.is_noble(), sets _drawn_card, _played_card for idx 1) - steps 13,
+  14 (round end), 15 (Prince chain), 16 (reveal), 17 (audit) all look DONE in code + rules TESTS B/C/D.
+  progress.txt's "12 = next incomplete" list is behind the git log. Verify each step's gate against the
+  code before implementing: grep for the todo's step marker in main.gd and tests/README.md first
+  (README documents TESTS A..L = steps 4,11,14,15,16,17,18,19,20,21,22,23,24). Real remaining work
+  starts at step 26 (per-mode stats data), 27 (stats mode switch UI), 28 (stats plumbing),
+  29 (variant Help pages), 30/31 (test suites finished + README), 32 (classic sweep), 33 (impl doc),
+  34 (manual QA/exports), 35 (housekeeping). Step 25 wire-in exists in application.gd (progress.txt says
+  so) - step 25's Check ("PLAY -> picker -> NOBLE FAMILY starts a variant game") is a manual gate, only
+  its scene-level shape is pinned by rules TEST L.
+- Long Godot runs: nohup + poll (~30-90s per 40-round variant suite; tests/smoke_games.tscn is the slow one).
+
+## 2026-11-14 - Noble Family step 26: ONE stats table PER mode (commit 9015d84)
+
+Done (stats/stats.gd + application/application.gd + rules TEST N):
+- stats/stats.gd: `tables` = one Array[int] PER MODE (0 CLASSIC, 1 NOBLE FAMILY) + `mode` picking the
+  table the page shows and the table the game writes. `Array[Array[int]]` is REJECTED by Godot 4.7
+  ("Nested typed collections are not supported") -> outer Array untyped, every element a real
+  Array[int] (the shape Deck.prepare_noble() already returns).
+- MEASURED: Player.AI_Level.size() == 7 KEYS (Disabled=-1, Human=0, Level_5=5) -> a table is 14
+  counters (totals+wins per KEY); the page's 6 label rows show 12 of them; the Disabled pair is inert
+  (no game writes level -1) and keeping it is what makes application.gd's `2 * AI_Level.size()` size
+  rule and the fixture's formula agree. Stats.LABELS == "H12345" is a String: .length() == 6, NO size().
+- `_totals_and_wins` lives on as a getter/setter ALIAS of the CURRENT table: the getter hands out the
+  SAME array (Godot arrays are references, so application.gd's `alias[i] = clampi(alias[i]+1,..)`
+  mutates the table -> the app's two write paths are UNCHANGED); the setter normalizes a loaded plain
+  Array to Array[int] (a typed `table() -> Array[int]` raises on an untyped element: "Trying to return
+  a value of type Array from a function whose return type is Array[int]") and PRESERVES the length -
+  the app drops a save whose size != 2*AI_Level.size(), and a padding setter would silently accept the
+  old 12-counter format (step 28 owns that migration). Reset clears ONLY the visible table.
+  update_labels() guards a short table: the app assigns a loaded save WHOLE and checks its size only
+  afterwards, so a 0-length save (a missing key) is live for a moment.
+- application/application.gd: `start_game()` is the ONE line where a mode exists, so it sets
+  `_stats.mode` from `Main.noble_family`; the START-page stats open on CLASSIC (no game is running,
+  the mode is per game and never persisted), the PAUSE-page stats open on the running game's mode. The
+  `_stats.invoker = _start/_pause` lines stay - Back re-shows the page the player came from.
+- TEST N (60 checks; N1 shape, N2 two tables, N3 the alias contract, N4 reset, N5 labels, N6 a REAL
+  classic game writes ONE table, N7 the app names the mode). N6's measured numbers: 2 rounds -> 2
+  round_won and 8 round_finished (one per seat), the cfg LAGS the in-memory table so the fixture polls
+  for convergence; a classic game grows the classic table only, the noble table stays at zeros, the
+  save written back equals the table and is 14 long. N7: a variant game in progress switches the page
+  to the NOBLE table, the alias follows the mode, the classic table is untouched; the PAUSE page shows
+  the NOBLE table; EXIT clears the mode, so the START page shows the CLASSIC table again.
+
+Harness facts this step paid for:
+- Stats.LABELS.size() is a PARSE error ("Cannot find member \"size\" in base \"String\")" - the suite
+  prints NOTHING and exits 1. Strings have .length().
+- `const STATS_COUNT: int = 2 * Player.AI_Level.size()` is a PARSE error too ("Assigned value for
+  constant ... isn't a constant expression"): an enum's size() is not constant in 4.7. Spell the
+  measured 14 and keep the formula in the comment.
+- GODOT'S STDOUT TAIL IS LOST when the suite's output is redirected (`script -qec` PTY and a plain
+  file: same loss). The COMMITTED suite's own log ends at M4's last check - its M5 checks and its
+  "ALL CHECKS PASSED" line are missing there too. `grep -c PASS` is therefore a LOWER BOUND (1200
+  measured, the true total is higher) and a fixture section appended at the END of `_ready()` has no
+  printed evidence: TEST N sits BEFORE TEST M for that reason. Step 26's first 3 runs chased a "the
+  suite dies at M5" that was not there.
+- preload("res://stats/stats.tscn") at the top of the suite -> "ERROR: 2 resources still in use at
+  exit"; instantiate the page with load(...).instantiate() (the suite's own step-11 rule).
+- Freeing an app whose DEAL is still animating = 6 script errors (animator.gd:48 'faceup' and :51
+  'position' on Nil, each with "Lambda capture at index 1 was freed"). Settle FIRST with
+  _settle_menu_deal(app, NOBLE_FAMILY_4P, 0) - TEST M's recipe, N7's first run measured the errors.
+- `pgrep -fa godot` before a fixture that reads user://options.cfg: a stale run is a concurrent writer.
+  A run started WITHOUT `timeout` was found alive after 1h+ (TEST M's speed_run cascade keeps playing
+  games at `_speed = 0`): bound every godot run with `timeout`.
+
+Measured: 8 sabotages, each applied alone, suite run, reverted (table in tests/README.md): shared table
+7 FAIL; copying alias getter 5 (the app's counters stay 0 - the write path dies); reset clears both 2;
+update_labels() reading MODE_CLASSIC 3; default mode NOBLE 12; setter padding a short save 3; no mode
+in start_game() 2; the start page pinning NOBLE 1. Clean tree: rules suite 1200 PASS, 0 FAIL, 0 SCRIPT
+ERROR, exit 0 (1140 PASS before step 26); classic gate tests/smoke_games.tscn exit 0, 0 SCRIPT ERROR
+(the nested suite runs TEST N inside it); `godot --headless --path . --check-only --quit project.godot`
+exit 0.
+
+Files changed: stats/stats.gd, application/application.gd, tests/noble_family_rules.gd, tests/README.md
+(the TEST N section). Committed 9015d84 (progress.txt NOT committed).
+
+Notes for the next iteration:
+- Step 27 (stats-page mode switch): the DATA is done, the UI is a segmented Classic / NOBLE FAMILY
+  control on stats.tscn + `update_labels()` on switch. The page's own choice is per-visit and must not
+  fight application.gd's 3 mode lines (start_game, the two page openers).
+- Step 28 (stats plumbing): the save is STILL ONE key (Gameplay/totals_and_wins = the CURRENT table),
+  so a variant game's numbers land under the legacy key and come back as the CLASSIC table on the next
+  boot. TEST N already pins the rule step 28 must keep: the legacy key IS the classic table, and a save
+  of the wrong length is dropped. Step 28 adds a noble key + the 12->14 migration Check; N6's drop-rule
+  Check is the one that flips when the migration lands.
+- Steps 29-35 (variant Help pages, suite finish + README, classic sweep, impl doc, manual QA,
+  housekeeping) are the rest of docs/noble-family-todo.md; steps 13-25 are DONE in code + TESTS A..M
+  (progress.txt's "next incomplete" list behind the git log, as noted above).
+
+## 2026-11-14 - Noble Family step 27: the stats page's OWN mode switch (todo §C.27) - DONE
+
+Done (stats/stats.tscn + stats/stats.gd + rules TEST O). Todo item: "### 27. Stats page mode switch
+(UI)" - Files stats/stats.tscn + stats/stats.gd, Check "Stats page flips between two tables, mode
+letter matches, reset clears only the visible table, no label is covered by a button", Gate "per-mode
+stats are reachable in 84x48". All four are pinned by measurement (TEST O, 60 checks).
+
+- stats/stats.tscn: +1 Label `ModeLabel` at (0,10) and 2 `level_selector/digit_button.tscn` instances,
+  `LeftButton` `frame = 12` (Frame_Left) at (0,19), `RightButton` `frame = 13` (Frame_Right) at (0,29)
+  - the EXACT positions the todo suggests, no editor needed. The page is 11 children now (6 counter
+  Labels + 1 mode Label + Back + Reset + Left + Right); the 2 `pressed` connections live IN THE SCENE.
+  The left margin (x 0..15) is the only column of the 84x48 board no counter row uses - the rows start
+  at x 16 - so nothing on the page moved to make room.
+- stats/stats.gd: `MODE_LETTERS = "CF"`, `mode_letter()`, the public seam `show_mode(next)`,
+  `_on_left_button_pressed()` = show_mode(mode - 1), `_on_right_button_pressed()` = show_mode(mode + 1),
+  and show_mode calls update_labels() so the rows AND the letter flip in the press's own frame (a
+  Button `pressed` signal runs its handler synchronously - measured before any process_frame).
+- KEY DECISION: the switch NAMES NO MODE. application.gd's 3 mode lines (step 26) stay the only place
+  in the project that chooses a mode; `show_mode` takes a DELTA (Left/Right), never a mode, so the
+  page's own choice is a per-VISIT view. O5 pins the consequence: every app page open re-pins the mode
+  (start page = classic, pause page = the running game's, start_game = the game being started), a
+  CLOSED page keeps the browsed mode, and a flip NEVER changes main.noble_family.
+- THE BUG THIS STEP FOUND (kept in the suite as a permanent check): `wrapi`'s UPPER bound is
+  EXCLUSIVE. `show_mode` written as `wrapi(next, 0, MODE_COUNT - 1)` clamped EVERY press to mode 0 -
+  the arrows pressed, the letter stayed "C", the NOBLE table was UNREACHABLE (14 FAILs, modes
+  [0,0,0,0]). Correct: `wrapi(next, 0, MODE_COUNT)`.
+- MEASURED, recorded as a check: a 2-mode page has NO DIRECTION - from every mode show_mode(m+1) and
+  show_mode(m-1) land on the SAME mode, so a Left/Right swap in the handlers is BEHAVIOURALLY
+  INVISIBLE at 2 modes (the sabotage S2 printed 1260 PASS, 0 FAIL, exit 0). Direction is pinned by the
+  GLYPHS (12/13, not the Back glyph - S9 caught it: 1 FAIL) plus the DELTA CONTRACT (Right =
+  wrapi(m+1), a Left then returns to the mode the pair started from), which is the only thing the swap
+  can break and only becomes observable if MODE_COUNT ever grows past 2.
+- TEST O = 60 checks in 6 fixtures, run BEFORE TEST M (the tail-of-stdout rule from step 26): O1 the
+  margin (14: widget type, glyphs+sprite, inside 84x48, Back's PRE-EXISTING 1 px over the 48 px guide
+  recorded, >= 9x9 board px = >= 72x72 real px, x 0..15, no vertical overlap, NOTHING covered
+  (measured []), rows unmoved, scene connections, is_visible_in_tree in both modes, letter text width
+  fits its 9 px column); O2 a flip browses (11, incl. the ring + the contract + the wrapi fact); O3 the
+  letter (9); O4 reset follows the visible table (8, reached through the page's own arrows); O5 the app
+  re-pins (13); O6 THE WRITE TARGET TODAY (5).
+- O6 = the measurement step 28 must flip: both tables zeroed, a variant 4p game on levels 2/3/2/3, the
+  page flipped to CLASSIC, resumed WITHOUT reopening the page -> the round end lands sum(classic) == 6
+  == round_won + round_finished emissions and sum(noble) == 0, because `_totals_and_wins` IS
+  tables[mode] (the PAGE's view) and application.gd's `_on_round_won` / `_on_round_finished` name no
+  mode. The mitigation that exists today is O5's: every page open re-pins the mode, so the ONLY path to
+  the wrong table is flip-then-resume without reopening.
+- Harness facts this step paid for: (a) `Signal.get_connections()` Dictionary keys in Godot 4 are
+  ["signal","callable","flags"] - there is NO "method" key, the method name lives IN the Callable
+  (measured "Invalid access to property or key 'method' on a base object of type 'Dictionary'"); (b) a
+  runtime script error aborts ONLY the fixture it fires in, so one broken helper line prints a wall of
+  downstream FAILs - the first TEST O run printed 14 FAILs whose single cause was (a) inside O1; (c)
+  the suite's EXIT LEAK COUNT IS NOISY: the SAME tree printed no leak warning, 4, 6 and 8 leaked
+  ObjectDB instances across recorded runs, so do NOT read a 2-instance swing as evidence. O2's invoker
+  sentinel is the SUITE (panel.invoker = self) because a Node a cycle holds is never freed - not
+  because a counter proved it; (d) a fixture must snapshot state where it produces it: inserting the
+  ring block between the 10-press loop and its own check made the CLEAN baseline print 1259 PASS / 1
+  FAIL (the block's own presses moved the page) - a bug in the fixture, not in the game.
+
+Gates measured: rules suite 1260 PASS / 0 FAIL / 0 SCRIPT ERROR / exit 0 (1200 before step 27); 10
+sabotages applied ALONE + restored byte-identically (S1 clamped wrap 14 FAIL; S2 swapped arrows 0 FAIL
+= the finding; S3 hardcoded letter 6; S4 no update_labels 11; S5 arrows over the counter rows 3
+(O1 incl. the coverage check measuring ["row2",...]); S6 flip clears the table 4; S7 reset clears both
+4 (O4 x2 + N4 x2); S8 flip closes the page 2; S9 Right gets the Back glyph 1; S10 the app's Back pins
+classic 1); classic gate `godot --headless --path . tests/smoke_games.tscn` exit 0 with 0 SCRIPT ERROR
+(the nested suite runs TEST O inside it); noble gate tests/noble_family_smoke.tscn exit 0, 40 rounds /
+80 eliminations / 326 plays / 1615 `_left` audits / 0 violations - identical to step 26's numbers, so
+classic and variant behaviour are untouched; `--check-only --quit project.godot` exit 0.
+
+Files changed: stats/stats.gd, stats/stats.tscn, tests/noble_family_rules.gd (TEST O + the suite
+header), tests/README.md (the new TEST O section + the 10 sabotage rows). progress.txt NOT committed.
+
+Notes for the next iteration:
+- Step 28 is next: index `_on_round_won` / `_on_round_finished` by `_main.noble_family_index()` (O6's
+  checks are the ones that flip: noble sum == the emission count, classic sum == 0 - do NOT rewrite O6
+  to match step 28 in advance), split the save into `Stats/classic` + `Stats/noble_family`, read the
+  legacy `Gameplay/totals_and_wins` into the classic table when the new keys are absent, keep the
+  per-table stale-size drop (N6's drop-rule check is the one that flips).
+- Manual gate (eyes on the layout) has NOT been run since step 20; step 34 owns it. The arrow glyphs,
+  the 9 px targets, the letter and the no-coverage rule are pinned by MEASUREMENT (O1), not by eyes -
+  if a real screen shows the margin reading badly, that is a step-34 finding, not a rules-suite one.
+- Nothing in main/ / player/ / deck/ / ai_methods.gd changed in this step; classic mode is untouched.
+- The todo's §C.27 names Left/Right arrows + a 1-char letter (an earlier note of mine said "segmented
+  Classic / Noble Family control"); the arrows are the spec and the letters C/F are the spec's, so the
+  page names its table with the SAME index the tables are stored under.
+
+== 2026-08-20 · Noble Family step 28: the counters follow the GAME, the save is 2 keys, an old save migrates (todo §C.28) ==
+
+TASK: step 28 - "the stats SAVE and the counters are per mode: a round played in the variant updates
+the variant table, a round played in classic updates the classic one, and an old (pre-variant) save
+migrates into the classic table". Commit a72e517 (main/main.gd, application/application.gd,
+tests/noble_family_rules.gd, tests/README.md). progress.txt NOT committed, as usual.
+
+DECISIONS + REASONING:
+- `Main.noble_family_index() -> int` (`MODE_NOBLE if noble_family else MODE_CLASSIC`) is the ONE place
+  that turns a property of the DEAL into a table index. A counter is filed by the game that PLAYED the
+  round: `round_won` arrives from the game, never from the page, and step 27 gave the player two arrows
+  = a VIEW he can move mid-game. So `_on_round_won` / `_on_round_finished` write
+  `_stats.tables[_main.noble_family_index()]`. The mode flag IS the index, so the write path needs no
+  third source of truth (P5 measures that).
+- SAVE FORMAT: `Stats/classic` + `Stats/noble_family`, and BOTH are written on EVERY save. A save that
+  wrote only the current mode's table would ERASE the other mode's history at the next boot, because
+  `load_config()` rebuilds both tables out of one file. `Gameplay/totals_and_wins` is retired as a
+  WRITE target and stays a READ target - a new-format file never grows a legacy twin of a table (P1
+  measures the `Stats` key list == ["classic","noble_family"] and that `Gameplay` keeps only `speed`).
+- MIGRATION: a legacy save is the CLASSIC history (there is no other history it could be). The
+  pre-variant table is 12 counters and a table is 14, so the gap is padded at the TAIL - measured
+  reasoning: `_on_round_won` writes `2 * level` and `AI_Level.Disabled` is -1, so `2 * -1 == -2 ==`
+  slot 12 of a 14-slot array; the tail pair is exactly the pair no pre-variant game could write, so the
+  migration MOVES NO NUMBER and only adds two zeros (P2 pins Human's pair on 0/1, Level_5's on 10/11,
+  and the padded pair as the Disabled pair). Only the ONE length the old format had (12) is padded; a
+  14-counter legacy save passes through unchanged; a 5-counter one dies in the size drop; and the new
+  keys WIN over the legacy key, because migrating on every boot double-counts (P2).
+- THE STALE-SIZE RULE IS PER TABLE. The pre-variant code dropped "the" table by calling the Reset
+  button from the load path - a page that clears the player's history as a side effect of booting. Now
+  a 3-counter `Stats/classic` zeroes classic and the SAME file's noble table SURVIVES (P3, both
+  directions). S5 (a joint drop) is the sabotage that deletes a healthy variant history: 9 FAIL.
+- TEST P = 66 checks in 5 fixtures (P1 24 / P2 17 / P3 9 / P4 9 / P5 7), runs BETWEEN TEST O and TEST N
+  because P DELETES and REWRITES `user://options.cfg` and N6 reads that file at the start of N's tail -
+  the section that mutates the file can never sit after the section that reads it. Every fixture backs
+  up the player's file and writes it back.
+- O6 FLIPPED as step 27 said it would (5 -> 6 checks): a variant game's round ends land
+  sum(noble) == round_won + round_finished emissions, sum(classic) == 0. N6 is re-measured against the
+  new format (11 checks, the migration + per-table-drop fixture) and its "the noble table is zeros after
+  a classic game" check became a DELTA check - once a file HAS a noble key, "zeros" is a fixture
+  assumption and not a fact.
+- TEST P's numbers: variant 2 rounds -> noble [0,0,0,0,1,2,1,2,0,4,0,0,0,0], sum 10 == 2 `round_won` + 8
+  `round_finished`; classic 2 rounds -> [0,0,0,0,0,2,1,2,2,4,0,0,0,0], sum 11 == 3 + 8; the noble table
+  and key are EXACTLY what the variant game left (10 == 10) after the classic game AND after a second
+  restart. Counters are counted on SIGNALS (`round_won` / `round_finished` connected to the app's own
+  `_main`), the suite's own copy of the load rules re-reads the written file, and the migration/drop are
+  measured by writing the save FILE and booting a fresh app (never by poking the tables).
+
+HARNESS FACTS THIS STEP PAID FOR (measured, and the reason a full suite run was needed):
+- `ConfigFile` in Godot 4.7.2 has ONE presence method: `has_section_key(section, key)`. `has_value`,
+  `has_key`, `is_key_present`, `is_section_key_present` DO NOT EXIST (measured by dumping a real
+  ConfigFile's methods). Calling a nonexistent method through a `Variant`-typed base is a RUNTIME error:
+  `--check-only` stayed green across both bugs and the suite printed 15-16 FAILs whose only cause was
+  one helper line. TEST P pins this in a comment.
+- A fixture with per-mode counters must poll per-mode counters. `_run_menu_rounds()` polls `_st_won`
+  (the suite-wide list TEST M's shared handler feeds); P counts `_st_pw_won[mode]`, so its first call
+  returned INSTANTLY on the previous fixture's leftovers and drove no rounds ("0 of 2 after 5 driven
+  round(s)").
+- A SECOND game in the SAME app dies on `Main.resolve_effect`'s "Player N has 1 card" assertion the
+  first time the classic target modal resolves with `type Unknown` (measured: `resolve_effect for Guard,
+  player 2, type Unknown` -> assertion -> the game's coroutine is dead -> 0 round ends in 4000 frames).
+  It reproduces with step 28's changes REVERTED (stash + HEAD run), so it is a pre-existing landmine of
+  the raw-app harness, NOT a step-28 finding: TEST M's post-exit classic game never walks into it
+  because it counts PLAYS and never waits for a round end. P1's restart chain (a fresh app per game) is
+  therefore a measured requirement, not style. The temporary probes hit the same assertion on the
+  original code, which is how it was proven.
+- `save_config()` has exactly ONE caller: `save_stats.emit()` at main/main.gd:879. A round end is the
+  only thing that writes the file, so a fixture can only poll a file a round end wrote.
+- A long poll burns the counters it measures: at `_speed = 0` a settled deal plays a full round in tens
+  of frames, so a 2500-frame convergence poll let the live table drift past the harness's own tally.
+  P's convergence budget is 600 frames.
+
+GATES MEASURED: `--check-only --quit project.godot` exit 0, no script errors; rules suite 1327 PASS /
+0 FAIL / 0 SCRIPT ERROR / exit 0 (1260 at step 27 = +66 TEST P +1 O6); classic gate
+`godot --headless --path . tests/smoke_games.tscn` exit 0, 1327 PASS / 0 FAIL / 0 SCRIPT ERROR (the
+nested suite runs TEST P inside it); noble smoke 4p (seed 20260607, 40 rounds) exit 0, 80 eliminations /
+326 plays / 2 family-out ends - IDENTICAL to step 27's recorded numbers, so variant behaviour is
+untouched. Sabotages (each applied ALONE, restored md5-identical, no MISMATCH): counters always file
+classic 8 FAIL; save writes only `Stats/classic` 11; loader ignores the legacy key 6; migration pads at
+the HEAD 6; the size rule drops BOTH tables 9; the mode->table mapping is swapped 18.
+
+BLOCKERS / NOTES FOR THE NEXT ITERATION:
+- KNOWN PRE-EXISTING GATE FAILURE, NOT THIS STEP'S: the variant smoke 3p and 2p runs exit 1 on AI-level
+  COVERAGE, not on rules - 3p: "no play was made with AI level 2" (seat levels 4432, L4=217 L3=90 L2=0);
+  2p: "no play was made with AI level 3" and "... level 2" (L4=203, L3=0, L2=0). Measured IDENTICAL at
+  HEAD with step 28's files stashed, and the numbers match the old baseline exactly (3p 57/307/3,
+  2p 33/203/7). The recorded `GATES OK` for the variant suite requires 4p|3p|2p all green, so closing
+  this belongs to step 30 (the Noble Family smoke suite) - it is an AI-policy coverage gap at low seat
+  counts on the recorded seed, not a stats/save problem. 4p is green.
+- `tests/noble_family_rules.gd` is now ~7200 lines. TEST P's fixtures build and free 3-4 whole app
+  scenes per run and mutate `user://options.cfg`; any new fixture that reads the save file must run
+  AFTER P's backup/restore (P is before N for that reason), and any fixture that needs ROUND ENDS from a
+  second game needs a FRESH app (see the resolve_effect landmine above).
+- The `Disabled` tail coincidence (`2 * -1 == -2 ==` slot 12) is real and load-bearing for the migration:
+  if `Player.AI_Level` ever gains a level below `Disabled`, or `Disabled` stops being -1, P2's padded-pair
+  check is the check that fires.
+- Nothing in main/'s game logic, player/, deck/, ai_methods.gd, stats/stats.gd changed; the only main.gd
+  addition is the 3-line index function. Classic play is untouched (classic gate green).
+- Next step per the todo: §C.29 (the Noble Family HELP lines - the help page must state the variant's
+  rules the way the suite enforces them), then §C.30 (the Noble Family smoke suite). Manual gate (eyes
+  on the layout) is still not run since step 20; step 34 owns it.
+
+
+== 2026-08-21 · Noble Family step 29: the variant's rules live in Help, 4 pages a classic game never shows (todo §C.29) ==
+
+TASK: step 29 - "append 4 `card_help_page.tscn` pages with `show_card = false`, tagged with a new
+exported `variant_only: bool` on `card_help_page.gd` (Family Setup / Family Turn / Family Out / Family
+Round End); `help.gd` hides `variant_only` pages when a variant game is not active (add
+`var variant_active: bool` set by `application.gd` from `_main.noble_family`) and keeps `_active_page`
+clamped after filtering". Check: Start-page Help shows only classic pages; Pause Help during a variant
+game shows the 4 extra pages; left/right paging never lands on a hidden page. Gate: rules text matches
+the implemented numbers. Changed: help/help.tscn (4 pages), help/help.gd (the filter + clamp),
+help/card_help_page.gd (the tag), application/application.gd (the pin at both openers),
+tests/noble_family_rules.gd (TEST Q, 85 checks), tests/README.md. progress.txt NOT committed, as usual.
+
+DECISIONS + REASONING:
+- The tag is DATA on the page widget, not a list of page names in `help.gd`. `variant_only` is set in
+  the editor; `is_reachable(i)` is `variant_active or page.variant_only != true`. A page list in the
+  page script (by name or index) would have to be maintained twice - and S8 (one page untagged) shows
+  what the data version does with a single missing tag: 20 FAILs across 4 fixtures.
+- `variant_active` is a property SETTER, not the plain `var` the todo sketches: the filter has to
+  re-run the moment the mode changes, and the clamp lives in `update_pages()`, which the setter calls.
+  The mode is per game and never persisted (step 25), so the flag is re-pinned from
+  `Main.noble_family` at EVERY open (Start and Pause), not at boot and not in one opener only.
+- The 4 pages are the game's OWN page widget (`card_help_page.tscn` instances, `show_card = false`), so
+  they inherit the paging, the font and the 84 x 48 layout; they sit as ONE block at indices 9..12 -
+  after `Game End`, before `Guard` - so the 9 rules pages stay together and the 8 card pages keep their
+  place. The scene grows 17 -> 21 pages and a classic game reaches 17: variant pages are HIDDEN, never
+  deleted, so no mode needs a rebuild (Q6 measures the page count inside a classic game).
+- THE 4TH PAGE IS NAMED BY MEASUREMENT, not by the todo's wording. The todo calls it "Family Round End";
+  measured against the arrows' own rects (they own x 15..24 and x 75..84, the centered name row is y
+  2..8) a name has 52 px, and "Family Round End" is 64 px. The page is "Family Ends" (44 px), and Q5
+  makes the measurement a gate (S10 renamed it back: 2 FAILs).
+- THE NUMBERS ARE CHECKED, NOT QUOTED. Q5 reads the triple that FOLLOWS each clause keyword ("Set
+  aside", "family", "main pile") and compares it with `Deck.NOBLE_BURN` [3,1,0],
+  `Deck.NOBLE_FAMILY_SIZE` [5,4,3] and the leftovers computed as `16 - burn - seats - family*seats`
+  == [1,0,0], plus "Hand 1". The first version asked "does the page's digit list CONTAIN 3/1/0" and
+  sabotage S5 (the burn row typed `4 / 1 / 0`) printed 0 FAILs - the page contains a 3,1,0 run across
+  the family row and the main-pile row. Clause-scoped matching is what makes the gate real.
+- THE CLAMP IS "THE NEAREST REACHABLE PAGE BELOW", NOT PAGE 0. A player who read the variant rules and
+  re-opens Help in a classic game lands on `Game End` (8), the page below the block: a clamp to 0 is a
+  page he never asked for, keeping 12 is an index with nothing on screen. A mode switch that needs NO
+  clamp moves NOTHING (a card page is reachable in both modes) - switching modes is not a page reset,
+  the same rule step 27 gave the stats page.
+- Q6 goes STRAIGHT from the variant game's Help into a classic game with NO Start-page Help in between,
+  because that is the only path where a flag set by the variant game can be seen by a classic game
+  (S14: 3 FAILs). The Start-page open is then measured as a second opener.
+
+SUITE: TEST Q = 85 checks in 6 fixtures (Q1 10 scene shape, Q2 15 the classic ring, Q3 11 the variant
+ring, Q4 13 the mode switch WHILE A PAGE IS OPEN, Q5 15 the text/numbers/geometry, Q6 21 the app pins
+the pages at every open). Runs between TEST P (which restores `user://options.cfg`) and TEST N (which
+reads it), and opens the real app twice, per the tail-of-stdout rule recorded under TEST N.
+
+HARNESS FACTS (measured, written into tests/README.md):
+- `Array.reverse()` mutates in place and returns null: `for i in reach.reverse()` iterated over null
+  and the left arrow silently stopped moving. Copy, then reverse.
+- `Control.get_rect()` is positioned at the control's OFFSETS, so `rect.has_point((0, y))` is false for
+  every one of the 21 pages - a gate that fails the whole tree is a gate about the gate. Compare the
+  rect's END (y 44) with the text's bottom (`12 + lines * 6`).
+- A paging sample is taken AFTER the press. Sampling before each press + prepending the page Help opened
+  on produced ["About", "About", "Deck", ...] - the first page twice, every expectation shifted by one.
+- `get_node()` is CASE-SENSITIVE ("leftButton" is no node at all).
+- A fixture that INDEXES a measurement crashes when a sabotage empties it: S7 (filter inverted) leaves
+  0 pages reachable in classic mode and Q2's `rn[0]` threw a script error next to its 24 FAILs.
+- MEASURED AND LEFT ALONE: 5 pre-existing classic card pages (Guard, Baron, Handmaid, Prince, Princess)
+  print a 6th line BELOW their own 32 px Description rect (12 + 6 * 6 == 48 > 44), on the 48 px board,
+  in the 4 px the page has under its label. Q5 pins the list of 5 names; step 29 touches no classic page.
+
+GATES MEASURED: `godot --headless --check-only --quit project.godot` exit 0, 0 script errors; rules
+suite 1412 PASS / 0 FAIL / 0 SCRIPT ERROR / exit 0 in 66 s (1327 at step 28, +85 = TEST Q); classic gate
+`tests/smoke_games.tscn` exit 0, 1413 PASS / 0 FAIL / 0 SCRIPT ERROR (the nested suite runs TEST Q
+inside the classic gate); noble 4p gate `tests/noble_family_smoke.tscn` exit 0, 40 rounds / 6 games /
+2 family-out ends / 80 eliminations / 326 plays / 30 prince plays / 1615 `_left` audits / 0 violations -
+IDENTICAL to step 28's recorded numbers, so variant play is untouched.
+
+SABOTAGES (each applied ALONE to the pristine tree, suite run, bytes restored, md5-checked, no
+`RESTORE MISMATCH`; clean tree 1412 PASS): app passes a CONSTANT true 5 FAIL; the Pause open forgets the
+flag 6; the Pause open sets the flag only when true 3; the right arrow steps the raw child index 8;
+`update_pages()` never clamps 10; the burn row typed `4 / 1 / 0` 1; the Setup page drops its family row
+2; the filter inverted 24 (+1 fixture script error); one page untagged 20; the round-end line tests the
+whole table 2; the page named "Family Round End" 2; card art on a variant page 1.
+
+BLOCKERS / NOTES FOR THE NEXT ITERATION:
+- THREE sabotages printed 0 FAILs and the README says so: the Start-page open's flag assignment ("set
+  it", "set it only when true" and "do not set it at all" are the same observable behaviour, because
+  `Main.noble_family` is ALWAYS false at the Start page - boot is false and step 25's Exit-to-menu
+  clears it), and the left arrow's filtered scan (`update_pages()` clamps every move, so a raw index and
+  a scan land on the same page in every reachable configuration). The lines are kept because they state
+  the rule; the suite cannot falsify them, and that is recorded rather than hidden.
+- The variant smoke 3p / 2p gate failure is UNCHANGED and is not this step's: 3p exit 1 (57 eliminations
+  / 307 plays / 1515 audits, L4=217 L3=90 L2=0 - "no play was made with AI level 2") and 2p exit 1 (33 /
+  203 / 982, no L3/L2 play) - the same numbers step 28 recorded. It is step 30's coverage gap.
+- `help.gd` now owns a mode filter; if a THIRD mode ever appears, `variant_only` needs per-mode
+  semantics. Q1 pins the tag counts on both sides (4 tagged, 17 untagged), so that change cannot land
+  quietly.
+- The Help text is MEASURED (numbers, the todo's rule words, geometry), not proofread, and no eyes-on
+  layout gate has been run since step 20. Step 34 owns it.
+- Next step per the todo: §C.30 (the Noble Family smoke suite - the variant games as a gate, the
+  3p/2p AI-level coverage above), then §C.31 (joint move legality + L1 determinism claims).
+
+## Step 30 — variant smoke suite finished (docs/noble-family-todo.md, Phase D) — DONE
+
+Completed: `tests/noble_family_smoke.tscn` (bare invocation) now plays 2p + 3p + 4p variant games in
+ONE process, gates each count, and asserts >= 100 rounds in total. Commits `fedfbd2` (suite) +
+`896281d` (measurements, docs, suite fixes).
+
+Key decisions and reasoning
+- `COUNTS = [2, 3, 4]` is the default; `ROUNDS = 40` per count (120 rounds), `MIN_TOTAL_ROUNDS = 100`;
+  `--players=N` pins one count (step 7/11/12/14/17 invocations keep working, the bar applies to
+  whatever ran, so single-count = `--players=4 --rounds=100`).
+- Each count is a FRESH `Main` scene (own seed, own counters, own `Main.max_games`) + `_stop_game()`
+  = `interrupted = true`, wait for `_animation_layer` empty, `queue_free()`. `Main._new_game()`
+  re-seeds per game, so counts share nothing: two canonical runs are byte-identical (first 3530
+  lines) except the `/usr/bin/time` line; seed 999 differs in 6344 diff lines.
+- Per-count gates (`_run_gates`): rounds reached, >= 1 elimination, >= 1 family-out end, pairing rail
+  ran, `_left` audit ran / not-only-skipped / 0 violations, 0 per-round rule failures, 0 illegal joint
+  moves + the legality rail ran, EVERY SEAT ON THE BOARD made a move, `game_counter < max_games`.
+- The coverage gate was the bug: it walked all `--levels` digits, so the default 4432 asked the 2p
+  board for plays by the levels of the seats 2p DISABLES. 2p and 3p exited 1 with every rule check
+  green. Now the loop is `for i in count` and counts `plays_by_seat[i]`. Sabotage (old loop restored):
+  exit 1 with exactly 3 FAIL lines (2p L3, 2p L2, 3p L2).
+- `gate_fail()` prints without touching `_failures`, and gates are printed ONCE (in `_report`, under
+  the count's RUN line) so `grep -c ^FAIL` counts each failure exactly once. Sabotage (per-count gates
+  collected as `[]`): the 4p-all-L1 FAIL line printed, suite printed PASS and exited 0 -> the
+  per-count gates are what decide the exit code.
+
+Measured (seed 20260607, `--levels=4432`, 40 rounds per count, 37 s wall, exit 0, 0 script errors)
+- 2p 44: 40 rounds, 5 games, 33 eliminations, 203 plays (20 Prince), 7 family-out ends, 982/40/0 audits
+- 3p 443: 40 rounds, 5 games, 57 eliminations, 307 plays (40 Prince), 3 family-out ends, 1515/40/0
+- 4p 4432: 40 rounds, 6 games, 80 eliminations, 326 plays (30 Prince), 2 family-out ends, 1615/40/0
+- total 120 rounds, 170 eliminations, 836 plays, 12 family-out ends, 4112 audits / 120 skips / 0 violations
+- per-count numbers equal the single-count baselines taken the same day -> merging the boards changed none
+- green: seed 999 (177/819/8), seed 777 (163/840/14), `--levels=1234` (183/787/8), `--players=4 --rounds=100`
+  (193 eliminations, 828 plays, 6 family-out ends). exit 1: `--rounds=30` (90 < 100 bar),
+  `--levels=1111 --seed=777` (4p all-L1: 0 family-out ends, 93 eliminations - policy, not a stall).
+- classic `tests/smoke_games.tscn` exit 0 and `tests/noble_family_rules.tscn` exit 0, both clean.
+
+Harness facts (in tests/README.md, step 30 subsection)
+- `--check-only` reported BOTH real parse failures as clean (a bare `var m: String = a + b` continued
+  with a leading `+`; `"x" + int` typed concat). Preflight is a 2-round REAL run, timeout-bounded,
+  grepping `Failed to load script`.
+- A scene whose root script fails to load runs FOREVER (73-byte log, killed at 600 s): every run is
+  timeout-bounded, and `Failed to load script` is what separates a parse failure from a stall.
+- The suite's PASS line contained the string the step-30 gate greps for, so a green log matched its
+  own gate (`grep -c 'SCRIPT ERROR'` -> 1 on PASS, 0 on FAIL: inverted). Reworded.
+- stdout is block-buffered into a log file (only the banner for minutes); a launcher needs `stdbuf -oL`.
+- `pkill -f <pattern>` kills the shell running it (the harness runs `bash -c "<command>"`): exit
+  143/137, and a surviving script keeps launching runs. Kill by process image (`pgrep -x`, the
+  `Godot_v4.7.2...` binary).
+- Sabotage that the suite CANNOT falsify (recorded honestly): freeing a finished count with no
+  interrupt and no settle -> 0 FAIL, 0 script errors. The guard is kept (costs one await loop/count).
+
+Files changed: `tests/noble_family_smoke.gd`, `tests/README.md`.
+
+Notes for the next iteration (step 31, variant rules repro suite)
+- `docs/noble-family-todo.md` is NOT edited by step commits (plan only); results go to tests/README.md.
+- Step 31 wants scripted cases (steps 4, 14, 15, 16 + joint move legality + L1 determinism) collected
+  in `tests/noble_family_rules.gd` with `tests/fake_deck.gd`. Most of those cases already exist in the
+  rules suite (step 29's commit added 651 lines there); step 31 is mostly COLLECTION/naming + a
+  README section, so read the existing TEST A-E list before writing anything.
+- Run the new preflight first: `timeout 150 godot --headless --path .
+  tests/noble_family_rules.tscn -- --players=2` style short run, then the full suite with `timeout`.
+- Never run two godot processes on this project at once: leftover processes from a finished batch
+  hide the real cause of a stalled run (3 runs reported `exit=143 secs=600` while a parse failure was
+  the cause). Kill leftovers before measuring.
+
+## 2026-08-20 — step 31: joint move legality rails + level 1 determinism (todo §D.31), commit 06571b8
+
+Task: step 31 (variant rules repro suite). The six scripted cases the step lists were ALREADY in
+`tests/noble_family_rules.gd` (A/C deal table + family-out end, J the human modal rails, D the Prince
+family/widow/elimination chain, E the elimination reveal, I a human Countess-forced play), so the step's
+real content is the two things no section had: a rule statement that runs on EVERY play of EVERY game,
+and a determinism gate that compares GAMES. Added as TEST R (21 checks).
+
+Key decisions
+- The rail is `CountingMain.joint_legality(move, seat)`: ~20 numbered rules over the LIVE board, each
+  with its own message (draw slot exists in a 1-CARD seat's family; played X is one of the pair; X +
+  kept BE the pair; the Countess pair plays the Countess; per-type target rules; the protection rule
+  STATED FROM THE SEATS - the harness never reads `Main._other_protected`, because a rail that reads the
+  implementation's flag checks the implementation, not the rule; the node shape - a drawn play has no
+  hand node, an active play references it).
+- Two seams, because "enumerated" and "committed" are different sets: `check_enumeration()` runs the
+  rail on the FULL `find_valid_moves()` list at `_begin_play_selection` (465 moves checked in R1 vs 17
+  plays - the todo's "every enumerated move" is only checkable there), and the committed triple is
+  checked at `_on_move_chosen` BEFORE the chain animates the draw, then appended to `move_log`.
+  Countess forcing is counted in BOTH directions (active Countess vs drawn Countess - the drawn play is
+  the only one that plays a card with no node at decision time).
+- R1's fixture is fictional on purpose (4 Countesses, twice the supply; every 3-card family carries a
+  man) so a forced pair appears 4x per round, and the whole round is DERIVED in the section header from
+  the level 1 policy (`valid_moves[0]`) and then reproduced by the printed log: 8 plays / 9 turns, round
+  2 9 plays / 10 turns -> 17 plays, 19 turns, 8 forced pairs (4 + 4), 0 eliminations, 0 pile draws.
+  The derivation is non-obvious where the turn's family draw runs BEFORE the play and its effect: a
+  King swap moves the card the actor KEPT, a Prince hit spends the VICTIM's next family card - which is
+  why seat 0's family-out ends both rounds.
+- Determinism compares PLAY LOGS (`Move.__str()`), not boards: same seed + level 1 twice -> identical
+  (scripted 25 lines, REAL deck 23 - the production shuffle is seeded, so the deal and family order are
+  inside the equality); same seed + level 4 -> different; seed+1 -> different. R2 = 8 whole games,
+  4737 rail checks, 0 violations.
+
+Two suite facts measured the hard way (they bind every later fixture)
+- A game's round ends SPEND GLOBAL RNG: `Main.round_over()` picks the next starter with
+  `randi() % len(round_winners)`, so a section that plays whole games moves the RNG stream the scripted
+  fixtures read. R placed in front of TEST J moved J1 from 19 plays to 16 (measured twice) - a FAIL of a
+  fixture that touches none of the code R tests. R now runs immediately after `_test_modal_rails()`.
+- A fixture that raises mid-frame prints NO checks and the suite STILL exits 0: the first R run read
+  1412 PASS / exit 0 with 0 of its 21 checks executed (`get_left()` does not exist on the deck;
+  `round_end_turns` is per-round ARRAYs of per-seat CUMULATIVE counts, summing every entry double-counts
+  - total turns = sum of the LAST entry). So R counts its checks through `r_check()` and prints
+  `END R: 21 checks run, 0 failure(s)` - the line whose absence means the section aborted.
+- Games are STOPPED, not left running: the Main's only stop switch is the `interrupted` flag every step
+  of the turn chain tests (no stop API), so `_r_stop()` sets it, drains `_animation_layer`, removes and
+  frees the Main; `CountingMain` gained `stop_after_rounds` (the gate at the round-over press) so a
+  fixture's game ends at its last round. 7 alive mains starve the per-frame fixtures - the same failed
+  run measured TEST J at 16 of its 19 plays.
+
+Files changed: `tests/counting_main.gd` (rail + counters + log + stop gate), `tests/noble_family_rules.gd`
+(TEST R, 21 checks, `_r_build` / `_r_stop` / `_r_game` / `_r_left` / `r_check`), `tests/README.md` (the
+TEST R section), `docs/noble-family-todo.md` (step 31's implementation note + the two suite facts).
+
+Gates measured: check-only 0; noble rules suite 1433 PASS / 0 FAIL / 0 script error / exit 0 in 73 s
+(1412 / 66 s at step 29, 6 leaked instances == baseline); noble smoke exit 0 in 37 s (120 rounds, 836
+joint moves verified, 0 script errors); classic gate `tests/smoke_games.tscn` exit 0 in 139 s (101 s at
+step 29 - the gate nests the rules suite, so TEST R's 8 games ride along).
+
+Notes for the next iteration (step 32, classic regression sweep, then 33 the implementation doc)
+- `docs/noble-family-todo.md` was edited by THIS step commit. The step-30 note in progress.txt says the
+  todo is plan-only and results go to tests/README.md; if the convention is strict, drop the "Implemented
+  (2026-08-20 ...)" bullets from the todo and keep them in tests/README.md only.
+- Step 32 is a sweep over the classic repros, and the classic gate ALREADY nests the noble suite: a
+  step-32 runner should NOT add a second nested copy (the RNG-stream lesson above - a game's round ends
+  consume global RNG and shift the scripted fixtures' measured counts).
+- Never run two godot processes on this project at once (the step-30 lesson, honoured here: every run
+  below was launched with `stdbuf -oL` into a log + a `.status` file, one at a time).
+
+## 2026-07-18 (12:55): step 32 — the sweep gate (done; plus one production fix the sweep caught)
+
+**Task**: todo step 32 (Phase D) — "Files: none (run only)": run the classic + variant suites
+one at a time, `--check-only` clean, record the numbers.
+
+**What was done**
+- `tests/classic_sweep.sh` (new): 5 classic + 2 variant suites, ONE process at a time, per-run
+  `timeout`, per-suite exit/secs/`SCRIPT ERROR`/anchored-`FAIL` counts, `SWEEP OK|FAILED` + exit code.
+- Measured clean: 7 suites, 195 s, exit 0 — 300 classic rounds / 130 eliminations, 1433 rules PASS,
+  120 variant rounds / 874 plays / 4305 `_left` audits clean, 150 belief rounds / 1413 level-4
+  decisions / 67 live-rival beliefs / 0 false.
+- Sabotage validation (classic Prince redraw drawing from the pile): `SWEEP FAILED`, exit 1, two
+  suites stalled (exit 124) with 2 script errors each; sabotage reverted. This is why the sweep's
+  gate is exit code + script-error grep, not a `FAIL` grep.
+- `godot --headless --path . --check-only --quit project.godot`: 0 script/parse errors.
+
+**The catch, and why production changed (a deviation from "Files: none")**
+- The sweep's nested repeat runs made `repro_start_to_classic` M4 (Exit to menu -> PLAY -> CLASSIC)
+  fail on 1 run in 4: `Assertion failed: Player 1 has 2 cards` at `player.gd:131` from `resolve_effect`.
+  The game left for the menu had a card in flight; its coroutine landed it in a hand of the game PLAY
+  started in the meantime. No suite asserts this; the assertion is the symptom.
+- Detector: throwaway gap-sweep scene (deleted) using the step 17 supply identity read backwards
+  (`physical[type] > _left[type]` in the homes, skipping `discard_depth > 0` frames). Measured: the
+  window is the FIRST frames after leaving the game — 5 of 9 gaps pre-fix (297–894 ghost frames,
+  excess 1–2), 1 of 9 post-fix.
+- Fix in `main/main.gd`: `game_generation` (bumped by `init_players()` before `_new_game()`) +
+  `_stale(gen)`, checked by every coroutine at entry and after its awaits: `deal_card`,
+  `deal_from_family`, `discard` (the game's only `_left` decrement), `set_inactive`, `resolve_effect`
+  (entry + Priest/Baron/Prince/King resume points), `new_turn`, `_begin_play_selection`, `round_over`
+  (its auto-presses), `_on_round_over_pressed` / `_on_game_over_pressed`, `_on_move_chosen`.
+  `init_players()` also clears `_animation_layer` (a finished game's flying card must not be drawn
+  over the new board). `tests/counting_main.gd`: its `_begin_play_selection` override follows the new
+  `(p, gen)` signature.
+
+**Key reasoning**
+- `Player.ai_move()` can emit `move_chosen` SYNCHRONOUSLY (`player.gd:242`): the request generation
+  must be set BEFORE the call, otherwise the live game drops its own first move (measured:
+  `smoke_games` ran 4 min, 0 rounds, exit 124, one "Dropped a move chosen by a finished game").
+- A freed in-flight card kills its Tween and the chain awaiting it never resumes — inert at a game
+  boundary, and the generation guards mean no resumed chain mutates a game that is not its own.
+
+**Files changed (commit `3ecc7e6`)**: `main/main.gd`, `tests/counting_main.gd`, `tests/classic_sweep.sh`
+(new), `tests/README.md` (the sweep section + the race section, the gap-sweep recipe, the measured
+numbers, the `ai_move` lesson).
+
+**Notes for the next iteration**
+- OPEN residual, recorded in `tests/README.md`: at a 1-frame gap a chain suspended INSIDE an effect
+  (past every guard in its branch) can still land a card in the game that starts 2 frames after the
+  Exit (measured: 293 frames, `Handmaid 1>0`). The gate is green because the M1–M4 fixture presses
+  Exit at `_speed = 0`, where the window is a single frame. If step 33's UX QA touches Exit-mid-animation,
+  start from that residual and the gap-sweep recipe.
+- Step 32 says "Files: none (run only)": the sweep gate is done, and the production change it forced
+  is documented above. Next candidate: step 33 (Play Screen polish pass, run-only), then 34 (stats +
+  variant-only help).
+- Gate costs measured: belief suite 60 s at `--rounds=150`; the whole sweep ~3.5 min at
+  `SWEEP_TIMEOUT=240`. Do not nest the rules suite a second time (global RNG shifts scripted fixtures).

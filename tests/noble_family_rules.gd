@@ -3782,9 +3782,12 @@ func _watch_rails(main, w) -> void:
 			w["open_frames"] = int(w["open_frames"]) + 1
 		if open != main.is_drawing():
 			w["mismatch"] = int(w["mismatch"]) + 1
+		# The seat's own cascade stack counts as a crowded surface: the panel row IS that family, so a
+		# frame with both visible is the same family drawn twice, one copy of them tappable.
 		if open and (main._table.visible or main._type_selector.visible
 				or main._select_other_player.visible or main._select_any_player.visible
-				or bool(main._player_selection.visible)):
+				or bool(main._player_selection.visible)
+				or bool(main._players[0].family_root.visible)):
 			w["crowded"] = int(w["crowded"]) + 1
 		if not open:
 			if bool(sel.visible):
@@ -3846,11 +3849,14 @@ func _test_rails_game() -> void:
 		+ ": after the mid-effect modal the human holds EXACTLY 1 card and is still active - the modal"
 		+ " REPLACES the card the Prince took, it never adds to a 2-card hand")
 	check(not main._family_selector.is_open() and not bool(main._family_selector.visible)
-		and _fs_cards(main._family_selector).is_empty() and not main.is_drawing(), tag
+		and _fs_cards(main._family_selector).is_empty() and not main.is_drawing()
+		and bool(p0.family_root.visible), tag
 		+ ": the mid-effect modal CLOSED on its commit (open " + str(main._family_selector.is_open())
 		+ ", visible " + str(bool(main._family_selector.visible)) + ", row "
 		+ str(_fs_cards(main._family_selector).size()) + " cards, drawing " + str(main.is_drawing())
-		+ ") - a Prince redraw that left its panel on screen is the stuck overlay step 22 is about")
+		+ ", stack visible " + str(bool(p0.family_root.visible))
+		+ ") - a Prince redraw that left its panel on screen is the stuck overlay step 22 is about, and"
+		+ " the family view that stepped aside for the panel is back the moment the panel closes")
 	await _human_play_idx(main, 0, 1, Deck.CardType.Unknown, -1, tag + " r1 play 2")
 	var r1b: Array = main.effect_log
 	var baron_i: int = -1
@@ -3941,10 +3947,10 @@ func _test_rails_game() -> void:
 		check(gtype == int(Deck.CardType.Priest), tag + ": the Guard's DECLARED type is the one the type"
 			+ " selector reported (" + Deck.card_names[gtype].strip_edges() + ") - the declaration is a"
 			+ " play-chain choice, not a modal choice, and no Priest exists in this supply, so it misses")
-	check(int(w["crowded"]) == 0, tag + ": at every opening of both rounds the Table was hidden and NO"
-		+ " type selector, target label or player-selection sprite was visible - the modal is the only"
-		+ " interactive surface for its whole length (crowded frames " + str(w["crowded"]) + " of "
-		+ str(w["open_frames"]) + " open frames)")
+	check(int(w["crowded"]) == 0, tag + ": at every opening of both rounds the Table was hidden, NO"
+		+ " type selector, target label or player-selection sprite was visible AND the seat's own family"
+		+ " stack was hidden - the modal is the ONLY copy of that family on screen for its whole length"
+		+ " (crowded frames " + str(w["crowded"]) + " of " + str(w["open_frames"]) + " open frames)")
 	settle = 0
 	while main.round_end_actor.size() < 2 and settle < 500:
 		await get_tree().process_frame
@@ -4322,10 +4328,12 @@ func _test_rails_bad_index() -> void:
 		+ str(int(p0.hand.get_child_count())) + ") - it is one draw, not a re-deal, not 2 cards, and the"
 		+ " seat is not handed a card that does not exist")
 	check(not sel.is_open() and not bool(sel.visible) and not main.is_drawing()
-		and bool(main._table.visible), tag + ": the modal closed on the fallback path too (open "
+		and bool(main._table.visible) and bool(p0.family_root.visible), tag
+		+ ": the modal closed on the fallback path too (open "
 		+ str(sel.is_open()) + ", drawing " + str(main.is_drawing()) + ", table "
-		+ str(main._table.visible) + ") - the out-of-range branch is an exit path of the modal like any"
-		+ " other, it does not leave a panel on screen")
+		+ str(main._table.visible) + ", stack " + str(bool(p0.family_root.visible))
+		+ ") - the out-of-range branch is an exit path of the modal like any"
+		+ " other, it does not leave a panel on screen (and it does not leave the family invisible)")
 	await await_until(func() -> bool:
 		return p0._state == Player.State.SELECT_CARD and p0.hand.get_child_count() == 2)
 	check(p0._state == Player.State.SELECT_CARD, tag + ": and the turn CONTINUES (state " + str(p0._state)
@@ -4343,14 +4351,16 @@ func _test_rails_exit_paths() -> void:
 	var p0 = main._players[0]
 	await _human_draw(main, 1)
 	check(not sel.is_open() and not bool(sel.visible) and _fs_cards(sel).is_empty()
-		and not main.is_drawing() and main.family_draw_idx[0] == [1], tag + ": path 1, the TURN-START"
+		and not main.is_drawing() and main.family_draw_idx[0] == [1]
+		and bool(p0.family_root.visible), tag + ": path 1, the TURN-START"
 		+ " COMMIT - the tap closed the panel, dropped the row and cleared the pending state (draws "
-		+ str(main.family_draw_idx[0]) + ") - the modal closes BEFORE the card flies, so the draw"
-		+ " animation runs with no overlay on screen")
+		+ str(main.family_draw_idx[0]) + ", stack visible " + str(bool(p0.family_root.visible))
+		+ ") - the modal closes BEFORE the card flies, so the draw"
+		+ " animation runs with no overlay on screen and the stack is his family view again")
 	# path 2: the mid-effect Prince commit (a modal opened by an effect, closed by its own draw)
 	await _human_play_idx(main, 1, 0, Deck.CardType.Unknown, -1, tag + " self-Prince")
 	check(not sel.is_open() and not bool(sel.visible) and _fs_cards(sel).is_empty()
-		and not main.is_drawing(), tag + ": path 2, the MID-EFFECT Prince commit - the modal an effect"
+		and not main.is_drawing() and bool(p0.family_root.visible), tag + ": path 2, the MID-EFFECT Prince commit - the modal an effect"
 		+ " opened closed inside that same effect (" + str(sel.is_open()) + ", drawing "
 		+ str(main.is_drawing()) + ") - a Prince redraw that left its panel open would sit on the NEXT"
 		+ " seat's turn, on a board that no longer has that family")
@@ -4398,9 +4408,11 @@ func _test_rails_exit_paths() -> void:
 		+ " after the re-deal, and the modal is his only way to draw")
 	check(not main._table.visible and not main._type_selector.visible
 		and not main._select_other_player.visible and not main._select_any_player.visible
-		and not bool(main._player_selection.visible), tag + ": the new round's modal opens ALONE (table,"
-		+ " type selector, target labels and the selection sprite all hidden) - the round transition"
-		+ " resets the play surface as well as the panel, so the modal is one question and nothing else")
+		and not bool(main._player_selection.visible) and not bool(p0.family_root.visible), tag
+		+ ": the new round's modal opens ALONE (table, type selector, target labels, the selection sprite"
+		+ " and the seat's own re-dealt family STACK all hidden) - the round transition resets the play"
+		+ " surface as well as the panel, so the modal is one question and nothing else, and the panel is"
+		+ " the only copy of the new family on screen")
 	_check_left_audit(main, tag + " new round")
 	main.queue_free()
 	await await_frames(2)

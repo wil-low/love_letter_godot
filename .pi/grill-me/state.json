@@ -1,0 +1,288 @@
+{
+  "createdAt": "2026-11-08T03:22:47.568Z",
+  "updatedAt": "2026-11-08T04:23:32.927Z",
+  "projectDir": "/home/willow/prj/godot_games/love_letter_godot",
+  "plan": "implement Noble Family variand of Love Letter",
+  "turns": [
+    {
+      "question": "Where does the card-type rank live in this engine, and what does adding a card type touch?",
+      "recommendedAnswer": "Rank is the CardType enum index itself; adding a type touches the enum, sprite frame index (cards.png has 9 frames of 11x17), card_count/card_names, find_valid_moves, resolve_effect, eval_moves, type_selector.tscn, and help pages.",
+      "userAnswer": "Discovered: Deck.CardType (deck.gd:4-13) doubles as the rank table — round_over picks the highest enum int, Baron compares my_type > their_type, eval_moves scores with GOOD * _target_type and mem > Handmaid; Card.gd sets _sprite.frame = type against a 99x17 sheet (9 frames, 11x17 each); find_valid_moves guesses range(Priest, Unknown); countess_restricted hardcodes Prince/King as \"men\"; eval_moves has no default branch, so an unhandled type scores LOSE=0 and level 4 degrades to uniform random; main.gd:284 asserts exactly 1 card in hand for every active seat.",
+      "decisionStatus": "resolved",
+      "notes": "Constrains every later answer: any new card must land in rank order in the enum, and the 1-card hand invariant decides which Noble Family effects are cheap."
+    },
+    {
+      "question": "Which family-dealing table do we implement, given the doc's 'exactly 4 cards remain' contradicts its own per-player numbers?",
+      "recommendedAnswer": "Doc per-player numbers: 1 to each, then 5 more (2p) / 4 more (3p) / 3 more (4p) -> family 5/4/3, burn 3/1/0, deck left 1/0/0; the 'exactly 4 remain' headline is arithmetically impossible with those numbers.",
+      "userAnswer": "Doc per-player numbers (family 5/4/3, burn 3/1/0, deck 1/0/0)",
+      "decisionStatus": "resolved",
+      "notes": "Combined with the engine widow (3/1/1) the real remainders are 0/0/1 in the main pile; widow pile holds the burned cards."
+    },
+    {
+      "question": "Is the card dealt as 'their first hand' counted inside the family, or is the family only the extra distributed cards?",
+      "recommendedAnswer": "Family excludes the first hand (family 5/4/3, total owned 6/5/4), so the family pile is exactly the drawable set.",
+      "userAnswer": "First card is dealt to each player's hand. Then everyone receives noble family cards that they will draw from (family pile = drawable cards only).",
+      "decisionStatus": "resolved",
+      "notes": "Player starts a round with 1 hand card + family pile of 5/4/3 (2p/3p/4p)."
+    },
+    {
+      "question": "Whose hand size do we keep at decision time: draw-then-play or play-then-draw?",
+      "recommendedAnswer": "Draw from family first, then play 1 of 2 - matches the existing new_turn -> deal_card -> find_valid_moves flow and keeps eval_moves' leftover-card logic valid.",
+      "userAnswer": "Draw from family first, then play 1 of 2",
+      "decisionStatus": "resolved",
+      "notes": "Hand is 2 cards at decision time; the leftover becomes the active card."
+    },
+    {
+      "question": "How does the Countess restriction work in the variant?",
+      "recommendedAnswer": "Unchanged: Countess + Prince/King in the 2-card hand forces the Countess play ('No other changes').",
+      "userAnswer": "Unchanged: Countess + man in hand forces the Countess play",
+      "decisionStatus": "resolved",
+      "notes": "countess_restricted() needs no edit under draw-then-play."
+    },
+    {
+      "question": "What exactly happens when a player is eliminated: reveal hand+family, where do the cards go, and how is deck._left accounting affected?",
+      "recommendedAnswer": "Reveal hand+family face-up at the seat, cards stay there (not moved to the discard pile), and Main decrements _deck._left for each revealed card (public, out of play).",
+      "userAnswer": "Reveal, update memories, discard all of them without effects",
+      "decisionStatus": "open",
+      "notes": "User answer says the revealed family/hand cards ARE discarded (no effects), which conflicts with the doc's 'They are not considered discarded'; confirm discard animation/target and _left decrement in round 2."
+    },
+    {
+      "question": "Where is the round-end condition checked?",
+      "recommendedAnswer": "At turn start: seat to act has an empty family -> round_over() (same slot as the current deck-empty check).",
+      "userAnswer": "At turn start: seat to act has empty family -> round_over()",
+      "decisionStatus": "resolved",
+      "notes": "Single round-end rule; family only shrinks on your own turn."
+    },
+    {
+      "question": "A Prince discards the target's active card; what if the target's family is empty?",
+      "recommendedAnswer": "Target is eliminated (set_inactive, reveal, no new card) and the round continues; the round-end check stays at turn start.",
+      "userAnswer": "Draw the widow in this case",
+      "decisionStatus": "open",
+      "notes": "Introduces the widow pile as the Prince-redraw fallback in the variant. Need the empty-widow fallback and confirmation that turn-start drawing still comes only from the family."
+    },
+    {
+      "question": "Which burn/widow count does the variant use (doc says burn 1; engine uses widow 3 for 2p, 1 for 3-4p)?",
+      "recommendedAnswer": "Follow the engine's widow counts (3 for 2p, 1 for 3p/4p); matches the doc's '13 remaining' arithmetic for 2p and keeps Deck.prepare() as the burn source.",
+      "userAnswer": "Engine widow: 3 for 2p, 1 for 3p/4p (doc 'no burn' for 4p ignored)",
+      "decisionStatus": "resolved",
+      "notes": "With families 5/4/3 the main pile ends at 0/0/1 cards for 2/3/4 players."
+    },
+    {
+      "question": "Who can see whose family?",
+      "recommendedAnswer": "Own family face-up at all times; opponents' families face-down with a visible card count.",
+      "userAnswer": "Own face-up; opponents' families fully hidden (no count)",
+      "decisionStatus": "resolved",
+      "notes": "No count badge for AI families; family becomes public only via the elimination reveal."
+    },
+    {
+      "question": "How should the human draw-selection interface look in the Main scene?",
+      "recommendedAnswer": "Modal family panel over the table, built like the TypeSelector overlay, opened when a draw is required, plus a small face-up stack at your seat.",
+      "userAnswer": "Modal family panel over the table (TypeSelector-style), plus a small face-up stack at your seat",
+      "decisionStatus": "resolved",
+      "notes": "84x48 viewport has no room for 5-card rows for four seats; reuse the TypeSelector pattern."
+    },
+    {
+      "question": "How is the draw choice represented in the AI's move list?",
+      "recommendedAnswer": "Joint (draw, play) moves: Move gains the drawn family card, find_valid_moves enumerates family pick x played card x target, eval_moves scores the drawn card as the leftover card.",
+      "userAnswer": "Joint (draw, play) moves enumerated in find_valid_moves",
+      "decisionStatus": "resolved",
+      "notes": "Exact fit for my_type = hand.get_child(1 - m._played_card_idx)."
+    },
+    {
+      "question": "What draw rule do AI levels 1-4 use?",
+      "recommendedAnswer": "L1 first valid move, L2 uniform random, L3 cheapest play + cheapest draw, L4 full weighted scoring of joint moves.",
+      "userAnswer": "L1 first, L2 random, L3 cheapest play + cheapest draw, L4 weighted eval",
+      "decisionStatus": "resolved",
+      "notes": "Preserves each level's existing personality."
+    },
+    {
+      "question": "In what order are family cards enumerated (so L1's 'first valid move' is reproducible)?",
+      "recommendedAnswer": "As-dealt (deck) order, no sorting - no extra state, L1 stays an arbitrary-first-move AI.",
+      "userAnswer": "As-dealt order (deck order), no sorting",
+      "decisionStatus": "resolved",
+      "notes": "Deterministic under a fixed seed."
+    },
+    {
+      "question": "Should eval_moves gain new scoring terms for the variant?",
+      "recommendedAnswer": "Minimal: the drawn family card is the leftover card only; no new family-templating heuristics, measure later.",
+      "userAnswer": "Minimal: drawn family card = leftover card, no new scoring terms",
+      "decisionStatus": "resolved",
+      "notes": "Rebalance (keep best family card for last, family-size terms) is deferred to measurement."
+    },
+    {
+      "question": "How does the Noble Family entry under Play work on the start page?",
+      "recommendedAnswer": "Tapping PLAY expands the Play row in place into CLASSIC / NOBLE FAMILY sub-rows.",
+      "userAnswer": "PLAY leads to a new GameMode scene with CLASSIC, NOBLE FAMILY, BACK options",
+      "decisionStatus": "resolved",
+      "notes": "New scene/node (mode selector) shown from PLAY; BACK returns to the start page. Plumbing details to confirm in round 2."
+    },
+    {
+      "question": "Is the selected mode persisted to user://options.cfg?",
+      "recommendedAnswer": "No: mode resets to Classic on app start / return to menu; explicit choice per game, no config migration.",
+      "userAnswer": "Not persisted: mode resets to Classic on app start / return to menu",
+      "decisionStatus": "resolved",
+      "notes": "Speedrun and existing config keys stay untouched."
+    },
+    {
+      "question": "Should Noble Family rounds feed the Stats page?",
+      "recommendedAnswer": "Share the existing totals/wins table - variant rounds count as ordinary rounds, zero data-model change.",
+      "userAnswer": "Separate per-mode stats with a mode switch on the Stats page",
+      "decisionStatus": "open",
+      "notes": "Doubles the counters (24 = 2 modes x 6 levels x 2), needs saved keys per mode, a reset rule, and a mode-switch widget in stats.tscn. Round-2 questions pending."
+    },
+    {
+      "question": "Add rules text for the variant to the existing Help pager?",
+      "recommendedAnswer": "Add 2-3 Noble Family pages to the existing pager (Setup/Turn/Elimination/Round End variants).",
+      "userAnswer": "Pages shown only while the variant mode is active",
+      "decisionStatus": "open",
+      "notes": "Needs a rule for Help opened from the start page before any mode is chosen and from Pause; round-2 question."
+    },
+    {
+      "question": "What test coverage do we add?",
+      "recommendedAnswer": "Both: a variant smoke suite (all-AI games at 2/3/4 players, rounds/eliminations flow) and a deterministic scripted fake-deck repro suite (family sizes, draw legality, round-end condition).",
+      "userAnswer": "Variant smoke suite + deterministic scripted-deck repro suite",
+      "decisionStatus": "resolved",
+      "notes": "Mirrors tests/README.md practice (godot --headless --path . tests/<scene>.tscn, exit code)."
+    },
+    {
+      "question": "Exact implementation of the out-of-round reveal: reveal hand+family, where do the cards go, and how does deck._left accounting react?",
+      "recommendedAnswer": "Reveal face-up, then animate them to the discard pile (no effects) and decrement _deck._left - the doc's 'not discarded' read as 'no discard effect, never in the pile before'.",
+      "userAnswer": "Reveal face-up, then move to the discard pile and decrement _deck._left, no effects",
+      "decisionStatus": "resolved",
+      "notes": "Resolves the doc conflict explicitly; Main.discard() reused; Level 4's _left stays 'not played and in play'."
+    },
+    {
+      "question": "Scope of the widow-draw fallback and the empty-widow case.",
+      "recommendedAnswer": "Widow = Prince-redraw fallback only (like deal_card(tp, true)); turn-start draws come only from the family; an empty widow eliminates the Prince target.",
+      "userAnswer": "Widow = Prince-redraw fallback only; empty widow eliminates the target; turn start is family-only",
+      "decisionStatus": "resolved",
+      "notes": "Round-end condition stays a single check at turn start."
+    },
+    {
+      "question": "How is the widow pile shown in the variant?",
+      "recommendedAnswer": "Classic Deck.gd behaviour: face-down pile visible while non-empty, no card count (hidden information).",
+      "userAnswer": "Visible face-down pile, no card count (classic behaviour)",
+      "decisionStatus": "resolved",
+      "notes": "Keeps left_cards_sim.py's hidden-widow finding valid."
+    },
+    {
+      "question": "Where does the new GameMode scene live and how does Main learn the mode?",
+      "recommendedAnswer": "New GameMode node in application.tscn (hidden by default, like LevelSelector/Stats/Pause); PLAY shows it, BACK returns to Start; application.gd sets Main.noble_family before init_players, exactly like it assigns ai_level today.",
+      "userAnswer": "New GameMode node in application.tscn; application.gd sets Main.noble_family before init_players",
+      "decisionStatus": "resolved",
+      "notes": "No autoload/singleton; Start.play_pressed now opens the mode selector instead of starting a game."
+    },
+    {
+      "question": "Does speed_run / the headless export flags reach the variant?",
+      "recommendedAnswer": "No: speed_run stays classic-only; variant tests instantiate Main directly and set the noble_family flag (tests/smoke_games.gd pattern).",
+      "userAnswer": "speed_run stays classic; variant only from the menu and from tests",
+      "decisionStatus": "resolved",
+      "notes": "Existing measured speedrun numbers are untouched."
+    },
+    {
+      "question": "Family data model: where do family cards live?",
+      "recommendedAnswer": "Plain Array[Deck.CardType] per seat (dealt by Deck, flow owned by Main); Card nodes materialized only for the human's stack and the modal; AI draws instantiate the card in AnimationLayer and slide it from the seat.",
+      "userAnswer": "Type arrays per seat; Card nodes only for the human's stack/modal",
+      "decisionStatus": "resolved",
+      "notes": "AI never gets Card nodes for family; Main keeps state changes central (design.md guideline)."
+    },
+    {
+      "question": "Where does the human's face-up family stack sit, given the 84x48 geometry?",
+      "recommendedAnswer": "Cascading face-up row in seat 0's free bottom strip (x5..52, y31..48), rank corners visible; AI families are hidden so the top seats need nothing.",
+      "userAnswer": "Cascading face-up row in seat 0's free bottom strip (all ranks readable)",
+      "decisionStatus": "resolved",
+      "notes": "Only seat 0 has a face-up stack; top seats collide with Marker0's played-card area."
+    },
+    {
+      "question": "How is 'you may look at your noble family at any time' honoured for the human?",
+      "recommendedAnswer": "The always face-up cascade stack is enough; the modal opens only when a draw is required.",
+      "userAnswer": "The always face-up stack is enough; the modal opens only when a draw is required",
+      "decisionStatus": "resolved",
+      "notes": "No browse mode, no extra button."
+    },
+    {
+      "question": "How should the 10-12 family cards be dealt on screen each round?",
+      "recommendedAnswer": "First-hand card animated normally; family cards appear instantly in the stack with a single deal sound.",
+      "userAnswer": "First hand animated; family cards appear instantly",
+      "decisionStatus": "resolved",
+      "notes": "Keeps round setup under ~1s on mobile."
+    },
+    {
+      "question": "What does Deck.gd show in the variant (main pile ends at 1/0/? cards)?",
+      "recommendedAnswer": "Hide the main pile sprite in the variant, keep the widow pile visible as the Prince fallback.",
+      "userAnswer": "Hide main pile in the variant; show the widow pile",
+      "decisionStatus": "resolved",
+      "notes": "Avoids a misleading 1-card pile in some counts."
+    },
+    {
+      "question": "Per-mode Stats: what is the switch mechanism and data layout?",
+      "recommendedAnswer": "Left/right digit-button tabs (SpeedLevel pattern) flipping one 6-row table between Classic and Noble Family; tab defaults to the mode just played; saved as two ConfigFile keys, 12 counters each.",
+      "userAnswer": "Left/right tab buttons over one table; per-mode keys in options.cfg",
+      "decisionStatus": "resolved",
+      "notes": "Doubled table (24 chars/line) does not fit 84px; digit_button.tscn is reused."
+    },
+    {
+      "question": "What does the Stats Reset button clear with per-mode tables?",
+      "recommendedAnswer": "Only the visible mode's table; the stale-data drop check in load_config() moves to a per-table size check.",
+      "userAnswer": "Reset clears only the currently visible mode's table",
+      "decisionStatus": "resolved",
+      "notes": "Tab-local reset."
+    },
+    {
+      "question": "Variant-only Help pages: what shows where, given Help is reachable from Start (no mode chosen) and from Pause (mode known)?",
+      "recommendedAnswer": "Append variant pages tagged variant_only; hidden on the Start page, shown in Pause during a variant game.",
+      "userAnswer": "variant_only pages appended; hidden on the Start page, shown in Pause during a variant game",
+      "decisionStatus": "resolved",
+      "notes": "Existing pages stay untouched."
+    },
+    {
+      "question": "What belongs in _deck._left in the variant (Level 4's Guard/Prince counting reads it)?",
+      "recommendedAnswer": "Everything not yet played and in play: deck leftovers + widow + every live seat's family; decrement on play and on elimination reveal; family draws do not change it.",
+      "userAnswer": "Deck leftovers + widow + all live families (decrement on play and on elimination reveal)",
+      "decisionStatus": "resolved",
+      "notes": "Keeps P(target holds t) = _left[t]/sum(_left) valid; family cards are hidden info, not out of play."
+    },
+    {
+      "question": "How is the 4-player deal resolved (4 first-hand + 3 family each needs 16 cards, so the engine's 1-card widow burn cannot coexist with 3-card families)?",
+      "recommendedAnswer": "4p burns nothing (the doc's own 'do not burn' line): families 3 each, main pile empty, no widow pile in 4p, so a Prince target with an empty family in 4p is eliminated; 2p/3p keep the widow fallback.",
+      "userAnswer": "4p: burn 0, families 3 each, no widow pile in 4p",
+      "decisionStatus": "resolved",
+      "notes": "Final deal table (16 cards): burn 3/1/0, first hand 1/1/1, family 5/4/3, main pile left 1/0/0, widow pile 3/1/0 for 2p/3p/4p."
+    },
+    {
+      "question": "What happens when a forced family draw lands on the human mid-effect (his own Prince)?",
+      "recommendedAnswer": "Open the draw modal at that moment and let the human pick - one interface for every human draw.",
+      "userAnswer": "The draw modal opens at that moment and the human picks",
+      "decisionStatus": "resolved",
+      "notes": "The modal is the only human draw interface; no auto-draw, no move suppression."
+    },
+    {
+      "question": "Are families re-dealt every round or kept for the whole game?",
+      "recommendedAnswer": "Re-deal every round from a fresh shuffle (matches _new_round() -> Deck.prepare(); scores persist, families do not).",
+      "userAnswer": "Re-deal families every round (fresh shuffle)",
+      "decisionStatus": "resolved",
+      "notes": "No family persistence across rounds."
+    },
+    {
+      "question": "How many variant_only Help pages and what do they say?",
+      "recommendedAnswer": "4 short pages reusing card_help_page.tscn (show_card = false): Family Setup (burn + 5/4/3 deal), Family Turn (draw from family, widow for Prince only), Family Out (reveal everything, cards leave play), Family Round End (round ends when the seat to act cannot draw).",
+      "userAnswer": "4 pages: Setup / Turn / Out / Round End",
+      "decisionStatus": "resolved",
+      "notes": "Text must state the resolved deal table and the widow-fallback rule."
+    },
+    {
+      "question": "Draw modal placement and flow?",
+      "recommendedAnswer": "TypeSelector pattern: modal Node2D at z_index 10 centered over the Table, family cards in one row with the selection sprite; tap = animate to hand and close; no cancel button because the draw is mandatory.",
+      "userAnswer": "Centered over the table, tap to draw, no cancel button",
+      "decisionStatus": "resolved",
+      "notes": "Opened at turn start and at mid-effect forced draws."
+    },
+    {
+      "question": "How are the resolved rules documented?",
+      "recommendedAnswer": "New docs/noble-family-implementation.md (deal table, flow, find_valid_moves/eval_moves extension, stats/help/menu plumbing, test commands); docs/Noble family variant.md stays the untouched source spec.",
+      "userAnswer": "New docs/noble-family-implementation.md; source spec stays pristine",
+      "decisionStatus": "resolved",
+      "notes": "The two spec contradictions are recorded in the implementation doc, not by editing the spec."
+    }
+  ]
+}

@@ -163,6 +163,11 @@ func _close_family_modal() -> void:
 	_family_selector.close()
 	_drawing = false
 	_draw_idx = -1
+	# The stack hides with the panel (`human_draw_from_family`), and a reset is exactly the path where
+	# the coroutine that would restore it is a SUSPENDED `await` that never resumes - so restoring the
+	# family view belongs here, with the panel, not in the coroutine.
+	for p in _players:
+		p.family_root.visible = true
 
 
 func init_players(random_seed: int) -> void:
@@ -404,10 +409,16 @@ func deal_from_family(p: Player, family_idx: int) -> void:
 # - it opens ONLY when a human must draw: a human seat, a non-empty family, and no draw already pending.
 #   A nested request (the same chain asking twice) returns without touching the panel, so there is one
 #   modal on screen at a time and the row the seat is looking at is never re-built from under him;
-# - it opens ALONE: the Table, the type selector, the two target labels and the player-selection sprite
-#   are hidden and the seat's state goes IDLE, so a tap on his own hand card, on a seat, on the table or
-#   on a type has nothing to act on (Player gates card taps on `_state`; a seat tap lands in a `_state`
-#   match that accepts nothing; the Table's Area2D is not pickable under a hidden parent);
+# - it opens ALONE: the Table, the type selector, the two target labels, the player-selection sprite AND
+#   the seat's own family stack are hidden and the seat's state goes IDLE, so a tap on his own hand card,
+#   on a seat, on the table or on a type has nothing to act on (Player gates card taps on `_state`; a
+#   seat tap lands in a `_state` match that accepts nothing; the Table's Area2D is not pickable under a
+#   hidden parent). The stack is hidden because the panel is showing him THE SAME FAMILY: seat 0's stack
+#   sits at x 31..78 / y 31..48 and the panel's row at x 12..71 / y 22..39 on an 84 x 48 board, so a
+#   full family row and a full family panel CANNOT coexist without overlapping - two copies of one
+#   private family, one of them tappable. For the length of the draw the panel IS his family view;
+#   the stack is back the moment the draw lands (and `_close_family_modal()` puts it back on every
+#   reset path, where a suspended `await` never resumes to restore it);
 # - the draw happens EXACTLY ONCE: the panel disarms on its commit (one emission per open()), the
 #   guarded listener drops every emission that is not the pending draw, and the index Main pops is the
 #   index the seat tapped;
@@ -441,6 +452,12 @@ func human_draw_from_family(p: Player) -> void:
 	_select_other_player.hide()
 	_select_any_player.hide()
 	_player_selection.visible = false
+	# THE DOUBLE DISPLAY (the P0 this fixes): the panel row and the seat's cascade stack are the same
+	# family, and the seats are children of `Main`, NOT of `Table` - so `_table.hide()` never hid the
+	# stack and both rows were on screen at once. The stack is the family view for the whole round
+	# (spec: "you may look at your noble family at any time"), the panel is the family view FOR THE DRAW,
+	# so the stack steps aside exactly as long as the panel is open.
+	p.family_root.visible = false
 	# Taps outside the panel do nothing, and the seat's OWN cards are the ones that have to prove it: a
 	# card tap in SELECT_CARD emits `card_played` and starts a play chain on a hand that is about to
 	# grow. The seat's state IS his tap gate (`Player._on_card_input_event` accepts a card tap in
@@ -462,6 +479,9 @@ func human_draw_from_family(p: Player) -> void:
 	_draw_idx = -1
 	_family_selector.close()
 	_table.show()
+	# the family is chosen, so the round-long view comes back: from here the stack is the ONLY place
+	# this family is visible again (the panel drops its row on commit)
+	p.family_root.visible = true
 	p._state = prev_state
 	if latched != family_idx:
 		push_warning("family draw of seat " + str(p.idx) + ": the panel reported index " + str(family_idx)
