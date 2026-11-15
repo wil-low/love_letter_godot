@@ -1,13 +1,21 @@
 extends Node2D
-# Noble Family variant smoke test (docs/noble-family-todo.md steps 7 + 11: joint (draw, play, target) moves,
-# verified per move from inside the play chain by CountingMain._on_move_chosen).
+# Noble Family variant smoke test (docs/noble-family-todo.md steps 7 + 11 + 30: whole variant games for
+# every player count, joint (draw, play, target) moves verified per move from inside the play chain by
+# CountingMain._on_move_chosen).
 #
 # Plays whole variant games in the production scene with every seat on the AI (levels 4/4/3/2),
 # animations at speed 0, audio muted, and asserts that the variant loop keeps producing rounds,
 # games and eliminations - and that a round ends exactly at the turn start where the seat to act
 # has run out of family cards.
 #
-# Run:  godot --headless --path . tests/noble_family_smoke.tscn
+# Step 30 made the DEFAULT run the whole variant board: 2p, 3p and 4p in ONE process, each with its own
+# gates, plus the suite-level bar (>= 100 rounds in total). "Variant games flow for EVERY player count"
+# is then one command, and a green 4p run can no longer sit next to a stalled 2p one. Every count is a
+# FRESH Main scene (the todo's `max_games` cap included: a count never gets near it, and the gate says
+# so if it ever does), so counts share nothing but the level spec and the seed - each game re-seeds the
+# RNG in `Main._new_game()`, so a count's numbers stay reproducible.
+#
+# Run:  godot --headless --path . tests/noble_family_smoke.tscn          # 2p + 3p + 4p, 40 rounds each
 #       godot --headless --path . tests/noble_family_smoke.tscn -- --players=2 --rounds=40
 #       godot --headless --path . tests/noble_family_smoke.tscn -- --levels=1234   # one seat per AI level
 #       godot --headless --path . tests/noble_family_smoke.tscn -- --seed=777 --log=1 > run.log
@@ -55,8 +63,10 @@ extends Node2D
 # purpose - `_left` is decremented card by card at the START of each card's animation while the
 # card node is still a child of its container - and every skip is counted, so the suite can tell
 # "audited and clean" from "never looked".
-# Suite-level: the requested round count is reached, at least 1 elimination happens, at least
-# 1 round runs all the way to the family-out end.
+# Suite-level: the requested round count is reached in EVERY player count played, at least 1
+# elimination happens in every one of them, at least 1 round runs all the way to the family-out end, the
+# joint-move legality rail and the continuous `_left` audit ran in every one of them, and the whole run
+# played at least `MIN_TOTAL_ROUNDS` (100) rounds.
 #
 # Step 12 (the AI draw policies) adds two more rails:
 # - EVERY joint move is checked the moment the seat commits it (`count_play` is on `move_chosen`,
@@ -83,7 +93,11 @@ var print_memory: bool = false
 var print_valid_moves: bool = false  # set by --print-moves=1
 
 const SEED: int = 20260607
-const PLAYERS: int = 4
+# Step 30: the suite's default run plays ALL THREE boards in one process, so one command is the gate
+# "variant games flow for every player count". `--players=N` pins one of them.
+const COUNTS: Array[int] = [2, 3, 4]
+# Step 30's own bar: "assert >= 100 rounds total". 3 counts x the step 7 default of 40 rounds = 120.
+const MIN_TOTAL_ROUNDS: int = 100
 const ROUNDS: int = 40
 const FRAME_BUDGET: int = 200000
 # The seat levels, one digit per seat (`--levels=1234`): 1..5 = AI level 1..5. The default is the
@@ -92,6 +106,7 @@ const FRAME_BUDGET: int = 200000
 const LEVELS_SPEC: String = "4432"
 
 var plays: Array[int] = [0, 0, 0, 0]
+var plays_by_seat: Array[int] = [0, 0, 0, 0]  # step 30: the coverage gate names SEATS, not spec digits
 var fam_draws: Array[int] = [0, 0, 0, 0]
 var prince_plays: int = 0
 var _prince_total: int = 0
@@ -102,7 +117,9 @@ var _elim_rounds: int = 0
 var _eliminations: int = 0
 var _plays_total: int = 0
 var _max_plays: int = 0
-var _failures: int = 0
+var _failures: int = 0  # cumulative per-round rule checks (the suite-level gate)
+var _run_failures: int = 0  # the same, per player count (the count-level gate)
+var runs: Array = []  # one summary Dictionary per player count played
 var _unsettled_rounds: int = 0  # round ends that caught a discard/reveal animation in flight
 var _boundary_devs: int = 0  # piece-count deviations of exactly 1 (the abandoned play chain)
 var _left_violations: int = 0  # step 17: continuous audit violations reported by CountingMain
@@ -123,19 +140,73 @@ func _ready() -> void:
 	for i in AudioServer.bus_count:
 		AudioServer.set_bus_mute(i, true)
 
-	var count: int = _arg("players", PLAYERS)
 	var target_rounds: int = _arg("rounds", ROUNDS)
 	var seed_value: int = _arg("seed", SEED)
 	levels_spec = _arg_str("levels", LEVELS_SPEC)
 	assert(levels_spec.length() >= 2 and levels_spec.length() <= 4,
 		"--levels takes one digit per seat, 2 to 4 digits")
-	var levels: Array[Player.AI_Level] = _levels_from_spec(levels_spec)
 	log_moves = _arg("log", 0) == 1
 	# `-- --print_moves=1` turns on Main's own move-list dump (the step 11 gate check: every
 	# variant move line shows the draw, `draw <Type> (#idx), keep <Type>`).
 	print_valid_moves = _arg("print_moves", 0) == 1
+	var counts: Array[int] = _counts_to_run()
+	if levels_spec.length() < int(counts.max()):
+		gate_fail("--levels=" + levels_spec + " has " + str(levels_spec.length()) + " digit(s);"
+			+ " every seat of the " + str(int(counts.max())) + "-player game needs one"
+			+ " (digits past the seat count are ignored, missing ones are not invented)")
+		_report()
+		return
+	for count: int in counts:
+		await run_count(count, target_rounds, seed_value)
+	_report()
+
+
+# Step 30: the suite's DEFAULT is the whole variant board - 2p, 3p and 4p in ONE process - because
+# the gate is "variant games flow for EVERY player count". One seat-count per process let a green 4p
+# run sit next to a stalled 2p one, and the todo's Check command is the bare invocation.
+# `--players=N` pins a single count (the per-count measurements of steps 7/11/12/14/17 keep working).
+func _counts_to_run() -> Array[int]:
+	var out: Array[int] = []
+	var one: int = _arg("players", 0)
+	if one != 0:
+		out.append(one)
+	else:
+		for c: int in COUNTS:
+			out.append(c)
+	for c: int in out:
+		assert(c >= 2 and c <= 4, "--players must be 2, 3 or 4")
+	return out
+
+
+# ONE player count = a FRESH Main scene with `count` seats on the AI, `target_rounds` rounds, and this
+# count's own gates. Counts share nothing but the level spec and the seed: each game re-seeds the RNG
+# (`Main._new_game()` -> `seed(_random_seed)`), so a count's numbers are reproducible the same way a
+# single-count run's were.
+func run_count(count: int, target_rounds: int, seed_value: int) -> void:
 	assert(count >= 2 and count <= 4, "--players must be 2, 3 or 4")
 	var fam: int = Deck.NOBLE_FAMILY_SIZE[count]
+	var levels: Array[Player.AI_Level] = _levels_from_spec(levels_spec)
+	var spec: String = levels_spec.substr(0, count)  # the seats THIS count puts on the board
+	for i in 4:
+		plays[i] = 0
+		fam_draws[i] = 0
+		plays_by_seat[i] = 0
+		plays_by_level[i] = 0
+	prince_plays = 0
+	_prince_total = 0
+	_rounds = 0
+	_family_out_ends = 0
+	_elim_rounds = 0
+	_eliminations = 0
+	_plays_total = 0
+	_max_plays = 0
+	_unsettled_rounds = 0
+	_boundary_devs = 0
+	_left_violations = 0
+	_run_failures = 0
+	legal_checked = 0
+	cur_round = 1
+	legal_violations.clear()
 
 	var main = MainScene.instantiate()  # untyped: the harness reads the subclass's extra members
 	var card_scene: PackedScene = main.card_scene  # set_script resets exports, restore it below
@@ -201,16 +272,17 @@ func _ready() -> void:
 	if _rounds > 0:
 		avg = float(_plays_total) / _rounds
 	print("========== noble family smoke test (players=" + str(count) + ", levels "
-		+ levels_spec + ") ==========")
+		+ spec + ") ==========")
 	print("rounds: " + str(_rounds) + ", games started: " + str(main.game_counter) +
 		", family-out ends (no elimination): " + str(_family_out_ends) +
 		", rounds with eliminations: " + str(_elim_rounds))
 	print("eliminations: " + str(_eliminations) + ", plays: " + str(_plays_total) +
 		", prince plays: " + str(_prince_total) + ", avg plays/round: " + String.num(avg, 2) +
-		", max plays in a round: " + str(_max_plays) + " (no-Prince 4p round: " + str(count * fam) + ")")
+		", max plays in a round: " + str(_max_plays) + " (no-Prince round: " + str(count * fam) + ")")
 	print("family size per seat: " + str(fam) + ", scores: " + scores_str(main))
-	print("seat levels: " + levels_spec + " (1..4 = AI levels, 5 = random mix), joint moves verified"
-		+ " legal: " + str(legal_checked) + " by level: " + plays_by_level_str(levels_spec))
+	print("seat levels: " + spec + " (1..4 = AI levels, 5 = random mix), joint moves verified"
+		+ " legal: " + str(legal_checked) + " by level: " + plays_by_level_str(spec)
+		+ " by seat: " + plays_by_seat_str(count))
 	print("move/draw pairings verified: " + str(main.draws_checked) +
 		" - every move naming family card f drew family card f, checked inside its own play chain")
 	var kinds: Array = main.discards_by_kind
@@ -223,55 +295,155 @@ func _ready() -> void:
 		+ str(int(kinds[3])) + " (" + str(_unsettled_rounds) + " round end(s) caught an animation in"
 		+ " flight, " + str(_boundary_devs) + " boundary-chain deviation(s) of 1)")
 
-	var ok: bool = true
-	if _rounds < target_rounds:
-		fail("the games stalled after " + str(_rounds) + " of " + str(target_rounds) + " rounds")
-		ok = false
-	if _eliminations == 0:
-		fail("no elimination in " + str(_rounds) + " rounds - the elimination path is not covered")
-		ok = false
-	if _family_out_ends == 0:
-		fail("no round ran to the family-out end (the seat to act had an empty family)")
-		ok = false
-	if main.draws_checked == 0:
-		fail("no (draw, play) pairing was verified - CountingMain._on_move_chosen never ran")
-		ok = false
-	if main.left_audits == 0:
-		fail("no _left audit ran - the accounting is not verified continuously (step 17)")
-		ok = false
-	if main.left_audits <= main.left_skips:
-		fail(str(main.left_skips) + " audits skipped vs " + str(main.left_audits)
-			+ " run - the audit is being skipped more than it runs, so it proves nothing")
-		ok = false
-	if _left_violations > 0:
-		fail(str(_left_violations) + " continuous _left accounting violation(s) (see the lines above)")
-		ok = false
-	if _failures > 0:
-		fail(str(_failures) + " per-round rule check(s) failed")
-		ok = false
-	# step 12: the joint-move legality rail (every committed move checked in the state it was chosen
-	# from) and the per-level coverage the gate asks for ("levels 1-4 all play legal joint moves")
-	for msg in legal_violations:
-		fail("illegal joint move: " + msg)
-		ok = false
-	if legal_checked == 0:
-		fail("no joint move was checked - the legality rail never ran")
-		ok = false
-	for i in levels_spec.length():
-		var lvl: int = int(levels_spec[i])
-		if plays_by_level[lvl] == 0:
-			fail("no play was made with AI level " + str(lvl) + " - the level is on the board and never"
-				+ " chose a move, so its policy is not covered by this run")
-			ok = false
-	if ok:
-		print("PASS  " + str(_rounds) + " variant rounds (" + str(_family_out_ends) +
-			" family-out ends), " + str(_eliminations) + " eliminations, " + str(_plays_total) +
-			" plays, no script error")
-	get_tree().quit(0 if ok else 1)
+	var gates: Array[String] = _run_gates(main, count, target_rounds, spec)
+	for msg: String in gates:
+		gate_fail(str(count) + "p: " + msg)
+	runs.append({
+		"count": count,
+		"spec": spec,
+		"rounds": _rounds,
+		"games": main.game_counter,
+		"eliminations": _eliminations,
+		"plays": _plays_total,
+		"prince_plays": _prince_total,
+		"family_out_ends": _family_out_ends,
+		"elim_rounds": _elim_rounds,
+		"audits": int(main.left_audits),
+		"skips": int(main.left_skips),
+		"left_violations": _left_violations,
+		"legal": legal_checked,
+		"by_level": plays_by_level_str(spec),
+		"by_seat": plays_by_seat_str(count),
+		"failures": _run_failures,
+		"unsettled": _unsettled_rounds,
+		"devs": _boundary_devs,
+		"gates": gates,
+		"ok": gates.is_empty(),
+	})
+	await _stop_game(main)
 
+
+# Every player count passes THIS on its own - "variant games flow for every player count" is the gate,
+# so a green 4p run never hides a stalled 2p one.
+func _run_gates(main, count: int, target_rounds: int, spec: String) -> Array[String]:
+	var v: Array[String] = []
+	if _rounds < target_rounds:
+		v.append("the games stalled after " + str(_rounds) + " of " + str(target_rounds)
+			+ " rounds - the variant loop does not keep producing round ends")
+	if _eliminations == 0:
+		v.append("no elimination in " + str(_rounds) + " rounds - the elimination path is not covered")
+	if _family_out_ends == 0:
+		v.append("no round ran to the family-out end (the seat to act had an empty family)")
+	if int(main.draws_checked) == 0:
+		v.append("no (draw, play) pairing was verified - CountingMain._on_move_chosen never ran")
+	if int(main.left_audits) == 0:
+		v.append("no _left audit ran - the accounting is not verified continuously (step 17)")
+	if int(main.left_audits) <= int(main.left_skips):
+		v.append(str(int(main.left_skips)) + " audits skipped vs " + str(int(main.left_audits))
+			+ " run - the audit is being skipped more than it runs, so it proves nothing")
+	if _left_violations > 0:
+		v.append(str(_left_violations) + " continuous _left accounting violation(s) (see the lines above)")
+	if _run_failures > 0:
+		v.append(str(_run_failures) + " per-round rule check(s) failed")
+	# step 12: the joint-move legality rail (every committed move checked in the state it was chosen
+	# from) and the coverage the gate asks for ("levels 1-4 all play legal joint moves").
+	for msg: String in legal_violations:
+		v.append("illegal joint move: " + msg)
+	if legal_checked == 0:
+		v.append("no joint move was checked - the legality rail never ran")
+	# Coverage names the SEATS ON THE BOARD, not the digits of the level spec. The old gate walked the
+	# whole spec, so a 2p run on `--levels=4432` demanded plays from levels 3 and 2 - the levels of the
+	# seats it DISABLES. That is a gate about the spec, not about the game: it is why 2p and 3p exited 1
+	# with every rule check green (2p "no play ... level 3", 3p "no play ... level 2").
+	for i in count:
+		if plays_by_seat[i] == 0:
+			v.append("seat " + str(i) + ", level " + spec[i] + ", never chose a move - its policy is"
+				+ " not covered by this run")
+	if main.game_counter >= main.max_games:
+		v.append("the run reached Main.max_games (" + str(main.max_games)
+			+ " games), so a stall here is the cap, not the rules")
+	return v
+
+
+# The suite-level gate: every count green, at least MIN_TOTAL_ROUNDS rounds played in total, and the
+# card accounting clean in every one of them.
+func _report() -> void:
+	print("=========== NOBLE FAMILY smoke suite (todo step 30), " + str(runs.size())
+		+ " player count(s) in one process ===========")
+	var total_rounds: int = 0
+	var total_plays: int = 0
+	var total_elim: int = 0
+	var total_fam_out: int = 0
+	var total_audits: int = 0
+	var total_skips: int = 0
+	var total_violations: int = 0
+	var total_legal: int = 0
+	var bad: Array[String] = []
+	var counts_str := ""
+	for r: Dictionary in runs:
+		var c: int = int(r["count"])
+		counts_str += str(c) + "p "
+		total_rounds += int(r["rounds"])
+		total_plays += int(r["plays"])
+		total_elim += int(r["eliminations"])
+		total_fam_out += int(r["family_out_ends"])
+		total_audits += int(r["audits"])
+		total_skips += int(r["skips"])
+		total_violations += int(r["left_violations"])
+		total_legal += int(r["legal"])
+		print("RUN  " + str(c) + "p  seats " + str(r["spec"]) + "  rounds " + str(r["rounds"])
+			+ " in " + str(r["games"]) + " game(s), " + str(r["eliminations"]) + " eliminations, "
+			+ str(r["plays"]) + " plays (" + str(r["prince_plays"]) + " Prince), "
+			+ str(r["family_out_ends"]) + " family-out end(s), " + str(r["audits"])
+			+ " _left audit(s) / " + str(r["skips"]) + " skip(s) / " + str(r["left_violations"])
+			+ " violation(s), " + str(r["legal"]) + " legal joint move(s), " + str(r["failures"])
+			+ " per-round failure(s), " + str(r["unsettled"]) + " unsettled round end(s), "
+			+ str(r["devs"]) + " boundary deviation(s)  ->  "
+			+ ("OK" if bool(r["ok"]) else "FAILED"))
+		for msg: String in r["gates"]:
+			bad.append(str(c) + "p: " + msg)
+	if _failures > 0:
+		bad.append(str(_failures) + " per-round rule check(s) across the run(s)")
+	if total_violations > 0:
+		bad.append(str(total_violations) + " continuous `_left` accounting violation(s)")
+	if total_rounds < MIN_TOTAL_ROUNDS:
+		bad.append(str(total_rounds) + " rounds in total, at least " + str(MIN_TOTAL_ROUNDS)
+			+ " required - the variant games do not flow for every player count")
+	print("TOTAL  " + counts_str + ": " + str(total_rounds) + " rounds (min " + str(MIN_TOTAL_ROUNDS)
+		+ "), " + str(total_elim) + " eliminations, " + str(total_plays) + " plays, " + str(total_fam_out)
+		+ " family-out end(s), " + str(total_legal) + " legal joint move(s), " + str(total_audits)
+		+ " _left audit(s) (" + str(total_skips) + " skipped), " + str(total_violations)
+		+ " violation(s), " + str(_failures) + " per-round failure(s)")
+	for msg: String in bad:
+		gate_fail(msg)
+	if bad.is_empty():
+		print("PASS  " + str(total_rounds) + " variant rounds over " + str(runs.size())
+			+ " player count(s), " + str(total_elim) + " eliminations, " + str(total_plays)
+			+ " plays, " + str(total_fam_out) + " family-out ends, " + str(total_legal)
+			+ " joint moves verified legal, " + str(total_audits) + " _left audits clean"
+			+ " (the log must contain no script error line)")
+	get_tree().quit(0 if bad.is_empty() else 1)
+
+
+# Free a finished count's game WITHOUT a script error. `interrupted = true` closes every play chain at
+# its entry (main.gd tests it in `_on_move_chosen` / `_on_card_played` / `_on_target_*` /
+# `resolve_effect`), so nothing new starts; the animations already in flight are awaited out (at
+# `_speed = 0` every tween finishes on the next frame). Freeing a Main with a card mid-flight is what
+# produced the "Lambda capture at index 1 was freed" script errors step 26 measured, so the harness
+# frees a board with NOTHING in flight.
+func _stop_game(main) -> void:
+	main.interrupted = true
+	for _i in 600:
+		await get_tree().process_frame
+		if main._animation_layer.get_child_count() == 0:
+			break
+	main.queue_free()
+	for _i in 3:
+		await get_tree().process_frame
 
 func count_play(m: Move, seat: int) -> void:
 	plays[seat] += 1
+	plays_by_seat[seat] += 1
 	# `move_chosen` only fires for AI seats, so the level is 1..5; the guard keeps a Disabled/human
 	# seat from indexing `plays_by_level` out of range if this rail is ever wired to a human game.
 	var lvl: int = int(main_ref._players[seat].ai_level)
@@ -382,6 +554,7 @@ func check_joint_move(m: Move, seat: int) -> void:
 
 func count_card_play(c: Card, seat: int) -> void:
 	plays[seat] += 1
+	plays_by_seat[seat] += 1
 	if c.type == Deck.CardType.Prince:
 		prince_plays += 1
 		_prince_total += 1
@@ -592,6 +765,14 @@ func check_draw_pairing(main) -> void:
 
 func fail(msg: String) -> void:
 	_failures += 1
+	_run_failures += 1
+	print("FAIL  " + msg)
+
+
+# A gate line that is NOT a rule check: it reports a gate the SUITE failed (a stall, a count with no
+# elimination, a level with no play), not a rule the game broke. The rule-check counter `_failures`
+# stays the count of rule violations, so the two numbers mean what they say.
+func gate_fail(msg: String) -> void:
 	print("FAIL  " + msg)
 
 
@@ -623,6 +804,14 @@ func scores_str(main) -> String:
 	var s := ""
 	for p in main._players:
 		s += str(p.idx) + ":" + str(p.score) + " "
+	return s
+
+
+# The seat coverage as `0=84 1=78 2=40` - the step 30 gate reads these, per seat ON THE BOARD.
+func plays_by_seat_str(count: int) -> String:
+	var s := ""
+	for i in count:
+		s += str(i) + "=" + str(plays_by_seat[i]) + " "
 	return s
 
 
