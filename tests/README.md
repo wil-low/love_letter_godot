@@ -1929,3 +1929,127 @@ Harness facts this step measured
    scene, so `_stop_game()` interrupts and settles first. Sabotage (free immediately, no interrupt, no
    settle): 0 FAIL lines and 0 script errors - this suite cannot falsify the guard, and the guard costs
    one `await` loop per count.
+
+## tests/classic_sweep.sh — step 32: every suite, ONE process at a time (the Phase A–C acceptance gate)
+
+Todo step 32 is "Files: none (run only)" and its gate is "classic mode is provably untouched". Five
+hand-typed commands are five ways to forget one and one way to run two games at once, so the gate is a
+script: `./tests/classic_sweep.sh` (extra args go to `repro_belief_truth`, `SWEEP_DIR` / `SWEEP_TIMEOUT`
+override the log dir and the per-run timeout). The sweep runs the five classic suites AND the two
+variant ones, because they share `main.gd` / `player.gd` / `deck.gd`: a classic-only sweep leaves the
+shared code unmeasured. It does NOT nest the rules suite a second time — `tests/smoke_games.tscn`
+already embeds it (step 22), and a game's round end consumes global RNG, so a second copy shifts the
+scripted fixtures' measured counts.
+
+Measured 2026-11-15, godot 4.7.2.stable, seed 20260607, `SWEEP_TIMEOUT=1800`, ~4 min total:
+
+| suite | exit | secs | evidence in the log |
+|---|---|---|---|
+| `tests/smoke_games.tscn` | 0 | 106 | 300 rounds, 10 games, 137 eliminations (the classic baseline) + the nested rules suite, 1434 PASS lines |
+| `tests/repro_guard_princess.tscn` | 0 | 5 | 11 PASS |
+| `tests/repro_prince_memory.tscn` | 0 | 5 | 40 PASS |
+| `tests/repro_score_multiplier.tscn` | 0 | 5 | 10 PASS |
+| `tests/repro_belief_truth.tscn -- --rounds=150` | 0 | 60 | 150 rounds, 1403 level-4 decisions (9.35/round), 122 beliefs about live rivals with **0 false**, 36 memory Guard guesses (36 hits, 0 impossible), 0 zombie beliefs |
+| `tests/noble_family_smoke.tscn` | 0 | 40 | 2p+3p+4p: 120 rounds, 170 eliminations, 836 plays, 12 family-out ends, 836 joint moves verified legal, 4112 `_left` audits / 0 violations |
+| `tests/noble_family_rules.tscn` | 0 | 75 | 1433 PASS, 0 FAIL |
+
+`--check-only` is clean over the whole project in the same session, and the sweep's own report prints
+`SWEEP OK` and exits 0. The belief suite's `--rounds=150` costs 60 s (500 rounds costs ~7 min, the cost
+is superlinear), which is why the gate uses 150.
+
+### What the sweep caught: the classic Prince widow sabotage
+
+`await deal_card(tp, true)` → `await deal_card(tp, false)` in the **classic** branch of the Prince
+effect (`main/main.gd:774`) — a Prince redraw that never uses the widow, i.e. `_deck.pop(false)`
+returning `{}` the moment the main pile is empty, `result["type"]` on an empty Dictionary, the
+`deal_card` coroutine aborting, the target left with 0 cards, the turn chain never resuming.
+
+| suite | exit | secs | SCRIPT ERROR |
+|---|---|---|---|
+| `smoke_games` | **124** (the timeout) | 601 | 2 (`Invalid access to property or key 'type'` at `deal_card:285`, `Assertion failed: Player 1 has 0 cards` at `resolve_effect:823`) |
+| `repro_guard_princess` / `repro_prince_memory` / `repro_score_multiplier` | 0 | 5 | 0 |
+| `repro_belief_truth --rounds=150` | **124** | 600 | 2 (same pair, seat 2) |
+| `noble_family_smoke` / `noble_family_rules` | 0 | 40 / 75 | 0 |
+
+Sweep: 4 problem lines, `SWEEP FAILED`, exit 1. Three facts this measures:
+
+1. **A stall is the failure mode, not a FAIL line.** The suites whose fixtures are scripted never reach
+   a Prince at an empty main pile, so they stayed green; the two whole-game suites reached it and
+   **stalled**, so their exit code is the timeout (124) and the log ends mid-turn. A gate that greps
+   only for `FAIL` reports this run as clean.
+2. **A runtime script error does not change the exit code.** Godot keeps running after a
+   `SCRIPT ERROR:`; both stalling suites exited 124 only because the game never finished. The
+   `SCRIPT ERROR` / `Failed to load script` grep is a gate component, not a report.
+3. **The sweep localizes the damage.** The variant suites stayed green under a sabotage in the
+   `else:` (classic) branch, and the classic suites stayed green under every variant change of steps
+   1–31 — which is the assertion step 32 actually makes: the two modes share a file and do not share
+   a branch.
+
+### Two log facts the sweep depends on (measured here, recorded in the script)
+
+- **The `FAIL` grep must be anchored** (`^[[:space:]]*FAIL`). The word also occurs inside PASS prose —
+  "a LONGER string in the scene is a FAIL, not a layout choice", "the suite ran that sabotage and
+  printed 1258 PASS, 0 FAIL" — and an unanchored `grep -c 'FAIL'` reported 2 failures on the 1433-PASS
+  exit-0 rules suite. The first sweep run failed on its own grep.
+- **The evidence printed LAST is missing from a redirected log** (the M5 lesson of step 26, now
+  load-bearing): the 416 KB classic log ends at the nested suite's last check line, so the rules
+  suite's `ALL CHECKS PASSED` line and `smoke_games`' `NOBLE UI: ...` counters are **not in the log**
+  (they are the last kilobytes, block-buffered, `stdbuf -oL` does not save them). The classic gate's
+  step-22 number is therefore carried by the **exit code**: `_check_noble_ui()` fails the classic run
+  when the embedded suite reports a check, when openings != taps, or when any rail counter is
+  nonzero, so exit 0 means 6 openings served by 6 taps and 0 rails violations in the scripted 4p human
+  game. Read the counters by running the suite UNredirected.
+
+### What the sweep caught the second time: leaving a game while a card is in flight
+
+The sweep's repeated nested runs caught a failure no suite asserts: 「M4: Exit to menu from the noble
+game -> CLASSIC」 in `tests/repro_start_to_classic_game.tscn` failed on 1 run in 4 with `SCRIPT ERROR:
+Assertion failed: Player 1 has 2 cards` at `player.gd:131` (called from `resolve_effect`,
+`main.gd:816`). The assertion is the symptom, not the disease: the game M4 left for the menu had a
+card IN FLIGHT, and the chain that owned it landed that card in a hand of the game PLAY started in the
+meantime. A classic seat at rest holds 1 card, 2 only while it is the seat to act, so a hand of 2 at
+effect time is a card the running round never dealt.
+
+**The detector** (a throwaway scene, deleted after measuring — the recipe is the useful part): `Node2D`
+root with `print_memory` / `print_valid_moves`, `main.tscn` instantiated, `set_script(load(
+"res://tests/counting_main.gd"))` BEFORE `add_child` (saving and restoring `card_scene`, which
+`set_script` resets), all seats Level 4, `Animator._speed = 0`, frames advanced by the real pump, and
+`main.interrupted = true` plus a SWEPT number of frames between two `await main.init_players(...)`
+calls — the PLAY press is a second `init_players()`, so the swept gap is the number of frames between
+leaving the game and starting the next. The signature of the ghost card is the step 17 supply identity
+read from the other side: `_left[type]` claims how many copies of a type are still in play and every
+copy in play sits in exactly one home (main pile, widow, a seat's hand, the table, the animation
+layer), so `physical[type] > _left[type]` is a card in a home that the running round does not account
+for. Skip frames with `discard_depth > 0` (a card mid-discard is legitimately double-viewed).
+
+Measured, same scene and seeds, pre-fix vs post-fix: the gaps 0, 1, 2, 3, 4 frames all produced ghost
+frames (297–894 frames, excess 1–2 cards: `Guard 6>5`, `Priest 3>2`, `Princess 2>1`, `Baron 3>2`,
+`Handmaid 1>0`), gaps 6–20 were clean — the window is the FIRST frames after leaving the game, and a
+gap of 0 (the shape M4 has) hits it every time. Post-fix: 0 ghost frames at 8 of the 9 gaps.
+
+**The fix** in `main/main.gd`: `game_generation`, bumped by `init_players()` before `_new_game()`, plus
+`_stale(gen) == interrupted or gen != game_generation`, checked by every coroutine at its entry and
+after its awaits with the generation captured when the coroutine started — `deal_card` (an in-flight
+card of a finished game is freed, not landed), `deal_from_family` (the same, the family data
+untouched), `discard` (the game's ONLY `_left` decrement: a stale loop would spend the new game's
+supply on the old game's cards), `set_inactive` (the elimination reveal of a finished game must not
+discard the hand of a seat the new game re-activated), `resolve_effect` (entry guard plus resume
+guards in the Priest / Baron / Prince / King branches — the King's two traded cards are freed rather
+than landed in seats they never traded with), `new_turn` and `_begin_play_selection` (a turn of a
+finished game does not arm a play selection), `round_over` (its `delay(2)` / `delay(8)` auto-presses
+must not deal the next round of a new game), `_on_round_over_pressed` / `_on_game_over_pressed`, and
+`_on_move_chosen` (a move chosen by a game that is over is dropped). `init_players()` also removes the
+cards left in `_animation_layer`: they belong to the finished game and must not be drawn over the new
+game's board, and the chain suspended on their Tween never resumes, which is inert.
+
+**Lesson for any harness that drives the menu:** `Player.ai_move()` emits `move_chosen` **synchronously**
+(`player.gd:242`) at some levels, so a guard comparing "the generation the current turn asked this move
+for" must set that value BEFORE the call. Set after it, the live game drops its own first move and
+stalls — measured: `smoke_games` ran 4 min without completing a round (exit 124) with a single
+`Dropped a move chosen by a finished game` warning at `new_turn for Player 0, level 4`.
+
+**Open, recorded:** gap 1 post-fix still shows a ghost (293 frames, `Handmaid 1>0`) — a chain suspended
+INSIDE an effect (past every guard in its branch) can still land a card in the game that starts 2
+frames after the Exit. The gate is green on it (the M1–M4 fixture runs the Exit at `_speed = 0`, where
+the window is a single frame), so this is a known residual of the Exit-mid-animation path, not a
+checked property.

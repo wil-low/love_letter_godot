@@ -23,6 +23,28 @@ var game_counter: int = 0
 var interrupted: bool
 var noble_family: bool = false
 
+# Step 32 (found by the classic regression sweep, see tests/README.md): the game is a chain of
+# coroutines that mutate state AFTER an `await`, and a chain can outlive its own game - Exit-to-menu
+# only sets `interrupted`, and a coroutine suspended on `await Animator.move_card` resumes on a later
+# frame, by which time `_new_game()` has cleared `interrupted` and the NEXT game has dealt its cards.
+# Measured (tests/tmp_ghost probe, deterministic): the resumed `deal_card` put the abandoned round's
+# in-flight card into a seat of the new game - `hand.get_child_count() == 2`, the 1-card invariant
+# broken, the classic gate failing 1 run in 4.
+#
+# `interrupted` cannot express that: at the moment the card lands it is false, and the new game's own
+# draws set it false too. "The game this card belongs to is over" is only decidable against a counter
+# the coroutines carry, so `game_generation` is bumped by `init_players()` and every coroutine that
+# mutates after an await compares the generation it started in. A stale chain frees its own card and
+# returns; it never touches the new game's seats, deck counts or table.
+var game_generation: int = 0
+
+# Step 32, the same failure seen from the AI side: the seat's `move_chosen` is emitted by Player after
+# its own timer, so an abandoned game can have a move IN FLIGHT, and the emission lands in the game
+# that started in the meantime. `_move_request_gen` is the generation the CURRENT turn asked that move
+# for, so a move whose request belongs to a finished game is dropped at the chain's entry - the only
+# point where a stale chain can still be stopped before it plays a card.
+var _move_request_gen: int = -1
+
 # Noble Family, todo step 22 - the family modal's EXCLUSIVITY state.
 #
 # A human family draw is a coroutine that stops the play chain on `await draw_selected`, and the chain
@@ -174,6 +196,16 @@ func init_players(random_seed: int) -> void:
 		if ch is Card:
 			_table.remove_child(ch)
 			ch.queue_free()
+	# Every card in flight belongs to the game that is ending: bump the generation BEFORE the new game
+	# starts, so a chain that resumes after this point recognises its own game as over (see
+	# `game_generation`). The in-flight nodes are removed here too: a chain suspended on a Tween of one
+	# of them never resumes once its node is gone - inert by design, since the only thing it could do on
+	# resume is mutate a game that is over - and the card a finished round flew across the screen must
+	# not be drawn over the new game's board.
+	game_generation += 1
+	for ch in _animation_layer.get_children():
+		_animation_layer.remove_child(ch)
+		ch.queue_free()
 	_new_game()
 
 
@@ -279,6 +311,7 @@ func deal_sound() -> void:
 # popped and `_left` is untouched - a first-hand card leaves the supply only when it is played.
 func deal_card(p: Player, allow_widow: bool = false, card_type: Deck.CardType = Deck.CardType.Unknown) -> void:
 	deal_sound()
+	var gen: int = game_generation
 	var src: Sprite2D
 	if card_type == Deck.CardType.Unknown:
 		var result := _deck.pop(allow_widow)
@@ -295,8 +328,21 @@ func deal_card(p: Player, allow_widow: bool = false, card_type: Deck.CardType = 
 	_deck.update_piles()
 	var dst := p.drawn_card_position()
 	await Animator.move_card(c, dst)
+	if _stale(gen):
+		# The game this card was dealt for ended while the card was in flight (Exit-to-menu -> PLAY):
+		# its hand belongs to a finished round and `init_players()` has cleared it, so adding the card
+		# here plants a GHOST in the NEXT game's seat - the measured failure of step 32. Free it, stop.
+		c.queue_free()
+		return
 	p.add_card(c)
 	c.position = p.hand.to_local(dst)
+
+
+# Step 32: is the calling coroutine's own game over? `gen` is the `game_generation` captured when the
+# coroutine started, and `interrupted` covers a same-game Exit that no new game has followed yet. Both
+# are only decidable AFTER an await, which is exactly where the coroutines that mutate state check it.
+func _stale(gen: int) -> bool:
+	return interrupted or gen != game_generation
 
 
 # Noble Family variant: the draw from a seat's own private family - the mandatory turn-start
@@ -318,6 +364,7 @@ func deal_from_family(p: Player, family_idx: int) -> void:
 		push_warning("deal_from_family: seat " + str(p.idx) + " draws family[" + str(family_idx)
 			+ "] while a family modal is open - the seat that is choosing is the only one allowed to draw")
 	deal_sound()
+	var gen: int = game_generation
 	var card_type: Deck.CardType = p.pop_family(family_idx)
 	# the stack is a view of the data, so it shrinks with the pop - before the card starts to fly,
 	# so what is left in the stack is exactly what the seat still holds
@@ -331,6 +378,9 @@ func deal_from_family(p: Player, family_idx: int) -> void:
 	c.global_position = p.global_position
 	var dst := p.drawn_card_position()
 	await Animator.move_card(c, dst)
+	if _stale(gen):
+		c.queue_free()
+		return
 	p.add_card(c)
 	c.position = p.hand.to_local(dst)
 
@@ -428,6 +478,7 @@ func human_draw_from_family(p: Player) -> void:
 
 
 func new_turn():
+	var gen: int = game_generation
 	print("\nnew_turn for Player " + str(_cur_player) + ", level " + str(_players[_cur_player].ai_level))
 	if get_parent().print_memory:
 		for p in _players:
@@ -459,18 +510,23 @@ func new_turn():
 			# The human's mandatory family draw is HIS choice, taken in the modal (step 20): the seat's
 			# stack is display-only, so no path auto-picks a family card for a human seat.
 			await human_draw_from_family(p)
-			_begin_play_selection(p)
+			if _stale(gen):
+				return  # the modal answered late: the turn belongs to a game that is over
+			_begin_play_selection(p, gen)
 		else:
 			# An AI seat does NOT draw here: the family draw is part of the move, enumerated by
 			# find_valid_moves() (step 11) and animated by _on_move_chosen() (step 13). The seat
 			# decides over the pair (his active card, family[f]) while his hand holds 1 card.
-			_begin_play_selection(p)
+			_begin_play_selection(p, gen)
 		return
 	if _deck._main.visible:
 		await deal_card(p)
-		#_players[_cur_player].hand.get_child(0).type = Deck.CardType.Baron
-		#_players[_cur_player].hand.get_child(1).type = Deck.CardType.King
-		_begin_play_selection(p)
+		# A deal that landed in a game that ended in the meantime left NO card in this seat (its
+		# coroutine freed it), so the chain must stop here: continuing would arm a play selection for a
+		# 1-card seat, in a game whose turn is not this one.
+		if _stale(gen):
+			return
+		_begin_play_selection(p, gen)
 	else:
 		round_over()
 
@@ -479,7 +535,11 @@ func new_turn():
 # pile (hand = 2 cards, he chooses which one to play); in the Noble Family variant an AI seat has
 # 1 card in hand and chooses the whole (draw, play, target) triple, while the human seat is still
 # dealt a placeholder family draw at turn start (step 20) and keeps the 2-card choice.
-func _begin_play_selection(p: Player) -> void:
+func _begin_play_selection(p: Player, gen: int = -1) -> void:
+	if gen == -1:
+		gen = game_generation
+	if _stale(gen):
+		return  # asked for by a turn of a game that is over: no move is armed in the game running now
 	p.current_mark.show()
 	if p.is_human():
 		var valid_moves = find_valid_moves()
@@ -501,6 +561,12 @@ func _begin_play_selection(p: Player) -> void:
 			push_warning("Player " + str(p.idx) + " has no legal move, ending the round")
 			round_over()
 			return
+		if _stale(gen):
+			return
+		# The generation the CURRENT turn asked its move for. Set BEFORE `ai_move()`, which can emit
+		# `move_chosen` synchronously (player.gd:242) - after the call, a live move would be read as
+		# stale by its own request.
+		_move_request_gen = game_generation
 		p.ai_move(valid_moves, _deck._left)
 
 
@@ -597,6 +663,13 @@ func _on_target_type_selected(type: Deck.CardType) -> void:
 func _on_move_chosen(move: Move) -> void:
 	if interrupted:
 		return
+	if _move_request_gen != game_generation:
+		# A move chosen by a game that is over (Exit-to-menu -> PLAY while its AI seat was thinking).
+		# Its `_played_card` is a node of that finished round; the game that is running now asked for
+		# NO move, so its generation is not the one this request was made in.
+		push_warning("Dropped a move chosen by a finished game (the seat to act is " + str(_cur_player)
+			+ "): the play chain of the game that was left for the menu does not run in the new game")
+		return
 	if _drawing:
 		# A seat CANNOT choose while the human's modal is open - the play chain is single-threaded and
 		# it is suspended in the modal - so this rail has no legitimate path: it fires only if a tap or a
@@ -625,6 +698,7 @@ func _on_move_chosen(move: Move) -> void:
 
 
 func set_inactive(p: Player, reveal_hand: bool = true):
+	var gen: int = game_generation
 	p.active = false
 	# The seat is out of the round: beliefs about its card are worthless (no move can
 	# target it any more), and its own beliefs will never guide a move again.
@@ -658,6 +732,13 @@ func set_inactive(p: Player, reveal_hand: bool = true):
 			# menu all round and the reveal surface at elimination. `discard()` already removed and
 			# freed the Card children, `clear_family()` below drops the data; the empty node lives on.
 		p.clear_family()
+	if _stale(gen):
+		# The elimination reveal is a chain of awaits, and its last mutation is `discard(p.hand)` -
+		# the hand of a seat of the game that is RUNNING now, whose cards the finished round must not
+		# spend. The seat's `active = false` above belongs to the finished game's seats, which
+		# `init_players()` re-activates, so a stale elimination cannot even reach this point in a game
+		# that is not its own.
+		return
 	discard(p.hand)
 	p._inactive.visible = true
 	await Animator.delay(1)
@@ -692,9 +773,10 @@ func reveal_out_family(p: Player, show: bool = true) -> Node2D:
 
 
 func resolve_effect() -> void:
+	var gen: int = game_generation
 	var p := _players[_cur_player]
 	p.hand.get_child(0).modulate.a = 1
-	if interrupted:
+	if _stale(gen):
 		return
 	var tp = null if _target_player == -1 else _players[_target_player]
 	p._state = Player.State.IDLE
@@ -714,13 +796,19 @@ func resolve_effect() -> void:
 			Deck.CardType.Priest:
 				if p.is_human():
 					await Animator.reveal_hand(tp)
-				p.update_memory(tp.idx, tp.hand.get_child(0).type)
+					if _stale(gen):
+						return  # the reveal of a finished game's hand must not publish the NEW game's card
+					p.update_memory(tp.idx, tp.hand.get_child(0).type)
 				print("Priest: reveal hand")
 			Deck.CardType.Baron:
 				if p.is_human():
 					await Animator.reveal_hand(tp)
+					if _stale(gen):
+						return  # the Baron chain read the finished game's cards; the new game's hands are not its pair to compare
 				elif tp.is_human():
 					await Animator.reveal_hand(p)
+					if _stale(gen):
+						return
 				var my_type = p.hand.get_child(0).type
 				var their_type = tp.hand.get_child(0).type
 				if my_type > their_type:
@@ -742,7 +830,11 @@ func resolve_effect() -> void:
 				print("Handmaid: protected on")
 			Deck.CardType.Prince:
 				var type = tp.hand.get_child(0).type
+				if _stale(gen):
+					return  # the target of a finished game's Prince is not the seat the new game is playing on
 				await Animator.reveal_hand(tp, false)
+				if _stale(gen):
+					return  # the redraw chain of a finished game must not spend the NEW game's supply
 				await discard(tp.hand)
 				if type == Deck.CardType.Princess:
 					await set_inactive(tp, false)
@@ -772,6 +864,9 @@ func resolve_effect() -> void:
 							await set_inactive(tp, false)
 					else:
 						await deal_card(tp, true)
+					if _stale(gen):
+						return  # the redraw that a finished game asked for is not this game's card; the chain
+							# must not publish memories about a seat the new game re-dealt
 					# The target's card left the game, so every belief about him is dead.
 					# The Prince player's own hand card never changed, so beliefs about him
 					# stay valid; when he Prince-plays himself (tp == p) his own card did
@@ -795,6 +890,13 @@ func resolve_effect() -> void:
 					Animator.move_card(my_card, tp.global_position),
 					Animator.move_card(their_card, p.global_position)
 				])
+				if _stale(gen):
+					# The two cards of a finished game's King trade are in flight; landing them in the NEW
+					# game's seats would trade cards that game never traded (and its own hands are already
+					# dealt). They stay in the animation layer, where `init_players()` sweeps them.
+					my_card.queue_free()
+					their_card.queue_free()
+					return
 				p.add_card(their_card)
 				their_card.position = p.hand.to_local(their_card.global_position)
 				tp.add_card(my_card)
@@ -836,11 +938,17 @@ func resolve_effect() -> void:
 
 
 func discard(from: Node2D) -> void:
+	var gen: int = game_generation
 	var for_discard: Array[Card]
 	for ch in from.get_children():
 		if ch is Card:
 			for_discard.append(ch)
 	for ch in for_discard:
+		# `discard()` is the game's ONLY `_left` decrement, so a stale chain must not run inside a game
+		# that started in the meantime: `from` is the SAME node (the Table, a seat's hand) there, so this
+		# loop would spend the NEW game's supply on the old game's cards and free them.
+		if _stale(gen):
+			return
 		_deck._left[ch.type] -= 1
 		assert(_deck._left[ch.type] >= 0)
 		ch.z_index = RenderingServer.CANVAS_ITEM_Z_MAX
@@ -851,6 +959,7 @@ func discard(from: Node2D) -> void:
 
 func round_over() -> void:
 	print("Round over! Update scores")
+	var gen: int = game_generation
 	var max_type := 0
 	for p in _players:
 		if p.is_active():
@@ -890,6 +999,8 @@ func round_over() -> void:
 		_game_over_label.show()
 		if !_players[0].is_human():
 			await Animator.delay(8)
+			if _stale(gen):
+				return  # the game whose round ended is not the game that is running
 			_on_game_over_pressed()
 	elif !round_winners.is_empty():
 		flash_winners(round_winners)
@@ -902,6 +1013,8 @@ func round_over() -> void:
 		_round_over_label.show()
 		if !_players[0].is_human():
 			await Animator.delay(2)
+			if _stale(gen):
+				return  # the round end of a finished game does not deal the next round of a new one
 			_on_round_over_pressed()
 
 
@@ -913,13 +1026,19 @@ func flash_winners(indices: Array[int]) -> void:
 
 
 func _on_round_over_pressed() -> void:
+	var gen: int = game_generation
 	await Animator.flash(0, [])
+	if _stale(gen):
+		return
 	_round_over_label.hide()
 	_new_round()
 
 
 func _on_game_over_pressed() -> void:
+	var gen: int = game_generation
 	await Animator.flash(0, [])
+	if _stale(gen):
+		return
 	_game_over_label.hide()
 	if _random_seed:
 		_random_seed += 1

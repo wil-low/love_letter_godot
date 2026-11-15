@@ -657,13 +657,13 @@ func new_turn():
 # The pre-decision state: `find_valid_moves()` / `eval_moves()` / `ai_move()` all run inside this
 # call, on exactly this board (for an AI seat in the variant the hand is 1 card and the family is
 # the draw menu, and `_deck._left` is what `eval_moves` scores Guard guesses against).
-func _begin_play_selection(p: Player) -> void:
+func _begin_play_selection(p: Player, gen: int = -1) -> void:
 	audit_left("pre-decision, seat " + str(p.idx) + " (hand " + str(p.hand.get_child_count())
 		+ " cards, family " + str(p.family_size()) + ")")
 	if noble_family and !p.is_human() and p.hand.get_child_count() == 1:
 		# step 31: the ENUMERATED list is checked in the very state production enumerates it from
 		check_enumeration(p)
-	super(p)
+	super(p, gen)
 
 
 func deal_from_family(p: Player, family_idx: int) -> void:
