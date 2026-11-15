@@ -296,8 +296,8 @@ func run_count(count: int, target_rounds: int, seed_value: int) -> void:
 		+ " flight, " + str(_boundary_devs) + " boundary-chain deviation(s) of 1)")
 
 	var gates: Array[String] = _run_gates(main, count, target_rounds, spec)
-	for msg: String in gates:
-		gate_fail(str(count) + "p: " + msg)
+	# The gates are printed by `_report`, under the count's own RUN line - ONE print site, so
+	# `grep -c ^FAIL` counts each failure exactly once.
 	runs.append({
 		"count": count,
 		"spec": spec,
@@ -378,7 +378,8 @@ func _report() -> void:
 	var total_skips: int = 0
 	var total_violations: int = 0
 	var total_legal: int = 0
-	var bad: Array[String] = []
+	var bad: Array[String] = []  # every gate failure, per count + suite-level: decides the exit code
+	var agg: Array[String] = []  # the SUITE-LEVEL ones only, the per-count ones are printed by their run
 	var counts_str := ""
 	for r: Dictionary in runs:
 		var c: int = int(r["count"])
@@ -401,20 +402,27 @@ func _report() -> void:
 			+ str(r["devs"]) + " boundary deviation(s)  ->  "
 			+ ("OK" if bool(r["ok"]) else "FAILED"))
 		for msg: String in r["gates"]:
+			# printed under the RUN line and collected once: the exit code is decided by `bad`, and a
+			# failure is printed exactly once, next to the count it belongs to.
+			gate_fail(str(c) + "p: " + msg)
 			bad.append(str(c) + "p: " + msg)
 	if _failures > 0:
 		bad.append(str(_failures) + " per-round rule check(s) across the run(s)")
+		agg.append(str(_failures) + " per-round rule check(s) across the run(s)")
 	if total_violations > 0:
 		bad.append(str(total_violations) + " continuous `_left` accounting violation(s)")
+		agg.append(str(total_violations) + " continuous `_left` accounting violation(s)")
 	if total_rounds < MIN_TOTAL_ROUNDS:
-		bad.append(str(total_rounds) + " rounds in total, at least " + str(MIN_TOTAL_ROUNDS)
+		var m: String = (str(total_rounds) + " rounds in total, at least " + str(MIN_TOTAL_ROUNDS)
 			+ " required - the variant games do not flow for every player count")
+		bad.append(m)
+		agg.append(m)
 	print("TOTAL  " + counts_str + ": " + str(total_rounds) + " rounds (min " + str(MIN_TOTAL_ROUNDS)
 		+ "), " + str(total_elim) + " eliminations, " + str(total_plays) + " plays, " + str(total_fam_out)
 		+ " family-out end(s), " + str(total_legal) + " legal joint move(s), " + str(total_audits)
 		+ " _left audit(s) (" + str(total_skips) + " skipped), " + str(total_violations)
 		+ " violation(s), " + str(_failures) + " per-round failure(s)")
-	for msg: String in bad:
+	for msg: String in agg:
 		gate_fail(msg)
 	if bad.is_empty():
 		print("PASS  " + str(total_rounds) + " variant rounds over " + str(runs.size())

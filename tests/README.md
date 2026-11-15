@@ -1543,19 +1543,21 @@ would need its own tag semantics — the todo names one variant, and Q1 pins the
 (4 tagged, 17 untagged) so that change cannot happen quietly. Step 30 (the Noble Family smoke suite) is
 the next section.
 
-## tests/noble_family_smoke.tscn — Noble Family variant, whole games on the AI (steps 7, 11, 14)
+## tests/noble_family_smoke.tscn — Noble Family variant, whole games on the AI (steps 7, 11, 14, 30)
 
 Variant games (`main.noble_family = true`) with every seat on the AI (levels 4/4/3/2), animations
 at speed 0, audio muted: the "the variant plays and terminates" check, the twin of
-`tests/smoke_games.tscn` for the classic path.
+`tests/smoke_games.tscn` for the classic path. **Its default run plays 2p + 3p + 4p in ONE process**
+(step 30, see the last subsection of this section); `--players=N` pins one of them.
 
-    godot --headless --path . tests/noble_family_smoke.tscn                        # 4 players
+    godot --headless --path . tests/noble_family_smoke.tscn                        # 2p + 3p + 4p, 40 rounds each
     godot --headless --path . tests/noble_family_smoke.tscn -- --players=3 --rounds=40
+    godot --headless --path . tests/noble_family_smoke.tscn -- --players=4 --rounds=100   # one count over the 100-round bar
     godot --headless --path . tests/noble_family_smoke.tscn -- --seed=999         # other deal/RNG
     godot --headless --path . tests/noble_family_smoke.tscn -- --levels=1234      # one seat per AI level
     godot --headless --path . tests/noble_family_smoke.tscn -- --seed=777 --log=1 > run.log
     godot --headless --path . tests/noble_family_smoke.tscn -- --print_moves=1   # move dumps
-    echo $?   # 0 = the variant flowed, 1 = a check failed / the loop stalled
+    echo $?   # 0 = the variant flowed for every count played, 1 = a gate failed / the loop stalled
 
 `tests/counting_main.gd` (`extends Main`, installed with `set_script`, restoring the `card_scene`
 export afterwards) records the events that cannot be polled: `set_inactive()` (eliminations),
@@ -1780,3 +1782,92 @@ so a seat can run out of family cards with fewer than `family size` plays to his
 round in the sample reached the 12-play ceiling (max 11).** Only rounds with no elimination are
 checked against the family-out rule (`family_draws[actor] == family size` + the `_left` sum); the
 other rounds are cut short by an elimination and only the per-seat bounds are checked.
+
+### Step 30 — the whole variant board in ONE run: 2p + 3p + 4p, gates per count, >= 100 rounds
+
+Todo step 30's gate is "variant games flow for **every** player count" (seat 0 on the AI, `max_games`
+respected, the `_left` bar, SCRIPT-ERROR-clean output, "assert >= 100 rounds total"), and its Check is
+the bare invocation. So the bare invocation now plays all three boards in one process:
+`COUNTS = [2, 3, 4]`, `ROUNDS = 40` per count = **120 rounds**, bar `MIN_TOTAL_ROUNDS = 100`. Measuring
+one count per process is exactly what step 30 removes as a gate: a green 4p run says nothing about 2p.
+`--players=N` still pins one count (the step 7/11/12/14/17 measurements keep working); the bar applies
+to whatever ran, so the single-count invocation is `--players=4 --rounds=100`.
+
+Each count gets a **fresh `Main` scene** - its own seed, its own counters, its own `Main.max_games` -
+torn down by `_stop_game()` (set `interrupted = true`, wait until `_animation_layer` is empty, then
+`queue_free()`). `Main._new_game()` re-seeds the RNG per game, so a count's numbers are reproducible on
+their own, in a shared process: two canonical runs differ only in the wall-clock line `/usr/bin/time`
+appends (first 3530 log lines byte-identical; the third seed, 999, differs in 6344 diff lines).
+
+Per-count gates (`_run_gates`), printed under the count's own `RUN` line: the target round count was
+reached; >= 1 elimination; >= 1 round ran to the **family-out end**; the (draw, play) pairing rail ran;
+the continuous `_left` audit ran, was not only skipped, and found 0 violations; 0 per-round rule checks
+failed; 0 illegal joint moves, and the legality rail ran; **every seat on the board made at least one
+move**; `game_counter < max_games`, so a stall in a gate is never the cap. Suite gate: every count
+green, >= 100 rounds in total, no rule failure anywhere. `gate_fail()` prints a gate line WITHOUT
+touching `_failures` - "rules the game broke" and "gates this run missed" are two numbers, and a gate
+is printed exactly once (one print site: `_report`, under its own count's line).
+
+Measured (suite default: seed 20260607, `--levels=4432`, 40 rounds per count, one process, 37 s wall):
+
+| count | seats | rounds | games | eliminations | plays (Prince) | family-out ends | `_left` audits / skips / violations | seat coverage (plays) |
+|---|---|---|---|---|---|---|---|---|
+| 2p | 44 | 40 | 5 | 33 | 203 (20) | 7 | 982 / 40 / **0** | 0=109 1=94 |
+| 3p | 443 | 40 | 5 | 57 | 307 (40) | 3 | 1515 / 40 / **0** | 0=111 1=106 2=90 |
+| 4p | 4432 | 40 | 6 | 80 | 326 (30) | 2 | 1615 / 40 / **0** | 0=87 1=79 2=89 3=71 |
+| **total** | | **120** (min 100) | 16 | **170** | **836** (90) | **12** | 4112 / 120 / **0** | every seat, every count |
+
+`PASS  120 variant rounds over 3 player count(s) ...`, exit 0, `grep -c 'SCRIPT ERROR:'` -> **0**. The
+per-count numbers are the same as the single-count baselines taken the same day (2p 33/203/7,
+3p 57/307/3, 4p 80/326/2): putting three boards in one process changed none of them.
+
+Other runs of the same command (120 rounds each, all exit 0, 0 script errors): seed 999 -> 177
+eliminations / 819 plays / 8 family-out ends; seed 777 -> 163 / 840 / 14; `--levels=1234` -> 183 / 787 /
+8; `--players=4 --rounds=100` (one count) -> 193 eliminations / 828 plays / 6 family-out ends.
+`--rounds=30` (90 rounds) exits 1 with the bar line `FAIL  90 rounds in total, at least 100 required`.
+`--levels=1111 --seed=777` exits 1 with the one known policy exception: 4p all-L1 made 0 family-out
+ends (93 eliminations in 40 rounds - every level-1 round ends by elimination, the 2p/3p counts reached
+4 and 2 family-out ends), so a count's gate reports the policy, not a stall.
+
+**The coverage gate names the SEATS ON THE BOARD, not the digits of `--levels`.** The old gate walked
+the whole spec, so the default `--levels=4432` asked the 2p board for plays by levels 3 and 2 - the
+levels of the seats a 2p game **disables**. Sabotage (the old spec-wide loop restored, then
+`git checkout -- tests/noble_family_smoke.gd`): exit 1 with exactly 3 FAIL lines - `2p: no play ...
+level 3`, `2p: ... level 2`, `3p: ... level 2` - in a run where every rule check was green. That is the
+whole reason 2p and 3p exited 1 before step 30, and it is why the gate loops `for i in count` over the
+seats that exist. Sabotage of the gate itself (the per-count gates collected as `[]`, i.e. the suite
+gate ignores them): the 4p all-L1 run prints its `FAIL  4p: no round ran to the family-out end` line
+and exits 0 with a `PASS` - so the per-count gates are load-bearing, not decoration.
+
+Harness facts this step measured
+--------------------------------
+
+1. **`--check-only` is not a parse gate.** A `var m: String = a + b` continued on the next line with a
+   leading `+` - legal inside open parens, an error for a bare statement - is reported as clean by
+   `--check-only --quit tests/noble_family_smoke.gd` **and** by `--check-only --quit project.godot`, and
+   fails when the scene loads: `Parse Error: Expected statement, found "Indent"` +
+   `Failed to load script`. The preflight is a 2-round REAL run, `timeout 150 godot --headless --path .
+   tests/noble_family_smoke.tscn -- --players=2 --rounds=2` (exit 1 by the round bar = healthy;
+   `Failed to load script` in the log = the parse gate).
+2. **A scene whose root script fails to load runs FOREVER.** No script on the root means no prints and
+   no `quit()`: such a run sat until its `timeout` (600 s) with a 73-byte log. Every suite run is
+   timeout-bounded because of this, and a stalled run is only distinguishable from a parse failure by
+   grepping the log for `Failed to load script`.
+3. **A suite must not print the string its own gate greps for.** Step 30's gate is a script-error-clean
+   log, and the PASS line used to say "(grep the log for SCRIPT ERROR: it must be empty)" - so a green
+   log matched the gate's own grep (`grep -c 'SCRIPT ERROR'` -> 1 on a PASSing log, 0 on a failing one:
+   inverted), and the suite's own text made a sabotage look clean. The line now reads
+   "the log must contain no script error line".
+4. **`String + int` is a Parse Error in typed Godot 4** (`"x" + total_elim` -> "Invalid operands
+   String and int"): every number in a report line goes through `str()`.
+5. **stdout is block-buffered into a log file.** A suite that is running normally shows only the engine
+   banner for minutes (4 KB blocks), so progress is judged from the exit code at the end, and a script
+   that launches several runs must `stdbuf -oL` (or `>> file` per line) to report incrementally.
+6. **`pkill -f <pattern>` kills the shell that runs it.** The harness passes the whole command as
+   `bash -c "<command>"`, so a pattern naming a test file or a log path matches the shell's own cmdline:
+   exit 143/137 (and in a script that survives, the batch keeps launching runs behind you). Kill by
+   process image (`pgrep -x` / the `Godot_v4.7.2...` binary), never by command line.
+7. Freeing a finished count's `Main` mid-deal is what the step 26 note forbids for an `Application`
+   scene, so `_stop_game()` interrupts and settles first. Sabotage (free immediately, no interrupt, no
+   settle): 0 FAIL lines and 0 script errors - this suite cannot falsify the guard, and the guard costs
+   one `await` loop per count.
