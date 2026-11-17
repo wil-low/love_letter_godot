@@ -13,6 +13,14 @@ enum CardType {
 	Unknown
 }
 
+const MIN_HIGH_RANK := 5  # Prince, King, Countess, Princess - the Countess rule threshold
+
+
+static func rank(t: CardType) -> int:
+	# Guard..Princess are ranked 1..8, Unknown has no rank
+	return t + 1 if t <= CardType.Princess else 0
+
+
 const card_count = [
 	5, # Guard
 	2, # Priest

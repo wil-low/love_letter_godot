@@ -87,7 +87,7 @@ eval_moves(valid_moves, left_cards)  # assigns m._score to each move
 | **Handmaid** | Fixed `MODERATE` (20). Safe but passive. | 20 |
 | **Prince** | Self + unknown Princess: `GOOD × type`. Self + known Princess: same. Self + >Handmaid: `WEAK`. Others known Princess: `GOOD × type`. Others >Handmaid: `WEAK`. | 0 to ~210 |
 | **King** | Same-card swap: `WEAK` (10). Unknown: `BAD` (5). Known different: `BAD`. Known higher: `BAD`. | 5 to 10 |
-| **Countess** | Always `BAD` (5). Forced play when Countess+Prince/King/Men present. | 5 |
+| **Countess** | Always `BAD` (5). Forced play when Countess + a rank 5+ card (Prince/King/Princess) is present. | 5 |
 
 **Strengths:**
 - Uses **memory** (`_memory` array) for informed decisions on known cards

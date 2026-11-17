@@ -125,7 +125,7 @@ card_description = "   Choose another player and trade hands with that player."
 visible = false
 card_type = 6
 card_name = "Countess"
-card_description = "   This card has no effect. You must play Countess if you have King or Prince in your hand."
+card_description = "   This card has no effect. You must play Countess if you hold a card ranked 5+."
 
 [node name="Princess" parent="Pages" unique_id=240639461 instance=ExtResource("1_kcg8g")]
 visible = false

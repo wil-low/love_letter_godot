@@ -176,6 +176,19 @@ godot --headless --path . tests/smoke_games.tscn
 echo $?   # 0 = the games kept flowing, 1 = they stalled / no elimination
 ```
 
+## tests/countess_rule.tscn — the Countess rule (rank 5+ trigger)
+
+Unit check on `Player.countess_restricted()`: the Countess is forced when it is held with
+any card ranked 5 or higher - Prince, King, **Princess** - and is a free choice with a card
+ranked 4 or lower. It also pins `Deck.rank()` (Guard..Princess = 1..8, `Unknown` = 0, so an
+unknown card never triggers the rule) and asserts the rule is off when no Countess is held.
+The Princess pair is the case the old Prince/King-only check missed.
+
+```
+godot --headless --path . tests/countess_rule.tscn
+echo $?   # 0 = all 24 checks passed, 1 = a check failed
+```
+
 ## tests/prince_memory_sim.py — headless model used for the statistics
 
 A Python model of the same rules (deal, play, resolve, memory bookkeeping, `eval_moves`
