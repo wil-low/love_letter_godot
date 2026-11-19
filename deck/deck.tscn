@@ -11,15 +11,15 @@ script = ExtResource("2_rqbxk")
 [node name="Main" type="Sprite2D" parent="." unique_id=535832791]
 texture = ExtResource("1_iau1w")
 offset = Vector2(5.5, 8.5)
-hframes = 9
-frame = 8
+hframes = 11
+frame = 10
 
 [node name="Widow" type="Sprite2D" parent="." unique_id=625110753]
 position = Vector2(13, -16)
 texture = ExtResource("1_iau1w")
 offset = Vector2(5.5, 8.5)
-hframes = 9
-frame = 8
+hframes = 11
+frame = 10
 
 [node name="CardCounter" type="Sprite2D" parent="." unique_id=1641546521]
 visible = false

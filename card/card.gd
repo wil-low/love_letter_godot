@@ -9,7 +9,7 @@ var type: Deck.CardType:
 		return type
 	set(value):
 		type = value
-		_sprite.frame = type if faceup else 8
+		_sprite.frame = type if faceup else Deck.CardType.Unknown
 
 		
 var faceup: bool:
@@ -17,7 +17,7 @@ var faceup: bool:
 		return faceup
 	set(value):
 		faceup = value
-		_sprite.frame = type if faceup else 8
+		_sprite.frame = type if faceup else Deck.CardType.Unknown
 
 
 # Called when the node enters the scene tree for the first time.
