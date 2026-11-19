@@ -79,10 +79,12 @@ func load_config() -> bool:
 
 	var speed = clamp(config.get_value("Gameplay", "speed"), SpeedLevel._min_speed, SpeedLevel._max_speed)
 	_level_selector.set_levels(_main._players, speed)
-	_stats._totals_and_wins = config.get_value("Gameplay", "totals_and_wins", [])
-	# drop stats saved for a previous set of AI levels
-	if _stats._totals_and_wins.size() != 2 * Player.AI_Level.size():
-		_stats._on_reset_button_pressed()
+	# pad/drop saved stats so they line up with the currently tracked levels
+	var saved: Array = config.get_value("Gameplay", "totals_and_wins", [])
+	if saved.is_empty():
+		# stats saved by a build that kept a row per rule set
+		saved = config.get_value("Stats", "classic", [])
+	_stats.adopt(saved)
 	return true
 
 
@@ -151,8 +153,8 @@ func _on_pause_help_pressed() -> void:
 
 
 func _on_round_won(level: Player.AI_Level) -> void:
-	_stats._totals_and_wins[2 * level] = clampi(_stats._totals_and_wins[2 * level] + 1, 0, 99999)
+	_stats.record_win(level)
 
 
 func _on_round_finished(level: Player.AI_Level) -> void:
-	_stats._totals_and_wins[2 * level + 1] = clampi(_stats._totals_and_wins[2 * level + 1] + 1, 0, 99999)
+	_stats.record_finished(level)

@@ -41,6 +41,7 @@ visible = false
 [connection signal="save_stats" from="Main" to="." method="save_config"]
 [connection signal="levels_changed" from="LevelSelector" to="." method="_on_level_selector_levels_changed"]
 [connection signal="back_pressed" from="Stats" to="." method="_on_stats_back_pressed"]
+[connection signal="stats_reset_requested" from="Stats" to="." method="save_config"]
 [connection signal="back_pressed" from="Help" to="." method="_on_help_back_pressed"]
 [connection signal="exit_pressed" from="Pause" to="." method="_on_pause_exit_pressed"]
 [connection signal="help_pressed" from="Pause" to="." method="_on_pause_help_pressed"]
