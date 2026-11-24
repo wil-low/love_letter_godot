@@ -67,7 +67,7 @@ the claim built on it, "guaranteed kills score 0", is measured false: these kill
 | | known and my card is lower | `MODERATE` | 20 |
 | | known and my card is higher | `BAD` | 5 |
 | | unknown | `BAD` | 5 |
-| **Countess** | always | `BAD` | 5 (forced when Countess + Prince/King is in hand, `countess_restricted` `:121-129`; in that case `find_valid_moves` offers only the Countess) |
+| **Countess** | always | `BAD` | 5 (forced when Countess + a card ranked 5+ - Prince/King/Princess - is in hand, `countess_restricted` `:121-134`; in that case `find_valid_moves` offers only the Countess) |
 | **Princess** | no branch — never scored | `LOSE` | 0 (and never offered as a move, `main.gd:512-543`) |
 
 Net effect: the two guaranteed kills (a Baron the AI knows it wins, a Prince on a known

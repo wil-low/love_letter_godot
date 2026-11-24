@@ -34,12 +34,13 @@ NAMES = ["Guard", "Priest", "Baron", "Handmaid", "Prince", "King",
 
 
 def countess_restricted(hand):
-    """mirror of Player.countess_restricted()"""
+    """mirror of Player.countess_restricted()
+    Countess + another card ranked 5 or higher (Prince, King, Princess)"""
     if len(hand) != 2:
         return -1
     has_countess = COUNTESS in hand
-    has_men = PRINCE in hand or KING in hand
-    if has_countess and has_men:
+    has_high_rank = any(c != COUNTESS and PRINCE <= c <= PRINCESS for c in hand)
+    if has_countess and has_high_rank:
         return 0 if hand[0] == COUNTESS else 1
     return -1
 

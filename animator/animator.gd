@@ -41,7 +41,7 @@ func all(signals: Array[Signal]) -> Signal:
 func flip(card: Card, to_faceup: bool) -> Signal:
 	if card.faceup != to_faceup:
 		var pos = card.position
-		var width = card._sprite.get_rect().size.x
+		var width = card._back.get_rect().size.x
 		var tw = create_tween().set_trans(Tween.TRANS_SINE)
 		tw.tween_property(card, "position:x", pos.x + width / 2, _d(0.25))
 		tw.parallel().tween_property(card, "scale:x", 0, _d(0.25))

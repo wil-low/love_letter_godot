@@ -120,11 +120,16 @@ func update_memory(player_idx: int, type: Deck.CardType = Deck.CardType.Unknown)
 
 func countess_restricted() -> int:
 	# returns -1 if Countess rule is not in effect
+	# The rule: Countess + another card ranked 5 or higher
+	# (Prince, King, Princess) - the Countess must be played
 	var child_types: Array[Deck.CardType] = [hand.get_child(0).type, hand.get_child(1).type]
 	var has_countess = child_types[0] == Deck.CardType.Countess or child_types[1] == Deck.CardType.Countess
-	var has_men = child_types[0] == Deck.CardType.Prince or child_types[0] == Deck.CardType.King or child_types[1] == Deck.CardType.Prince or child_types[1] == Deck.CardType.King
+	var has_high_rank = false
+	for t in child_types:
+		if t != Deck.CardType.Countess and Deck.rank(t) >= Deck.MIN_HIGH_RANK:
+			has_high_rank = true
 	var result = -1
-	if has_countess and has_men:
+	if has_countess and has_high_rank:
 		result = 0 if child_types[0] == Deck.CardType.Countess else 1
 	return result
 

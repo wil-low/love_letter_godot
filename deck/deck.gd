@@ -2,7 +2,8 @@ class_name Deck
 extends Node2D
 
 enum CardType {
-	Guard = 0,
+	Assassin = 0,
+	Guard,
 	Priest,
 	Baron,
 	Handmaid,
@@ -10,10 +11,20 @@ enum CardType {
 	King,
 	Countess,
 	Princess,
+	Queen,
 	Unknown
 }
 
+const MIN_HIGH_RANK := 5  # Prince, King, Countess, Princess - the Countess rule threshold
+
+
+static func rank(t: CardType) -> int:
+	# Guard..Princess are ranked 1..8, Unknown has no rank
+	return t if t < CardType.Unknown else -1
+
+
 const card_count = [
+	0, # Assassin
 	5, # Guard
 	2, # Priest
 	2, # Baron
@@ -21,10 +32,12 @@ const card_count = [
 	2, # Prince
 	1, # King
 	1, # Countess
-	1  # Princess
+	1,  # Princess
+	0,  # Queen
 ]
 
 const card_names := [
+	"Assassin",
 	"Guard   ",
 	"Priest  ",
 	"Baron   ",
@@ -32,6 +45,7 @@ const card_names := [
 	"Prince  ",
 	"King    ",
 	"Countess",
+	"Princess",
 	"Princess",
 	"Unknown "
 ]

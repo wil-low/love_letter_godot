@@ -87,49 +87,49 @@ card_description = "First to win 6 (2 players), 5 (3), or 4 (4) rounds wins the 
 
 [node name="Guard" parent="Pages" unique_id=287543303 instance=ExtResource("1_kcg8g")]
 visible = false
-card_type = 0
+card_type = 1
 card_name = "Guard"
 card_description = "   Choose another player and name a card except Guard. If they have that card, they are out of the round."
 
 [node name="Priest" parent="Pages" unique_id=528050856 instance=ExtResource("1_kcg8g")]
 visible = false
-card_type = 1
+card_type = 2
 card_name = "Priest"
 card_description = "   Choose another player and secretly look at their hand (without revealing it to anyone else)."
 
 [node name="Baron" parent="Pages" unique_id=323951099 instance=ExtResource("1_kcg8g")]
 visible = false
-card_type = 2
+card_type = 3
 card_name = "Baron"
 card_description = "   Choose another player and compare your hands. Owner of the lower-value card is out of the round."
 
 [node name="Handmaid" parent="Pages" unique_id=961613203 instance=ExtResource("1_kcg8g")]
 visible = false
-card_type = 3
+card_type = 4
 card_name = "Handmaid"
 card_description = "   Until the start of your next turn, other players cannot choose you for their card effects."
 
 [node name="Prince" parent="Pages" unique_id=1212964394 instance=ExtResource("1_kcg8g")]
 visible = false
-card_type = 4
+card_type = 5
 card_name = "Prince"
 card_description = "  Choose any player. That player discards their hand (without resolving its effect) and draws a new hand."
 
 [node name="King" parent="Pages" unique_id=2146308990 instance=ExtResource("1_kcg8g")]
 visible = false
-card_type = 5
+card_type = 6
 card_name = "King"
 card_description = "   Choose another player and trade hands with that player."
 
 [node name="Countess" parent="Pages" unique_id=297008219 instance=ExtResource("1_kcg8g")]
 visible = false
-card_type = 6
+card_type = 7
 card_name = "Countess"
-card_description = "   This card has no effect. You must play Countess if you have King or Prince in your hand."
+card_description = "   This card has no effect. You must play Countess if you hold a card ranked 5+."
 
 [node name="Princess" parent="Pages" unique_id=240639461 instance=ExtResource("1_kcg8g")]
 visible = false
-card_type = 7
+card_type = 8
 card_name = "Princess"
 card_description = "   If you either play or discard the Princess for any reason, you are immediately out of the round."
 

@@ -1,7 +1,7 @@
 @tool
 extends Node2D
 
-@onready var _card: Sprite2D = $Card
+@onready var _card: Card = $Card
 @onready var _name: Label = $Name
 @onready var _description: Label = $Description
 
@@ -31,7 +31,7 @@ extends Node2D
 
 
 func _ready() -> void:
-	_card.frame = card_type
+	_card.type = card_type
 	_card.visible = show_card
 	_name.text = card_name
 	_description.text = card_description

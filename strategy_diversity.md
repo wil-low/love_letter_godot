@@ -21,7 +21,7 @@ The Guard type loop goes `range(Deck.CardType.Priest, Deck.CardType.Unknown)`, s
 
 **Pattern 4: Countess restriction works against L1**
 
-If L1 holds Countess+Prince, L1 is forced to play Countess (can't Prince itself). That's a free turn for the human. If L1 holds Countess+King, same thing — forced pass.
+If L1 holds Countess+Prince, L1 is forced to play Countess (can't Prince itself). That's a free turn for the human. If L1 holds Countess+King, same thing — forced pass. The same applies to Countess+Princess (rank 5+): L1 keeps the Princess and passes.
 
 ### What this means for "Human vs 3 L1s"
 
