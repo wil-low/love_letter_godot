@@ -16,7 +16,7 @@ func set_levels(arr: Array[Player], speed: int) -> void:
 
 func _on_back_button_pressed() -> void:
 	var result: Array[Player.AI_Level]
-	result.resize(4)
+	result.resize(_levels.get_child_count())
 	var player_count := 0
 	for level in _levels.get_children():
 		result[level.player_num] = level.ai_level

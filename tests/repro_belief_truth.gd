@@ -84,7 +84,7 @@ func _ready() -> void:
 
 	var main: Main = MainScene.instantiate()
 	add_child(main)
-	for i in 4:
+	for i in len(main._players):
 		main._players[i].ai_level = Player.AI_Level.Level_4
 		main._players[i].move_chosen.connect(_on_move_chosen.bind(main))
 	main.round_finished.connect(on_round)

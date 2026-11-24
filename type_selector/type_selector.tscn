@@ -7,6 +7,13 @@
 [node name="TypeSelector" type="Node2D" unique_id=572570728]
 script = ExtResource("1_oo3qq")
 
+[node name="ColorRect" type="ColorRect" parent="." unique_id=1850102486]
+offset_left = 17.0
+offset_top = 4.0
+offset_right = 68.0
+offset_bottom = 43.0
+mouse_filter = 2
+
 [node name="Card1" parent="." unique_id=1111454611 instance=ExtResource("1_d1dlx")]
 position = Vector2(25, 6)
 card_type = 2

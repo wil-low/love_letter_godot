@@ -214,7 +214,7 @@ func test_c() -> void:
 			targets_dead += 1
 	var with_zombie: Array[int] = scores_of(main, p0, moves)
 	check(targets_dead == 0, "find_valid_moves never offers a move against the eliminated P1")
-	for j in 4:
+	for j in len(main._players):
 		if p0._memory[j] != Deck.CardType.Unknown and !main._players[j].active:
 			zombies += 1
 	check(zombies == 0, "no belief of P0 names a player who is out of the round")
@@ -452,10 +452,10 @@ func make_main(order: Array[Deck.CardType]) -> Main:
 	# made, we just call Main._on_card_played ourselves, like tests/repro_guard_princess.gd
 	# does for seat 0.
 	main._players[0].ai_level = Player.AI_Level.Human
-	for i in range(1, 4):
+	for i in range(1, len(main._players)):
 		main._players[i].ai_level = Player.AI_Level.Level_1
 	await main.init_players(SEED)
-	for i in range(1, 4):
+	for i in range(1, len(main._players)):
 		main._players[i].ai_level = Player.AI_Level.Human
 	var c := func() -> bool:
 		return main._cur_player == 0 and main._players[0].hand.get_child_count() == 2
@@ -568,7 +568,7 @@ func hand_str(p: Player) -> String:
 
 func memory_str(main: Main, idx: int) -> String:
 	var s := "["
-	for j in 4:
+	for j in len(main._players):
 		s += Deck.card_names[main._players[idx]._memory[j]] + " "
 	return s + "]"
 

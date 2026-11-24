@@ -27,6 +27,8 @@ func _ready() -> void:
 		Player.AI_Level.Human,
 		Player.AI_Level.Level_4,
 		Player.AI_Level.Level_4,
+		Player.AI_Level.Level_4,
+		Player.AI_Level.Level_4,
 		Player.AI_Level.Level_4
 		]
 
@@ -35,7 +37,9 @@ func _ready() -> void:
 			Player.AI_Level.Level_1,
 			Player.AI_Level.Level_2,
 			Player.AI_Level.Level_3,
-			Player.AI_Level.Level_4
+			Player.AI_Level.Level_4,
+			Player.AI_Level.Disabled,
+			Player.AI_Level.Disabled
 			]
 			
 	for i in _main._players.size():

@@ -60,6 +60,8 @@ var _memory: Array[Deck.CardType] = [
 	Deck.CardType.Unknown,
 	Deck.CardType.Unknown,
 	Deck.CardType.Unknown,
+	Deck.CardType.Unknown,
+	Deck.CardType.Unknown,
 ]
 
 var protected: bool:

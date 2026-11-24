@@ -59,7 +59,7 @@ var _target_player: int:
 var _target_type: int
 
 func _ready() -> void:
-	_players = [$Player0, $Player1, $Player2, $Player3]
+	_players = [$Player0, $Player1, $Player2, $Player3, $Player4, $Player5]
 
 
 func init_players(random_seed: int) -> void:
@@ -110,7 +110,7 @@ func _new_game() -> void:
 			_max_score = 6
 		elif _player_count == 3:
 			_max_score = 5
-		elif _player_count == 4:
+		elif _player_count >= 4:
 			_max_score = 4
 		_cur_player = 0
 		_new_round()
@@ -147,7 +147,7 @@ func deal_card(p: Player, allow_widow: bool = false) -> void:
 	var c = card_scene.instantiate()
 	_animation_layer.add_child(c)
 	c.type = card_type
-	c.count = Deck.card_count[card_type]
+	c.count = _deck.card_count[card_type]
 	c.faceup = is_faceup
 	c.global_position = src.global_position
 	_deck.update_piles()
@@ -247,6 +247,9 @@ func _on_target_player_selected(idx: int) -> void:
 							p._state = Player.State.INPUT_T
 							_table.hide()
 							_type_selector.set_selection(Deck.CardType.Unknown)
+							for c in _type_selector.get_children():
+								if c is Card:
+									c.count = _deck.card_count[c.type]
 							_type_selector.show()
 						Deck.CardType.Priest, Deck.CardType.Baron, Deck.CardType.King:
 							await Animator.delay(1)
@@ -290,7 +293,7 @@ func set_inactive(p: Player, reveal_hand: bool = true):
 	# target it any more), and its own beliefs will never guide a move again.
 	for pl in _players:
 		pl.update_memory(p.idx)
-	for j in 4:
+	for j in len(p._memory):
 		p._memory[j] = Deck.CardType.Unknown
 	_inactive_audio_player.play()
 	if reveal_hand:

@@ -29,13 +29,22 @@ position = Vector2(5, 0)
 idx = 1
 
 [node name="Player2" parent="." unique_id=1362357433 instance=ExtResource("1_53q0u")]
-position = Vector2(68, 0)
+position = Vector2(23, 0)
 idx = 2
-right_score = true
 
 [node name="Player3" parent="." unique_id=369263454 instance=ExtResource("1_53q0u")]
-position = Vector2(68, 31)
+position = Vector2(50, 0)
 idx = 3
+right_score = true
+
+[node name="Player4" parent="." unique_id=1179516782 instance=ExtResource("1_53q0u")]
+position = Vector2(68, 0)
+idx = 4
+right_score = true
+
+[node name="Player5" parent="." unique_id=565148276 instance=ExtResource("1_53q0u")]
+position = Vector2(68, 31)
+idx = 5
 right_score = true
 
 [node name="DiscardMarker" type="Marker2D" parent="." unique_id=1639788791]
@@ -45,7 +54,7 @@ position = Vector2(50, -31)
 position = Vector2(21, 5)
 
 [node name="Deck" parent="Table" unique_id=535832791 instance=ExtResource("2_pjrb6")]
-position = Vector2(0, -2)
+position = Vector2(16, -20)
 
 [node name="Marker0" type="Marker2D" parent="Table" unique_id=1314393868]
 position = Vector2(16, 10)
@@ -61,6 +70,7 @@ offset = Vector2(5.5, 8.5)
 [node name="TypeSelector" parent="." unique_id=2090001054 instance=ExtResource("7_4dugh")]
 visible = false
 z_index = 10
+position = Vector2(0, 6)
 
 [node name="RoundOverLabel" type="Label" parent="." unique_id=1684390544]
 visible = false

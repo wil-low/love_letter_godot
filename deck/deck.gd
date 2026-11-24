@@ -23,7 +23,7 @@ static func rank(t: CardType) -> int:
 	return t if t < CardType.Unknown else -1
 
 
-const card_count = [
+const _card_count_2_4 = [
 	0, # Assassin
 	5, # Guard
 	2, # Priest
@@ -35,6 +35,33 @@ const card_count = [
 	1,  # Princess
 	0,  # Queen
 ]
+
+const _card_count_5 = [
+	0, # Assassin
+	5, # Guard
+	3, # Priest
+	3, # Baron
+	3, # Handmaid
+	3, # Prince
+	1, # King
+	1, # Countess
+	1,  # Princess
+	0,  # Queen
+]
+
+const _card_count_6 = [
+	0, # Assassin
+	7, # Guard
+	3, # Priest
+	3, # Baron
+	3, # Handmaid
+	3, # Prince
+	2, # King
+	1, # Countess
+	1,  # Princess
+	0,  # Queen
+]
+
 
 const card_names := [
 	"Assassin",
@@ -54,12 +81,19 @@ const card_names := [
 @onready var _widow: Sprite2D = $Widow
 @onready var _card_counter: Sprite2D = $CardCounter
 
+var card_count = []
 var _cards: Array[CardType]
 var _widow_cards: Array[CardType]
 var _left: Array[int]
 
 
 func prepare(player_count: int) -> void:
+	if player_count <= 4:
+		card_count = _card_count_2_4
+	elif player_count == 5:
+		card_count = _card_count_5
+	elif player_count == 6:
+		card_count = _card_count_6
 	_cards = []
 	_widow_cards = []
 	update_piles()

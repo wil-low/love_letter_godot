@@ -9,7 +9,6 @@ var _use_modulate = true
 func _ready() -> void:
 	for c in get_children():
 		if c is Card:
-			c.count = Deck.card_count[c.type]
 			c.input_event.connect(_on_card_input_event.bind(c.type))
 
 
