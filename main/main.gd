@@ -147,6 +147,7 @@ func deal_card(p: Player, allow_widow: bool = false) -> void:
 	var c = card_scene.instantiate()
 	_animation_layer.add_child(c)
 	c.type = card_type
+	c.count = Deck.card_count[card_type]
 	c.faceup = is_faceup
 	c.global_position = src.global_position
 	_deck.update_piles()
